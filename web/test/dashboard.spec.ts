@@ -131,6 +131,18 @@ test('filters requests from a chart and inspects and pages through them with the
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBeNull();
 });
 
+test('keeps horizontal table scrolling inside the dashboard at narrow widths', async ({ page }) => {
+  await mockAPI(page);
+  await unlock(page);
+  await page.getByRole('button', { name: /Details for gpt-api/ }).waitFor();
+
+  for (const width of [300, 320, 390, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
+  }
+});
+
 test('creates a client and rotates its key using the dashboard', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);

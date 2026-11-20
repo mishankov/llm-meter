@@ -97,7 +97,7 @@ kbd { padding: 0 4px; border: 1px solid currentColor; border-radius: 4px; font: 
 .compact-button { min-height: 27px; padding-inline: 8px; font-size: 11px; }
 .icon-button { min-height: 0; inline-size: 30px; block-size: 30px; padding: 0; color: var(--muted); }
 
-.table-scroll { overflow-x: auto; }
+.table-scroll { position: relative; overflow-x: auto; }
 table { border-collapse: collapse; text-align: start; width: 100%; font-size: 12px; }
 table :is(th, td) { text-align: start; padding: 9px 11px; border-block-start: 1px solid var(--line); }
 table th { color: var(--muted); font-weight: 550; font-size: 11px; }
@@ -143,6 +143,10 @@ table :is(th,td).numeric:not(:first-child) { text-align: end; }
   .lock-button span { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
   .content { padding: 13px 14px 22px; }
   .table-scroll th, .table-scroll td { padding-inline: 7px; }
+}
+@media (max-width: 360px) {
+  .sidebar { gap: 5px; }
+  .sidebar nav a, .lock-button { padding-inline: 4px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
