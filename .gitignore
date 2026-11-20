@@ -1,0 +1,8 @@
+/data/
+/llm-proxy
+/web/node_modules/
+/web/.svelte-kit/
+/web/build/
+/web/playwright-report/
+/web/test-results/
+/.env

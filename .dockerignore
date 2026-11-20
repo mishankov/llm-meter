@@ -1,0 +1,10 @@
+.git
+.agents
+.env*
+data
+llm-proxy
+web/node_modules
+web/build
+web/.svelte-kit
+web/playwright-report
+web/test-results

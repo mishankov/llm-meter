@@ -1,0 +1,336 @@
+package proxy
+
+import (
+	"bytes"
+	"encoding/json"
+	"math"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type httpMeter struct {
+	usage        Usage
+	captureUsage bool
+	request      *metadataCapture
+	response     *metadataCapture
+	sse          *eventStream
+}
+
+func (m *httpMeter) finish() {
+	if m.response != nil {
+		message := m.response.message()
+		m.usage.applyMessage(message, m.captureUsage)
+		state := string(message.RawStatus)
+		if m.usage.UsageUpdate && state != "" && state != `"completed"` && state != `"incomplete"` {
+			m.usage.HasUsage = false
+		}
+	}
+	if m.sse != nil {
+		m.sse.finish()
+	}
+	if m.request != nil {
+		m.usage.applyFallback(m.request.message().wireMetadata)
+	}
+}
+
+func (m *httpMeter) observeEvent(message wireMessage) {
+	if m.usage.Source == "codex" {
+		m.usage.mergeRateLimits(message.limits())
+	}
+	m.usage.applyMessage(message, m.captureUsage && message.reportsUsage())
+	if message.Response != nil && message.Response.ID != "" {
+		m.usage.ResponseID = message.Response.ID
+	}
+}
+
+type wireMetadata struct {
+	Model          string `json:"model"`
+	ServiceTier    string `json:"service_tier"`
+	CacheRetention string `json:"prompt_cache_retention"`
+}
+
+type wireResult struct {
+	wireMetadata
+	ID string `json:"id"`
+
+	Usage *wireUsage `json:"usage"`
+}
+
+type wireMessage struct {
+	wireResult
+	Type             string          `json:"type"`
+	StreamID         string          `json:"stream_id"`
+	RawStatus        json.RawMessage `json:"status"`
+	Response         *wireResult     `json:"response"`
+	Session          *wireMetadata   `json:"session"`
+	MeteredLimitName string          `json:"metered_limit_name"`
+	LimitName        string          `json:"limit_name"`
+	RateLimits       *struct {
+		Primary   *wireWindow `json:"primary"`
+		Secondary *wireWindow `json:"secondary"`
+	} `json:"rate_limits"`
+}
+
+type wireUsage struct {
+	InputTokens   *int64            `json:"input_tokens"`
+	PromptTokens  *int64            `json:"prompt_tokens"`
+	OutputTokens  *int64            `json:"output_tokens"`
+	Completion    *int64            `json:"completion_tokens"`
+	TotalTokens   *int64            `json:"total_tokens"`
+	InputDetails  *wireInputDetails `json:"input_tokens_details"`
+	PromptDetails *wireInputDetails `json:"prompt_tokens_details"`
+}
+
+type wireInputDetails struct {
+	CachedTokens      int64 `json:"cached_tokens"`
+	CacheWriteTokens  int64 `json:"cache_write_tokens"`
+	CacheWriteDetails *struct {
+		Short int64 `json:"ttl_30m_tokens"`
+		Long  int64 `json:"ttl_12h_tokens"`
+	} `json:"cache_write_tokens_details"`
+}
+
+type wireWindow struct {
+	UsedPercent   *float64 `json:"used_percent"`
+	WindowMinutes int      `json:"window_minutes"`
+	ResetAt       int64    `json:"reset_at"`
+}
+
+func decodeMessage(data []byte) wireMessage {
+	var message wireMessage
+	if len(data) != 0 && json.Unmarshal(data, &message) != nil {
+		return wireMessage{}
+	}
+	return message
+}
+
+func (m wireMessage) terminal() bool {
+	switch m.Type {
+	case "response.completed", "response.incomplete", "response.failed", "response.done":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m wireMessage) reportsUsage() bool {
+	return m.terminal() || m.Usage != nil
+}
+
+func (u *Usage) applyMessage(message wireMessage, captureUsage bool) {
+	if message.Response != nil {
+		u.applyResult(*message.Response, captureUsage)
+	}
+	u.applyResult(message.wireResult, captureUsage && message.Response == nil)
+}
+
+func (u *Usage) applyResult(result wireResult, captureUsage bool) {
+	if result.Model != "" {
+		u.Model = result.Model
+	}
+	if result.ServiceTier != "" {
+		u.ServiceTier = result.ServiceTier
+	}
+	if result.CacheRetention != "" {
+		u.CacheRetention = result.CacheRetention
+	}
+	if !captureUsage {
+		return
+	}
+	if result.ID != "" {
+		u.ResponseID = result.ID
+	}
+	tokens := result.Usage
+	if tokens == nil {
+		return
+	}
+	input := firstReported(tokens.InputTokens, tokens.PromptTokens)
+	output := firstReported(tokens.OutputTokens, tokens.Completion)
+	if input == nil && output == nil && strings.HasSuffix(u.Endpoint, "/embeddings") {
+		input = tokens.TotalTokens
+	}
+	if input == nil && output == nil {
+		return
+	}
+	u.HasUsage = true
+	u.InputTokens = count(input)
+	u.OutputTokens = count(output)
+	u.CachedInputTokens, u.CacheWriteTokens, u.CacheWrite12hTokens = 0, 0, 0
+	u.HasCacheWriteSplit = false
+	details := tokens.InputDetails
+	if details == nil {
+		details = tokens.PromptDetails
+	}
+	if details == nil {
+		return
+	}
+	u.CachedInputTokens = min(max(details.CachedTokens, 0), u.InputTokens)
+	u.CacheWriteTokens = min(max(details.CacheWriteTokens, 0), u.InputTokens-u.CachedInputTokens)
+	if split := details.CacheWriteDetails; split != nil {
+		u.CacheWrite12hTokens = min(max(split.Long, 0), u.CacheWriteTokens)
+		u.HasCacheWriteSplit = true
+	}
+}
+
+func (u *Usage) applyFallback(metadata wireMetadata) {
+	if u.Model == "" {
+		u.Model = metadata.Model
+	}
+	if u.ServiceTier == "" {
+		u.ServiceTier = metadata.ServiceTier
+	}
+	if u.CacheRetention == "" {
+		u.CacheRetention = metadata.CacheRetention
+	}
+}
+
+func firstReported(first, second *int64) *int64 {
+	if first != nil {
+		return first
+	}
+	return second
+}
+
+func count(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return max(*value, 0)
+}
+
+func (m wireMessage) limits() []RateLimit {
+	if m.Type != "codex.rate_limits" || m.RateLimits == nil {
+		return nil
+	}
+	id := m.MeteredLimitName
+	if id == "" {
+		id = m.LimitName
+	}
+	if id == "" {
+		id = "codex"
+	}
+	var result []RateLimit
+	if window, ok := m.RateLimits.Primary.limit(id, "primary"); ok {
+		result = append(result, window)
+	}
+	if window, ok := m.RateLimits.Secondary.limit(id, "secondary"); ok {
+		result = append(result, window)
+	}
+	return result
+}
+
+func limitsFromHeaders(header http.Header) []RateLimit {
+	var result []RateLimit
+	for name := range header {
+		prefix, ok := strings.CutSuffix(strings.ToLower(name), "-used-percent")
+		if !ok || !strings.HasPrefix(prefix, "x-codex-") {
+			continue
+		}
+		index := strings.LastIndexByte(prefix, '-')
+		id, label := strings.TrimPrefix(prefix[:index], "x-"), prefix[index+1:]
+		if label != "primary" && label != "secondary" {
+			continue
+		}
+		percentage, err := strconv.ParseFloat(header.Get(name), 64)
+		if err != nil {
+			continue
+		}
+		minutes, _ := strconv.Atoi(header.Get(prefix + "-window-minutes"))
+		reset, _ := strconv.ParseInt(header.Get(prefix+"-reset-at"), 10, 64)
+		window := wireWindow{UsedPercent: &percentage, WindowMinutes: minutes, ResetAt: reset}
+		if limit, ok := window.limit(id, label); ok {
+			result = append(result, limit)
+		}
+	}
+	return result
+}
+
+func (w *wireWindow) limit(id, label string) (RateLimit, bool) {
+	if w == nil || w.UsedPercent == nil || math.IsNaN(*w.UsedPercent) || math.IsInf(*w.UsedPercent, 0) {
+		return RateLimit{}, false
+	}
+	limit := RateLimit{
+		ID:            strings.ReplaceAll(strings.ToLower(strings.TrimSpace(id)), "-", "_"),
+		Window:        label,
+		WindowMinutes: w.WindowMinutes,
+		UsedPercent:   min(max(*w.UsedPercent, 0), 100),
+	}
+	if w.ResetAt > 0 {
+		limit.ResetsAt = time.Unix(w.ResetAt, 0).UTC()
+	}
+	return limit, true
+}
+
+func (u *Usage) mergeRateLimits(limits []RateLimit) {
+	for _, limit := range limits {
+		replaced := false
+		for i, existing := range u.RateLimits {
+			if existing.ID == limit.ID && existing.Window == limit.Window {
+				u.RateLimits[i] = limit
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			u.RateLimits = append(u.RateLimits, limit)
+		}
+	}
+}
+
+type eventStream struct {
+	handle     func(wireMessage)
+	prefix     [5]byte
+	prefixSize int
+	data       *metadataCapture
+	isData     bool
+}
+
+func (s *eventStream) Write(p []byte) (int, error) {
+	size := len(p)
+	for len(p) != 0 {
+		line, rest, end := bytes.Cut(p, []byte{'\n'})
+		s.consume(line)
+		if end {
+			s.endLine()
+		}
+		p = rest
+	}
+	return size, nil
+}
+
+func (s *eventStream) consume(line []byte) {
+	if s.prefixSize < len(s.prefix) {
+		n := copy(s.prefix[s.prefixSize:], line)
+		s.prefixSize += n
+		line = line[n:]
+		if s.prefixSize == len(s.prefix) && string(s.prefix[:]) == "data:" {
+			s.isData = true
+			if s.data == nil {
+				s.data = &metadataCapture{}
+			}
+		}
+	}
+	if s.isData {
+		_, _ = s.data.Write(line)
+	}
+}
+
+func (s *eventStream) endLine() {
+	if s.prefixSize == 0 || s.prefixSize == 1 && s.prefix[0] == '\r' {
+		s.emit()
+	} else if s.isData {
+		_, _ = s.data.Write([]byte{'\n'})
+	}
+	s.prefixSize, s.isData = 0, false
+}
+
+func (s *eventStream) finish() { s.emit() }
+
+func (s *eventStream) emit() {
+	if s.data != nil {
+		s.handle(s.data.message())
+		s.data = nil
+	}
+}
