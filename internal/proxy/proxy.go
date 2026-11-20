@@ -16,33 +16,39 @@ import (
 )
 
 const (
-	apiPrefix   = "/v1"
-	codexPrefix = "/backend-api/codex"
-	accessKey   = "X-LLM-Proxy-Key"
+	apiPrefix        = "/v1"
+	codexPrefix      = "/backend-api/codex"
+	accessKey        = "X-LLM-Proxy-Key"
+	OpenCodeGoPrefix = "/opencode-go"
 )
 
 // Usage is the metadata available for an upstream request or WebSocket response.
 // Quota-only updates use status zero and carry one or more rate limits.
 type Usage struct {
-	At                  time.Time
-	Source              string
-	ClientID            string
-	Model               string
-	Endpoint            string
-	Method              string
-	ResponseID          string
-	ServiceTier         string
-	CacheRetention      string
-	Status              int
-	InputTokens         int64
-	CachedInputTokens   int64
-	CacheWriteTokens    int64
-	CacheWrite12hTokens int64
-	HasCacheWriteSplit  bool
-	UsageUpdate         bool
-	OutputTokens        int64
-	HasUsage            bool
-	RateLimits          []RateLimit
+	At                    time.Time
+	Source                string
+	Provider              string
+	ClientID              string
+	Model                 string
+	Endpoint              string
+	Method                string
+	ResponseID            string
+	ServiceTier           string
+	CacheRetention        string
+	Status                int
+	InputTokens           int64
+	CachedInputTokens     int64
+	CacheWriteTokens      int64
+	CacheWrite12hTokens   int64
+	HasCacheWriteSplit    bool
+	UsageUpdate           bool
+	OutputTokens          int64
+	HasUsage              bool
+	ReportedCost          *float64
+	ReportedListCost      *float64
+	ReportedAllowance     *float64
+	ReportedCostEstimated bool
+	RateLimits            []RateLimit
 }
 
 // RateLimit is a provider-reported account allowance window.
@@ -62,9 +68,9 @@ func WithClient(ctx context.Context, clientID string) context.Context {
 	return context.WithValue(ctx, clientContextKey{}, clientID)
 }
 
-// New creates an HTTP and WebSocket proxy for the API and Codex base URLs.
+// New creates an HTTP and WebSocket proxy for the configured upstreams.
 // The caller must authenticate access before passing requests to this handler.
-func New(apiUpstream, codexUpstream *url.URL, record func(Usage)) http.Handler {
+func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Usage)) http.Handler {
 	if record == nil {
 		record = func(Usage) {}
 	}
@@ -74,14 +80,25 @@ func New(apiUpstream, codexUpstream *url.URL, record func(Usage)) http.Handler {
 	if codexUpstream == nil {
 		codexUpstream = &url.URL{Scheme: "https", Host: "chatgpt.com", Path: codexPrefix}
 	}
+	if opencodeGoUpstream == nil {
+		opencodeGoUpstream = &url.URL{Scheme: "https", Host: "opencode.ai", Path: "/inference/go"}
+	}
 	api := newUpstream(apiPrefix, "api", *apiUpstream, record)
 	codex := newUpstream(codexPrefix, "codex", *codexUpstream, record)
+	opencodeGo := newUpstream(OpenCodeGoPrefix, "api", *opencodeGoUpstream, func(usage Usage) {
+		if usage.ResponseID != "" {
+			usage.ResponseID = "opencode-go:" + usage.ResponseID
+		}
+		record(usage)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case hasPrefix(r.URL.Path, apiPrefix):
 			api.serve(w, r)
 		case hasPrefix(r.URL.Path, codexPrefix):
 			codex.serve(w, r)
+		case hasPrefix(r.URL.Path, OpenCodeGoPrefix):
+			opencodeGo.serve(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -89,15 +106,18 @@ func New(apiUpstream, codexUpstream *url.URL, record func(Usage)) http.Handler {
 }
 
 type upstream struct {
-	prefix  string
-	source  string
-	baseURL url.URL
-	record  func(Usage)
-	http    *httputil.ReverseProxy
+	prefix   string
+	source   string
+	provider string
+	baseURL  url.URL
+	record   func(Usage)
+	http     *httputil.ReverseProxy
 }
 
 func newUpstream(prefix, source string, baseURL url.URL, record func(Usage)) *upstream {
-	route := &upstream{prefix: prefix, source: source, baseURL: baseURL, record: record}
+	route := &upstream{
+		prefix: prefix, source: source, provider: upstreamProvider(prefix, baseURL), baseURL: baseURL, record: record,
+	}
 	route.http = &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			target := route.targetURL(request.Out.URL)
@@ -133,6 +153,7 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	usage := Usage{
 		At:       time.Now().UTC(),
 		Source:   u.source,
+		Provider: u.provider,
 		ClientID: clientID,
 		Endpoint: r.URL.Path,
 		Method:   r.Method,
@@ -156,6 +177,41 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 		u.record(meter.usage)
 	}()
 	u.http.ServeHTTP(w, request)
+}
+
+func upstreamProvider(prefix string, baseURL url.URL) string {
+	switch prefix {
+	case codexPrefix:
+		return "codex"
+	case OpenCodeGoPrefix:
+		return "opencode-go"
+	}
+	switch strings.ToLower(baseURL.Hostname()) {
+	case "api.openai.com":
+		return "openai"
+	case "openrouter.ai":
+		return "openrouter"
+	case "opencode.ai":
+		if hasPrefix(baseURL.Path, "/inference/go") {
+			return "opencode-go"
+		}
+		if hasPrefix(baseURL.Path, "/inference") {
+			return "opencode"
+		}
+	case "api.anthropic.com":
+		return "anthropic"
+	case "api.deepseek.com":
+		return "deepseek"
+	case "api.groq.com":
+		return "groq"
+	case "api.mistral.ai":
+		return "mistral"
+	case "api.x.ai":
+		return "xai"
+	case "generativelanguage.googleapis.com":
+		return "google"
+	}
+	return ""
 }
 
 func (u *upstream) observeResponse(response *http.Response) error {
@@ -182,7 +238,12 @@ func (u *upstream) observeResponse(response *http.Response) error {
 
 func (u *upstream) targetURL(incoming *url.URL) url.URL {
 	target := u.baseURL
-	target.Path = strings.TrimSuffix(target.Path, "/") + strings.TrimPrefix(incoming.Path, u.prefix)
+	suffix := strings.TrimPrefix(incoming.Path, u.prefix)
+	var protocolPath string
+	if u.prefix == OpenCodeGoPrefix {
+		protocolPath = openCodeGoProtocol(suffix)
+	}
+	target.Path = strings.TrimSuffix(target.Path, "/") + protocolPath + suffix
 	if incoming.RawPath != "" || u.baseURL.RawPath != "" {
 		// Each character in the route prefix is ASCII and may be percent encoded.
 		escaped := incoming.EscapedPath()
@@ -194,7 +255,7 @@ func (u *upstream) targetURL(incoming *url.URL) url.URL {
 				index++
 			}
 		}
-		target.RawPath = strings.TrimSuffix(u.baseURL.EscapedPath(), "/") + escaped[index:]
+		target.RawPath = strings.TrimSuffix(u.baseURL.EscapedPath(), "/") + protocolPath + escaped[index:]
 	}
 	if target.RawQuery != "" && incoming.RawQuery != "" {
 		target.RawQuery += "&"
@@ -202,6 +263,19 @@ func (u *upstream) targetURL(incoming *url.URL) url.URL {
 	target.RawQuery += incoming.RawQuery
 	target.ForceQuery = target.ForceQuery || incoming.ForceQuery
 	return target
+}
+
+func openCodeGoProtocol(suffix string) string {
+	switch {
+	case suffix == "/models", suffix == "/usage":
+		return "/v1"
+	case hasPrefix(suffix, "/messages"):
+		return "/anthropic/v1"
+	case strings.HasPrefix(suffix, "/models/") && strings.Contains(suffix, ":"):
+		return "/google/v1beta"
+	default:
+		return "/openai/v1"
+	}
 }
 
 func hasPrefix(path, prefix string) bool {

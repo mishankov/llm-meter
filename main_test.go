@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,14 +51,23 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	defer upstream.Close()
 	api, _ := url.Parse(upstream.URL + "/v1")
 	codex, _ := url.Parse(upstream.URL + "/backend-api/codex")
-	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), pricing.Catalog{})
+	directory := t.TempDir()
+	override := filepath.Join(directory, "prices.json")
+	if err := os.WriteFile(override, []byte(`{"gpt-6.2-sol":{"input":2,"cachedInput":0.1,"output":10,"cacheWrite":2.5,"cacheWrite12h":5}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := pricing.Load(override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := ledger.Open(filepath.Join(directory, "test.sqlite"), catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	const dashboardToken = "fixture-dashboard-token-5e9ebc83"
 	ui := fstest.MapFS{"index.html": {Data: []byte("dashboard shell")}}
-	app := httptest.NewServer(routes(store, ui, api, codex, dashboardToken, false, slog.New(slog.DiscardHandler)))
+	app := httptest.NewServer(routes(store, ui, api, codex, nil, dashboardToken, false, slog.New(slog.DiscardHandler)))
 	defer app.Close()
 	client := app.Client()
 	client.Jar, _ = cookiejar.New(nil)
@@ -95,6 +105,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	request("POST", "/api/login", `{"token":"`+dashboardToken+`"}`, "", 204)
 	request("GET", "/api/session", "", "", 204)
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, dashboardToken, 401)
+	request("POST", "/opencode-go/chat/completions", "", "", 401)
 
 	var created struct {
 		Client ledger.Client `json:"client"`

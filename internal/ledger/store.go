@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -17,8 +18,9 @@ import (
 )
 
 type Store struct {
-	db      *sql.DB
-	pricing pricing.Catalog
+	db        *sql.DB
+	pricing   pricing.Catalog
+	pricingMu sync.RWMutex
 }
 
 const schema = `
@@ -93,7 +95,16 @@ func Open(path string, catalog pricing.Catalog) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize SQLite: %w", err)
 	}
-	return &Store{db: db, pricing: catalog}, nil
+	store := &Store{db: db, pricing: catalog}
+	if err := preparePricing(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize pricing ledger: %w", err)
+	}
+	if err := store.loadPricing(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("load saved prices: %w", err)
+	}
+	return store, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -235,12 +246,13 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 	}
 	pricingAt := at
 	var originatingID int64
-	if usage.UsageUpdate && usage.HasUsage && usage.ResponseID != "" {
+	var originalCost sql.NullFloat64
+	if usage.UsageUpdate && (usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil) && usage.ResponseID != "" {
 		var originalTime int64
 		var originalModel string
-		err := s.db.QueryRowContext(ctx, `SELECT id, time, model FROM requests
+		err := s.db.QueryRowContext(ctx, `SELECT id, time, model, cost FROM requests
             WHERE source = ? AND response_id = ? AND method = 'POST' AND usage_available = 0
-            ORDER BY id LIMIT 1`, usage.Source, usage.ResponseID).Scan(&originatingID, &originalTime, &originalModel)
+            ORDER BY id LIMIT 1`, usage.Source, usage.ResponseID).Scan(&originatingID, &originalTime, &originalModel, &originalCost)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -252,28 +264,30 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		}
 	}
 	var inputRate, cachedRate, writeRate, write12hRate, outputRate, cost *float64
-	if usage.HasUsage && (!usage.UsageUpdate || originatingID != 0) {
+	var priceSource string
+	if !usage.UsageUpdate || originatingID != 0 {
 		if !usage.HasCacheWriteSplit && usage.CacheRetention == "12h" {
 			usage.CacheWrite12hTokens = usage.CacheWriteTokens
 		}
-		rates, estimate := s.pricing.ForUsage(usage.Model, usage.ServiceTier, pricingAt,
-			usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens)
-		if rates != nil {
+		rates, amount, origin := s.priceFor(usage, pricingAt)
+		cost, priceSource = amount, origin
+		if rates != nil && !originalCost.Valid {
 			inputRate, cachedRate, writeRate, write12hRate, outputRate = &rates.Input, &rates.CachedInput, &rates.CacheWrite, &rates.CacheWrite12h, &rates.Output
-			cost = estimate
 		}
 	}
 	if usage.UsageUpdate {
 		if originatingID != 0 {
 			// The POST incurred the usage. Pollers may use another client key or
 			// fetch the same completed response more than once.
-			_, err := s.db.ExecContext(ctx, `UPDATE OR IGNORE requests SET usage_available = 1,
+			_, err := s.db.ExecContext(ctx, `UPDATE OR IGNORE requests SET usage_available = ?,
                 model = COALESCE(NULLIF(?, ''), model), input_tokens = ?, cached_input_tokens = ?, cache_write_tokens = ?,
-                cache_write_12h_tokens = ?, output_tokens = ?, cost = ?, input_rate = ?, cached_input_rate = ?,
-                cache_write_rate = ?, cache_write_12h_rate = ?, output_rate = ?
-				WHERE id = ? AND usage_available = 0`, usage.Model, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
-				usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate,
-				outputRate, originatingID)
+                cache_write_12h_tokens = ?, output_tokens = ?, cost = COALESCE(cost, ?), input_rate = ?, cached_input_rate = ?,
+                cache_write_rate = ?, cache_write_12h_rate = ?, output_rate = ?,
+                price_source = COALESCE(NULLIF(price_source, ''), ?), reported_cost = COALESCE(reported_cost, ?),
+                reported_list_cost = COALESCE(reported_list_cost, ?), reported_allowance = COALESCE(reported_allowance, ?)
+				WHERE id = ? AND usage_available = 0`, usage.HasUsage, usage.Model, usage.InputTokens, usage.CachedInputTokens,
+				usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate,
+				write12hRate, outputRate, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, originatingID)
 			if err != nil {
 				return err
 			}
@@ -281,15 +295,19 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		usage.HasUsage = false
 		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens = 0, 0, 0, 0, 0
 		cost, inputRate, cachedRate, writeRate, write12hRate, outputRate = nil, nil, nil, nil, nil, nil
+		priceSource = ""
+		usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance = nil, nil, nil
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
-        cache_write_rate, cache_write_12h_rate, output_rate)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
+		reported_cost, reported_list_cost, reported_allowance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.Endpoint, usage.Method, usage.Status,
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
-		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate)
+		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
+		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance)
 	return err
 }
 

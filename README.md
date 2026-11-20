@@ -14,7 +14,7 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 Open `http://localhost:8080` and enter the value of `DASHBOARD_TOKEN`. Go serves the bundled dashboard and proxy from the same container. The volume holds the SQLite database and survives container replacement. Keep the dashboard token stable across restarts. For remote access on a VPS or Pi, serve the container through an HTTPS ingress and leave `COOKIE_SECURE` at its default `true`.
 
-Both Linux `amd64` and `arm64` are supported. Build on the deployment machine, or select the platform with `docker buildx build --platform linux/arm64 --load -t llm-proxy .` for a Raspberry Pi.
+CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-proxy`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-proxy` in the `docker run` command.
 
 ## Connect a client
 
@@ -34,6 +34,8 @@ For OpenCode, add these fields to the OpenAI provider in `opencode.jsonc` and se
   }
 }
 ```
+
+If OpenCode's `openai` provider is signed in with ChatGPT, use `https://proxy.example.com/backend-api/codex` as its base URL. For the separate `opencode-go` provider, set its `settings.baseURL` to `https://proxy.example.com/opencode-go` and add the same proxy header. OpenCode keeps using its saved upstream credentials for each provider.
 
 ### Signed-in Codex
 
@@ -55,9 +57,11 @@ The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route 
 
 ## Usage and rates
 
-The ledger stores request metadata, reported token counts, and the rates and USD estimate recorded at the time of use. The dashboard marks requests whose usage is unavailable or whose rate is unknown. Token prices estimate API usage and Codex's API-equivalent value. Provider-specific non-token fees and negotiated discounts fall outside that estimate.
+The ledger saves provider-reported amounts, including zero, and uses local rates when the provider omits the amount. OpenCode Go list value and allowance use are recorded separately from the reported charge. Request details show both when available.
 
-Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. For example:
+The proxy refreshes the public OpenCode Go and Models.dev price catalogs at startup and every 24 hours. It stores the last usable catalogs in SQLite, so a failed refresh or temporary outage leaves rates available. Each priced request retains the amount and rates recorded at the time of use. Rows display **Unpriced** when a required price is unknown.
+
+Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. Overrides take precedence over downloaded and built-in rates when estimating a cost. For example:
 
 ```json
 {
@@ -65,7 +69,7 @@ Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million t
 }
 ```
 
-Other server settings are `DATA_DIR` (default `./data`, or `/data` in Docker), `LISTEN_ADDR` (default `:8080`), and the optional `OPENAI_UPSTREAM` and `CODEX_UPSTREAM` base URLs.
+Other server settings are `DATA_DIR` (default `./data`, or `/data` in Docker), `LISTEN_ADDR` (default `:8080`), and the optional `OPENAI_UPSTREAM`, `CODEX_UPSTREAM`, and `OPENCODE_GO_UPSTREAM` base URLs.
 
 ## Develop
 

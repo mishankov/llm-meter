@@ -254,8 +254,44 @@ func TestSocketMeterRecordsAnErrorAfterASuccess(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGoForwardsNativeRoutesAndKeepsProviderCredentials(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer go-credential" || r.Header.Get(accessKey) != "" || r.Header.Get("X-OpenCode-Session") != "go-session" {
+			t.Error("incorrect credentials or session header on OpenCode Go request")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Upstream-Path", r.URL.Path)
+		_, _ = io.WriteString(w, `{"id":"chatcmpl_test","model":"fixture-model","usage":{"prompt_tokens":8,"completion_tokens":3}}`)
+	}))
+	defer upstream.Close()
+	records := make(chan Usage, 5)
+	handler := New(nil, nil, parseURL(t, upstream.URL+"/inference/go"), func(usage Usage) { records <- usage })
+	for local, native := range map[string]string{
+		"/models":                            "/v1/models",
+		"/messages":                          "/anthropic/v1/messages",
+		"/models/test:streamGenerateContent": "/google/v1beta/models/test:streamGenerateContent",
+		"/responses":                         "/openai/v1/responses",
+		"/chat/completions":                  "/openai/v1/chat/completions",
+	} {
+		req := httptest.NewRequest(http.MethodPost, OpenCodeGoPrefix+local, nil)
+		req.Header.Set("Authorization", "Bearer go-credential")
+		req.Header.Set("X-OpenCode-Session", "go-session")
+		req.Header.Set(accessKey, "local-key")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req.WithContext(WithClient(req.Context(), "go-client")))
+		if path := response.Header().Get("X-Upstream-Path"); response.Code != 200 || path != "/inference/go"+native {
+			t.Fatalf("wrong upstream for %s: status %d, path %s", local, response.Code, path)
+		}
+		record := nextRecord(t, records)
+		if record.ClientID != "go-client" || record.Source != "api" || record.ResponseID != "opencode-go:chatcmpl_test" ||
+			!record.HasUsage || record.InputTokens != 8 || record.OutputTokens != 3 {
+			t.Fatalf("wrong usage record: %+v", record)
+		}
+	}
+}
+
 func testProxy(api, codex *url.URL, records chan<- Usage) http.Handler {
-	proxy := New(api, codex, func(usage Usage) { records <- usage })
+	proxy := New(api, codex, nil, func(usage Usage) { records <- usage })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxy.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
 	})

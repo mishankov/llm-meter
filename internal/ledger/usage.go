@@ -48,6 +48,7 @@ type Request struct {
 	ID                  int64          `json:"id"`
 	At                  time.Time      `json:"at"`
 	Source              string         `json:"source"`
+	Provider            string         `json:"provider,omitempty"`
 	ClientID            string         `json:"clientId"`
 	Client              string         `json:"client"`
 	Model               string         `json:"model"`
@@ -62,6 +63,10 @@ type Request struct {
 	OutputTokens        int64          `json:"outputTokens"`
 	Cost                *float64       `json:"cost"`
 	Rates               *pricing.Rates `json:"rates"`
+	PriceSource         string         `json:"priceSource,omitempty"`
+	ReportedCost        *float64       `json:"reportedCost,omitempty"`
+	ReportedListCost    *float64       `json:"reportedListCost,omitempty"`
+	ReportedAllowance   *float64       `json:"reportedAllowance,omitempty"`
 }
 
 type Allowance struct {
@@ -210,7 +215,8 @@ func (s *Store) collectRequests(ctx context.Context, filter Filter, where string
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.time, r.source, r.client_id, c.name, r.model, r.endpoint,
         r.method, r.status, r.usage_available, r.input_tokens, r.cached_input_tokens, r.cache_write_tokens,
         r.cache_write_12h_tokens, r.output_tokens, r.cost, r.input_rate, r.cached_input_rate, r.cache_write_rate,
-        r.cache_write_12h_rate, r.output_rate
+        r.cache_write_12h_rate, r.output_rate, r.provider, r.price_source,
+        r.reported_cost, r.reported_list_cost, r.reported_allowance
         FROM requests r JOIN clients c ON c.id = r.client_id`+where+
 		` ORDER BY r.time DESC, r.id DESC LIMIT ?`, append(args, requestPageSize+1)...)
 	if err != nil {
@@ -229,22 +235,34 @@ func (s *Store) collectRequests(ctx context.Context, filter Filter, where string
 		var requestTime int64
 		var cost sql.NullFloat64
 		var input, cached, write, write12h, output sql.NullFloat64
+		var reported, list, allowance sql.NullFloat64
 		if err := rows.Scan(&last, &requestTime, &request.Source, &request.ClientID, &request.Client, &request.Model,
 			&request.Endpoint, &request.Method, &request.Status, &request.UsageAvailable, &request.InputTokens,
 			&request.CachedInputTokens, &request.CacheWriteTokens, &request.CacheWrite12hTokens, &request.OutputTokens,
-			&cost, &input, &cached, &write, &write12h, &output); err != nil {
+			&cost, &input, &cached, &write, &write12h, &output, &request.Provider, &request.PriceSource,
+			&reported, &list, &allowance); err != nil {
 			return err
 		}
 		request.ID = last
 		request.At = timestamp(requestTime)
-		if cost.Valid {
-			request.Cost = &cost.Float64
+		request.Cost = optionalAmount(cost)
+		request.ReportedCost = optionalAmount(reported)
+		request.ReportedListCost = optionalAmount(list)
+		request.ReportedAllowance = optionalAmount(allowance)
+		if input.Valid {
 			request.Rates = &pricing.Rates{Input: input.Float64, CachedInput: cached.Float64, CacheWrite: write.Float64,
 				CacheWrite12h: write12h.Float64, Output: output.Float64}
 		}
 		result.Requests = append(result.Requests, request)
 	}
 	return rows.Err()
+}
+
+func optionalAmount(amount sql.NullFloat64) *float64 {
+	if !amount.Valid {
+		return nil
+	}
+	return &amount.Float64
 }
 
 func ParseCursor(value string) (int64, error) {

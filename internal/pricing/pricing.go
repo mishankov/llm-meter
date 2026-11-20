@@ -21,6 +21,7 @@ type Rates struct {
 
 type Catalog struct {
 	overrides map[string]Rates
+	snapshots map[string]Snapshot
 }
 
 // OpenAI's standard text rates. Models whose usage spans differently priced
@@ -83,46 +84,186 @@ func (r Rates) valid() bool {
 	return true
 }
 
-func (c Catalog) ForUsage(model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64) {
-	if input < 0 || cached < 0 || writes < 0 || writes12h < 0 || writes12h > writes || output < 0 || cached > input || writes > input-cached {
-		return nil, nil
+func (c *Catalog) SetSnapshot(snapshot Snapshot) {
+	if c.snapshots == nil {
+		c.snapshots = make(map[string]Snapshot)
 	}
-	rates, overridden := c.overrides[model]
-	if !overridden {
-		base := snapshotSuffix.ReplaceAllString(model, "")
-		if base == "gpt-5.6" {
-			base = "gpt-5.6-sol"
-		}
-		var ok bool
-		rates, ok = standard[base]
-		if !ok || (writes > 0 && rates.CacheWrite == 0) {
-			return nil, nil
-		}
-		if base == "gpt-5.6-sol" && !at.Before(time.Date(2026, 12, 1, 8, 0, 0, 0, time.UTC)) {
-			return nil, nil // The published promotional rates expire at the end of November (Pacific time).
-		}
-		switch base {
-		case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4":
-			if input > 272_000 {
-				rates.Input *= 2
-				rates.CachedInput *= 2
-				rates.CacheWrite *= 2
-				rates.Output *= 1.5
+	c.snapshots[snapshot.Source] = snapshot
+}
+
+func (c Catalog) ForUsage(model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64) {
+	rates, cost, _ := c.ForProviderUsage("openai", model, tier, at, input, cached, writes, writes12h, output)
+	return rates, cost
+}
+
+func (c Catalog) ForProviderUsage(provider, model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64, string) {
+	if input < 0 || cached < 0 || writes < 0 || writes12h < 0 || writes12h > writes || output < 0 || cached > input || writes > input-cached {
+		return nil, nil, ""
+	}
+	counts := tokenCounts{input - cached - writes, cached, writes - writes12h, writes12h, output}
+	if rates, ok := c.overrides[provider+"/"+model]; ok {
+		return estimate(rates, counts, "override")
+	}
+	if rates, ok := c.overrides[model]; ok {
+		return estimate(rates, counts, "override")
+	}
+
+	if provider == "codex" {
+		provider = "openai"
+	}
+	base := model
+	if provider == "openai" {
+		base = openAIModel(model)
+	}
+	switch tier {
+	case "", "auto", "default", "standard":
+		if provider == opencodeGoSource {
+			if price, ok := c.snapshots[opencodeGoSource].Providers[provider][model]; ok {
+				rates, usable := price.resolve(at.UTC(), input, counts)
+				if !usable {
+					return nil, nil, ""
+				}
+				return estimate(rates, counts, opencodeGoSource)
 			}
 		}
-		multiplier, ok := tierMultiplier(base, tier, at)
-		if !ok {
-			return nil, nil
+		price, found := c.snapshots[modelsDevSource].Providers[provider][model]
+		if !found && base != model {
+			price, found = c.snapshots[modelsDevSource].Providers[provider][base]
 		}
-		rates.Input *= multiplier
-		rates.CachedInput *= multiplier
-		rates.Output *= multiplier
-		rates.CacheWrite *= multiplier
-		rates.CacheWrite12h = rates.CacheWrite * 2
+		if found && usableDownloadedRate(provider, base, at, input, price) {
+			if rates, ok := price.resolve(at.UTC(), input, counts); ok {
+				return estimate(rates, counts, modelsDevSource)
+			}
+		}
 	}
-	cost := (float64(input-cached-writes)*rates.Input + float64(cached)*rates.CachedInput +
-		float64(writes-writes12h)*rates.CacheWrite + float64(writes12h)*rates.CacheWrite12h + float64(output)*rates.Output) / 1_000_000
-	return &rates, &cost
+	if provider == "openai" {
+		if rates, ok := builtinRates(base, tier, at, input, writes); ok {
+			return estimate(rates, counts, "builtin")
+		}
+	}
+	return nil, nil, ""
+}
+
+type tokenCounts struct {
+	input, cached, writes, writes12h, output int64
+}
+
+func estimate(r Rates, counts tokenCounts, source string) (*Rates, *float64, string) {
+	if !r.valid() {
+		return nil, nil, ""
+	}
+	cost := (float64(counts.input)*r.Input + float64(counts.cached)*r.CachedInput +
+		float64(counts.writes)*r.CacheWrite + float64(counts.writes12h)*r.CacheWrite12h + float64(counts.output)*r.Output) / 1_000_000
+	if math.IsInf(cost, 0) || math.IsNaN(cost) {
+		return nil, nil, ""
+	}
+	return &r, &cost, source
+}
+
+func (m modelPrice) resolve(at time.Time, input int64, counts tokenCounts) (Rates, bool) {
+	if m.Unsupported {
+		return Rates{}, false
+	}
+	rates := m.Rates
+	for _, override := range m.Overrides {
+		if override.When.matches(at, input) {
+			rates.overlay(override.Rates)
+		}
+	}
+	if rates.Input == nil && rates.Output == nil {
+		return Rates{}, false
+	}
+	factor := 1.0
+	for _, multiplier := range m.Multipliers {
+		if multiplier.When.matches(at, input) {
+			factor *= multiplier.Factor
+		}
+	}
+	var resolved Rates
+	fields := []struct {
+		rate  *float64
+		count int64
+		dst   *float64
+	}{
+		{rates.Input, counts.input, &resolved.Input},
+		{rates.CachedInput, counts.cached, &resolved.CachedInput},
+		{rates.CacheWrite, counts.writes, &resolved.CacheWrite},
+		{rates.CacheWrite12h, counts.writes12h, &resolved.CacheWrite12h},
+		{rates.Output, counts.output, &resolved.Output},
+	}
+	for _, field := range fields {
+		if field.rate != nil {
+			*field.dst = *field.rate * factor
+		} else if field.count > 0 {
+			return Rates{}, false
+		}
+	}
+	return resolved, resolved.valid()
+}
+
+func openAIModel(model string) string {
+	base := snapshotSuffix.ReplaceAllString(model, "")
+	if base == "gpt-5.6" {
+		return "gpt-5.6-sol"
+	}
+	return base
+}
+
+func usableDownloadedRate(provider, model string, at time.Time, input int64, price modelPrice) bool {
+	if provider != "openai" {
+		return true
+	}
+	// A flat catalog entry can still contain the expired GPT-5.6 promotional
+	// rates. A replacement price can be used once the feed publishes it.
+	if promotionEnded(model, at) && price.Rates.Input != nil && price.Rates.Output != nil &&
+		*price.Rates.Input == standard[model].Input && *price.Rates.Output == standard[model].Output {
+		return false
+	}
+	if input > 272_000 && longContextModel(model) {
+		for _, override := range price.Overrides {
+			if override.When.Context != nil && override.When.matches(at.UTC(), input) &&
+				override.Rates.Input != nil && override.Rates.Output != nil {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func promotionEnded(model string, at time.Time) bool {
+	return model == "gpt-5.6-sol" && !at.Before(time.Date(2026, 12, 1, 8, 0, 0, 0, time.UTC))
+}
+
+func longContextModel(model string) bool {
+	switch model {
+	case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "gpt-5.4":
+		return true
+	}
+	return false
+}
+
+func builtinRates(base, tier string, at time.Time, input, writes int64) (Rates, bool) {
+	rates, ok := standard[base]
+	if !ok || (writes > 0 && rates.CacheWrite == 0) || promotionEnded(base, at) {
+		return Rates{}, false
+	}
+	if longContextModel(base) && input > 272_000 {
+		rates.Input *= 2
+		rates.CachedInput *= 2
+		rates.CacheWrite *= 2
+		rates.Output *= 1.5
+	}
+	multiplier, ok := tierMultiplier(base, tier, at)
+	if !ok {
+		return Rates{}, false
+	}
+	rates.Input *= multiplier
+	rates.CachedInput *= multiplier
+	rates.Output *= multiplier
+	rates.CacheWrite *= multiplier
+	rates.CacheWrite12h = rates.CacheWrite * 2
+	return rates, true
 }
 
 func tierMultiplier(model, tier string, at time.Time) (float64, bool) {

@@ -38,6 +38,7 @@ export interface UsageRequest extends TokenCounts {
   id: number;
   at: string;
   source: Source;
+  provider?: string;
   clientId: string;
   client: string;
   model: string;
@@ -48,6 +49,9 @@ export interface UsageRequest extends TokenCounts {
   cost: number | null;
   rates: Rates | null;
   cacheWrite12hTokens?: number;
+  priceSource?: string;
+  reportedListCost?: number;
+  reportedAllowance?: number;
 }
 
 export interface UsageBucket extends TokenCounts {

@@ -240,8 +240,8 @@
       </div>
     </header>
     {#if actionError && !revokeOpen}<div class="feedback error-feedback" role="alert">{actionError}</div>{/if}
-    <section class="panel client-panel" aria-labelledby="keys-title">
-      <header class="panel-head"><h2 id="keys-title">Proxy keys</h2></header>
+    <section class="client-table" aria-labelledby="keys-title">
+      <header class="section-head"><h2 id="keys-title">Proxy keys</h2></header>
       <div class="table-scroll">
         <table>
           <thead>
@@ -269,7 +269,7 @@
     </section>
   {:else if !loading && !loadError}
     <h1>Client unavailable</h1>
-    <div class="panel empty-state">Select a client from the list.</div>
+    <div class="empty-state">Select a client from the list.</div>
   {/if}
 {:else}
   <header class="page-head">
@@ -282,7 +282,7 @@
     </Button>
   </header>
   {#if clients.length && !loadError}
-    <section class="panel client-panel" aria-label="Client list">
+    <section class="client-table" aria-label="Client list">
       <div class="table-scroll">
         <table>
           <thead>
@@ -305,7 +305,7 @@
       </div>
     </section>
   {:else if !loading && !loadError}
-    <div class="panel empty-state">
+    <div class="empty-state">
       <KeyRoundIcon size={22} aria-hidden="true" />
       <p>No clients yet. Create a client to issue its first proxy key.</p>
     </div>
@@ -315,7 +315,7 @@
 {#if loadError}
   <div class="feedback error-feedback" role="alert"><span>{loadError}</span><Button class="secondary-button" onclick={() => load()}>Retry</Button></div>
 {:else if loading}
-  <div class="panel empty-state" role="status">Loading clients…</div>
+  <div class="empty-state" role="status">Loading clients…</div>
 {/if}
 
 <Dialog bind:open={dialogOpen} onOpenChange={(open, details) => {
@@ -377,10 +377,8 @@
 <style>
   .client-crumb { margin-bottom: calc(var(--gap) * -.45); }
   .head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .client-panel td { white-space: nowrap; }
-  .client-panel td:last-child { width: 1%; }
-  .client-panel .table-scroll { min-height: 0; }
-  .client-panel .panel-head { padding-bottom: 11px; }
+  .client-table td { white-space: nowrap; }
+  .client-table td:last-child { width: 1%; }
   .client-name { display: inline-flex; align-items: center; gap: 9px; font-weight: 550; }
   .client-name :global(svg) { color: var(--accent); }
   .key-status { color: var(--success); }

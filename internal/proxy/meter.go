@@ -25,6 +25,10 @@ func (m *httpMeter) finish() {
 		state := string(message.RawStatus)
 		if m.usage.UsageUpdate && state != "" && state != `"completed"` && state != `"incomplete"` {
 			m.usage.HasUsage = false
+			m.usage.ReportedCost = nil
+			m.usage.ReportedListCost = nil
+			m.usage.ReportedAllowance = nil
+			m.usage.ReportedCostEstimated = false
 		}
 	}
 	if m.sse != nil {
@@ -53,9 +57,12 @@ type wireMetadata struct {
 
 type wireResult struct {
 	wireMetadata
-	ID string `json:"id"`
+	ID           string `json:"id"`
+	GeminiID     string `json:"responseId"`
+	ModelVersion string `json:"modelVersion"`
 
-	Usage *wireUsage `json:"usage"`
+	Usage       *wireUsage      `json:"usage"`
+	GeminiUsage json.RawMessage `json:"usageMetadata"`
 }
 
 type wireMessage struct {
@@ -74,6 +81,7 @@ type wireMessage struct {
 }
 
 type wireUsage struct {
+	wireMoney
 	InputTokens   *int64            `json:"input_tokens"`
 	PromptTokens  *int64            `json:"prompt_tokens"`
 	OutputTokens  *int64            `json:"output_tokens"`
@@ -81,6 +89,26 @@ type wireUsage struct {
 	TotalTokens   *int64            `json:"total_tokens"`
 	InputDetails  *wireInputDetails `json:"input_tokens_details"`
 	PromptDetails *wireInputDetails `json:"prompt_tokens_details"`
+}
+
+type wireMoney struct {
+	Cost     json.RawMessage `json:"cost"`
+	OpenCode json.RawMessage `json:"opencode"`
+}
+
+type wireOpenCodeCosts struct {
+	ListCost  json.RawMessage `json:"list_cost"`
+	Allowance json.RawMessage `json:"allowance"`
+	Estimated json.RawMessage `json:"estimated"`
+}
+
+type wireGeminiUsage struct {
+	wireMoney
+	InputTokens     *int64 `json:"promptTokenCount"`
+	ToolInputTokens *int64 `json:"toolUsePromptTokenCount"`
+	OutputTokens    *int64 `json:"candidatesTokenCount"`
+	ThoughtTokens   *int64 `json:"thoughtsTokenCount"`
+	CachedTokens    int64  `json:"cachedContentTokenCount"`
 }
 
 type wireInputDetails struct {
@@ -116,7 +144,7 @@ func (m wireMessage) terminal() bool {
 }
 
 func (m wireMessage) reportsUsage() bool {
-	return m.terminal() || m.Usage != nil
+	return m.terminal() || m.Usage != nil || len(m.GeminiUsage) != 0
 }
 
 func (u *Usage) applyMessage(message wireMessage, captureUsage bool) {
@@ -129,6 +157,8 @@ func (u *Usage) applyMessage(message wireMessage, captureUsage bool) {
 func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 	if result.Model != "" {
 		u.Model = result.Model
+	} else if result.ModelVersion != "" && u.geminiUsageAvailable() {
+		u.Model = result.ModelVersion
 	}
 	if result.ServiceTier != "" {
 		u.ServiceTier = result.ServiceTier
@@ -141,11 +171,17 @@ func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 	}
 	if result.ID != "" {
 		u.ResponseID = result.ID
+	} else if result.GeminiID != "" && u.geminiUsageAvailable() {
+		u.ResponseID = result.GeminiID
 	}
 	tokens := result.Usage
+	if tokens == nil && u.geminiUsageAvailable() && len(result.GeminiUsage) != 0 {
+		tokens = geminiTokens(result.GeminiUsage)
+	}
 	if tokens == nil {
 		return
 	}
+	u.applyReportedCosts(tokens.wireMoney)
 	input := firstReported(tokens.InputTokens, tokens.PromptTokens)
 	output := firstReported(tokens.OutputTokens, tokens.Completion)
 	if input == nil && output == nil && strings.HasSuffix(u.Endpoint, "/embeddings") {
@@ -172,6 +208,71 @@ func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 		u.CacheWrite12hTokens = min(max(split.Long, 0), u.CacheWriteTokens)
 		u.HasCacheWriteSplit = true
 	}
+}
+
+func (u *Usage) geminiUsageAvailable() bool {
+	switch u.Provider {
+	case "google", "opencode", "opencode-go":
+		return true
+	default:
+		return false
+	}
+}
+
+func geminiTokens(details json.RawMessage) *wireUsage {
+	var usage *wireGeminiUsage
+	if err := json.Unmarshal(details, &usage); err != nil || usage == nil {
+		return nil
+	}
+	return &wireUsage{
+		wireMoney:    usage.wireMoney,
+		InputTokens:  addTokenCounts(usage.InputTokens, usage.ToolInputTokens),
+		OutputTokens: addTokenCounts(usage.OutputTokens, usage.ThoughtTokens),
+		InputDetails: &wireInputDetails{CachedTokens: usage.CachedTokens},
+	}
+}
+
+func addTokenCounts(base, extra *int64) *int64 {
+	if extra == nil {
+		return base
+	}
+	total := count(base)
+	total += min(count(extra), math.MaxInt64-total)
+	return &total
+}
+
+func (u *Usage) applyReportedCosts(wire wireMoney) {
+	var openCode wireOpenCodeCosts
+	switch u.Provider {
+	case "opencode", "opencode-go":
+		if json.Unmarshal(wire.OpenCode, &openCode) == nil {
+			if amount := reportedAmount(openCode.ListCost); amount != nil {
+				u.ReportedListCost = amount
+			}
+			if amount := reportedAmount(openCode.Allowance); amount != nil {
+				u.ReportedAllowance = amount
+			}
+		}
+	case "openrouter":
+		// OpenRouter charges against a USD-denominated credit balance.
+	default:
+		return
+	}
+	if amount := reportedAmount(wire.Cost); amount != nil {
+		u.ReportedCost = amount
+		u.ReportedCostEstimated = string(openCode.Estimated) == "true"
+	}
+}
+
+func reportedAmount(raw json.RawMessage) *float64 {
+	var value *float64
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil
+	}
+	if *value < 0 || math.IsInf(*value, 0) || math.IsNaN(*value) {
+		return nil
+	}
+	return value
 }
 
 func (u *Usage) applyFallback(metadata wireMetadata) {

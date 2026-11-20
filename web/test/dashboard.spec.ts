@@ -4,20 +4,20 @@ import type { Client, Key, Usage } from '../src/lib/api';
 const initialStart = '2026-11-20T12:00:00Z';
 const rates = { input: 1, cachedInput: .1, output: 2, cacheWrite: null };
 const response: Usage = {
-  summary: { apiCost: .045, codexValue: .016, inputTokens: 360, cachedInputTokens: 60, outputTokens: 40, requestCount: 2 },
+  summary: { apiCost: 0, codexValue: .016, inputTokens: 360, cachedInputTokens: 60, outputTokens: 40, requestCount: 2 },
   buckets: [
-    { start: initialStart, apiCost: .045, codexValue: 0, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30 },
+    { start: initialStart, apiCost: 0, codexValue: 0, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30 },
     { start: '2026-11-20T13:00:00Z', apiCost: 0, codexValue: .016, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10 }
   ],
   groups: {
     models: [
-      { id: 'gpt-api', name: 'gpt-api', apiCost: .045, codexValue: 0, tokens: 330 },
+      { id: 'gpt-api', name: 'gpt-api', apiCost: 0, codexValue: 0, tokens: 330 },
       { id: 'gpt-codex', name: 'gpt-codex', apiCost: 0, codexValue: .016, tokens: 70 }
     ],
-    clients: [{ id: 'open-code', name: 'OpenCode', apiCost: .045, codexValue: 0, tokens: 330 }]
+    clients: [{ id: 'open-code', name: 'OpenCode', apiCost: 0, codexValue: 0, tokens: 330 }]
   },
   requests: [
-    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30, cost: .045, rates },
+    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
     { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/backend-api/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates }
   ],
   allowance: [{ id: 'open-code-window', label: '5-hour window', remainingPercent: 77, resetsAt: '2026-11-20T16:00:00Z' }],
@@ -112,8 +112,14 @@ test('filters requests from a chart and inspects and pages through them with the
   const request = page.getByRole('button', { name: /Details for gpt-api/ });
   await request.focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('dialog', { name: 'Request details' })).toBeVisible();
-  await expect(page.getByText('Usage and rates')).toBeVisible();
+  const detail = page.getByRole('dialog', { name: 'Request details' });
+  await expect(detail).toBeVisible();
+  await expect(detail.getByText('Reported cost', { exact: true })).toBeVisible();
+  await expect(detail.getByText('$0.00', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Provider list value', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Allowance used', { exact: true })).toBeVisible();
+  await expect(detail.getByText('OpenCode Go', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Token usage', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Request details' })).not.toBeVisible();
   await expect(request).toBeFocused();

@@ -32,15 +32,23 @@
   }
 
   function amount(request: UsageRequest) {
+    if (request.cost !== null) return money(request.cost);
     if (!request.usageAvailable) return 'Usage unavailable';
-    return request.cost === null ? 'Unpriced' : money(request.cost);
+    return 'Unpriced';
+  }
+
+  function costLabel(request: UsageRequest) {
+    if (request.source === 'codex') return 'Value at API rates';
+    if (request.priceSource === 'provider-reported') return 'Reported cost';
+    if (request.priceSource === 'provider-list') return 'Provider list value';
+    return 'Estimated cost';
   }
 
   const rate = (n: number | null | undefined) => n == null ? '—' : money(n);
 </script>
 
-<section class="panel requests-panel" id="requests" aria-labelledby="requests-title" aria-busy={loading}>
-  <header class="panel-head">
+<section class="requests-section" id="requests" aria-labelledby="requests-title" aria-busy={loading}>
+  <header class="section-head">
     <h2 id="requests-title">Recent requests</h2>
     {#if canPrevious || canNext}
       <div class="pagination">
@@ -105,25 +113,31 @@
       <DialogDescription class="muted">{selected.method} {selected.endpoint}</DialogDescription>
       <dl class="detail-list">
         <div><dt>Time</dt><dd>{formatDateTime(selected.at)}</dd></div>
-        <div><dt>Source</dt><dd>{selected.source === 'codex' ? 'Codex subscription' : 'API'}</dd></div>
+        <div><dt>Source</dt><dd>{selected.source === 'codex' ? 'Codex subscription' : selected.provider === 'opencode-go' ? 'OpenCode Go' : 'API'}</dd></div>
         <div><dt>Client</dt><dd>{selected.client || '—'}</dd></div>
         <div><dt>Model</dt><dd>{selected.model || '—'}</dd></div>
         <div><dt>Status</dt><dd>{status(selected)}</dd></div>
-        <div><dt>{selected.source === 'codex' ? 'Value at API rates' : 'Estimated cost'}</dt><dd>{amount(selected)}</dd></div>
+        <div><dt>{costLabel(selected)}</dt><dd>{amount(selected)}</dd></div>
+        {#if selected.reportedListCost != null && selected.priceSource !== 'provider-list'}
+          <div><dt>Provider list value</dt><dd>{money(selected.reportedListCost)}</dd></div>
+        {/if}
+        {#if selected.reportedAllowance != null}
+          <div><dt>Allowance used</dt><dd>{money(selected.reportedAllowance)}</dd></div>
+        {/if}
       </dl>
       {#if selected.usageAvailable}
-        <h3 class="details-heading">Usage and rates</h3>
-        <div class="detail-rates">
-          <span></span><span>Tokens</span><span>USD / 1M</span>
-          <span>Uncached input</span><b>{count(Math.max(0, selected.inputTokens - selected.cachedInputTokens - (selected.cacheWriteTokens ?? 0)))}</b><b>{rate(selected.rates?.input)}</b>
-          <span>Cached input</span><b>{count(selected.cachedInputTokens)}</b><b>{rate(selected.rates?.cachedInput)}</b>
+        <h3 class="details-heading">{selected.rates ? 'Usage and rates' : 'Token usage'}</h3>
+        <div class="detail-rates" class:with-rates={selected.rates}>
+          <span></span><span>Tokens</span>{#if selected.rates}<span>USD / 1M</span>{/if}
+          <span>Uncached input</span><b>{count(Math.max(0, selected.inputTokens - selected.cachedInputTokens - (selected.cacheWriteTokens ?? 0)))}</b>{#if selected.rates}<b>{rate(selected.rates.input)}</b>{/if}
+          <span>Cached input</span><b>{count(selected.cachedInputTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.cachedInput)}</b>{/if}
           {#if (selected.cacheWriteTokens ?? 0) > (selected.cacheWrite12hTokens ?? 0)}
-            <span>30-minute cache writes</span><b>{count((selected.cacheWriteTokens ?? 0) - (selected.cacheWrite12hTokens ?? 0))}</b><b>{rate(selected.rates?.cacheWrite)}</b>
+            <span>30-minute cache writes</span><b>{count((selected.cacheWriteTokens ?? 0) - (selected.cacheWrite12hTokens ?? 0))}</b>{#if selected.rates}<b>{rate(selected.rates.cacheWrite)}</b>{/if}
           {/if}
           {#if selected.cacheWrite12hTokens}
-            <span>12-hour cache writes</span><b>{count(selected.cacheWrite12hTokens)}</b><b>{rate(selected.rates?.cacheWrite12h)}</b>
+            <span>12-hour cache writes</span><b>{count(selected.cacheWrite12hTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.cacheWrite12h)}</b>{/if}
           {/if}
-          <span>Output</span><b>{count(selected.outputTokens)}</b><b>{rate(selected.rates?.output)}</b>
+          <span>Output</span><b>{count(selected.outputTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.output)}</b>{/if}
         </div>
       {/if}
     {/if}
@@ -131,7 +145,7 @@
 </Dialog>
 
 <style>
-  .requests-panel .panel-head { padding-bottom: 12px; }
+  .requests-section { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   .pagination { display: flex; gap: 5px; }
   th, td { white-space: nowrap; }
   .clip, .endpoint-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
@@ -147,7 +161,8 @@
   .detail-list dt { color: var(--muted); }
   .detail-list dd { margin: 0; overflow-wrap: anywhere; }
   .details-heading { font-size: 14px; margin: 22px 0 12px; }
-  .detail-rates { display: grid; grid-template-columns: 1fr auto auto; gap: 8px 12px; color: var(--muted); }
+  .detail-rates { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; color: var(--muted); }
+  .detail-rates.with-rates { grid-template-columns: 1fr auto auto; }
   .detail-rates b { font-weight: 500; color: var(--text); text-align: end; font-variant-numeric: tabular-nums; }
   @media (max-width: 750px) { .wide-only { display: none; } }
   @media (max-width: 540px) { .clip { max-inline-size: 92px; } }

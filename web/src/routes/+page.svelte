@@ -175,7 +175,7 @@
 
 {#if session !== 'ready'}
   <main class="auth-page">
-    <section class="panel auth-panel" aria-labelledby="auth-title">
+    <section class="auth-form-shell" aria-labelledby="auth-title">
       <div class="app-mark auth-mark"><Layers3Icon size={24} aria-hidden="true" /></div>
       <h1 id="auth-title">LLM Proxy</h1>
       {#if session === 'locked'}

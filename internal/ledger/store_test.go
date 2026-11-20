@@ -21,7 +21,7 @@ func TestBackgroundUsageUsesTheOriginalPricingDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	post := proxy.Usage{At: postAt, Source: "api", ClientID: client.ID, Model: "gpt-5.6-sol",
+	post := proxy.Usage{At: postAt, Source: "api", Provider: "openai", ClientID: client.ID, Model: "gpt-5.6-sol",
 		Method: "POST", Endpoint: "/v1/responses", Status: 200, ResponseID: "resp_background"}
 	if err := store.Record(ctx, post); err != nil {
 		t.Fatal(err)
