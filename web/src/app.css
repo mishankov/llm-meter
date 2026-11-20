@@ -108,7 +108,7 @@ table tr:hover td { background: #ffffff03; }
 table :is(th,td).numeric:not(:first-child) { text-align: end; }
 
 .dialog-backdrop { background: #090b0fbb; }
-.dialog-content { background: var(--surface); border: 1px solid var(--strong-line); border-radius: 11px; color: var(--text); padding: 23px; width: min(calc(100% - 30px), 445px); max-height: calc(100dvh - 30px); overflow: auto; margin: auto; box-shadow: 0 28px 100px #000a; position: fixed; inset: 0; }
+.dialog-content { background: var(--surface); border: 1px solid var(--strong-line); border-radius: 11px; color: var(--text); padding: 23px; width: min(calc(100% - 30px), 445px); height: fit-content; max-height: calc(100dvh - 30px); overflow: auto; margin: auto; box-shadow: 0 28px 100px #000a; position: fixed; inset: 0; }
 .dialog-title { font-size: 20px; margin-block-end: 5px; padding-inline-end: 20px; }
 .dialog-content .muted { overflow-wrap: anywhere; }
 .dialog-x { position: absolute; right: 16px; top: 16px; border-color: transparent; }
