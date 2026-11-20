@@ -144,18 +144,33 @@
   }
 
   async function copyKey() {
-    if (!generated) return;
+    const key = generated;
+    if (!key) return;
     try {
-      await navigator.clipboard.writeText(generated.token);
-      copyState = 'copied';
+      await navigator.clipboard.writeText(key.token);
+      if (generated === key) copyState = 'copied';
+      return;
     } catch {
-      const token = document.getElementById('issued-key');
-      if (token instanceof HTMLInputElement) {
-        token.focus();
-        token.select();
-      }
-      copyState = 'manual';
+      // The Clipboard API may be unavailable on HTTP or denied by the browser.
     }
+
+    if (generated !== key) return;
+    const token = document.getElementById('issued-key');
+    if (!(token instanceof HTMLInputElement)) return;
+
+    const previousFocus = document.activeElement;
+    token.focus();
+    token.select();
+    try {
+      if (document.execCommand('copy')) {
+        if (previousFocus instanceof HTMLElement) previousFocus.focus();
+        copyState = 'copied';
+        return;
+      }
+    } catch {
+      // Leave the full key selected if the browser also blocks this copy command.
+    }
+    copyState = 'manual';
   }
 
   function confirmRevoke(key: Key) {

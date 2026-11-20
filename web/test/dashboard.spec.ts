@@ -122,6 +122,7 @@ test('filters requests from a chart and inspects and pages through them with the
   await page.keyboard.press('Enter');
   const detail = page.getByRole('dialog', { name: 'Request details' });
   await expect(detail).toBeVisible();
+  await expect(detail).toHaveCSS('height', `${page.viewportSize()!.height}px`);
   await expect(detail.getByText('Reported cost', { exact: true })).toBeVisible();
   await expect(detail.getByText('$0.00', { exact: true })).toBeVisible();
   await expect(detail.getByText('Provider list value', { exact: true })).toBeVisible();
@@ -214,7 +215,25 @@ test('shows spaced date labels for both daily chart ranges on mobile', async ({ 
   }
 });
 
-test('creates a client and rotates its key using the dashboard', async ({ page }) => {
+for (const [width, height] of [[1280, 900], [320, 568]]) {
+  test(`centers a compact New client dialog at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await mockAPI(page);
+    await unlock(page);
+    await page.getByRole('link', { name: 'Clients' }).click();
+    await page.getByRole('button', { name: 'New client' }).click();
+    const dialog = page.getByRole('dialog', { name: 'New client' });
+    await dialog.getByRole('textbox', { name: 'Client name' }).fill('OpenCode');
+    await expect(dialog).toBeInViewport({ ratio: 1 });
+    const bounds = (await dialog.boundingBox())!;
+    expect(bounds.height).toBeLessThan(300);
+    expect(bounds.y + bounds.height / 2).toBeCloseTo(height / 2, 0);
+    expect(bounds.x + bounds.width / 2).toBeCloseTo(width / 2, 0);
+  });
+}
+
+test('creates a client and rotates its key using the dashboard', async ({ context, page }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
   await page.getByRole('link', { name: 'Clients' }).click();
@@ -234,12 +253,27 @@ test('creates a client and rotates its key using the dashboard', async ({ page }
   await name.press('Enter');
   const issuedKey = page.getByRole('textbox', { name: 'New proxy key', exact: true });
   await expect(issuedKey).toHaveValue('test_key_1_secret');
+  const copy = page.getByRole('button', { name: 'Copy key' });
+  await expect(copy).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Key copied.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('test_key_1_secret');
   await page.getByRole('button', { name: 'Done' }).click();
   await expect(issuedKey).not.toBeVisible();
   const newKey = page.getByRole('button', { name: 'New key', exact: true });
   await expect(newKey).toHaveAttribute('aria-keyshortcuts', 'K');
   await page.keyboard.press('k');
   await expect(issuedKey).toHaveValue('test_key_2_secret');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+  });
+  await copy.click();
+  await expect(page.getByText('Key copied.', { exact: true })).toBeVisible();
+  await expect(copy).toBeFocused();
+  expect(await page.evaluate(() => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+    return navigator.clipboard.readText();
+  })).toBe('test_key_2_secret');
   await page.keyboard.press('Escape');
   const revoke = page.getByRole('button', { name: 'Revoke key test_key_1' });
   const revokeDialog = page.getByRole('alertdialog', { name: 'Revoke this key?' });

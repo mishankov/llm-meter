@@ -155,7 +155,7 @@
   .status-code { font-family: var(--mono); color: var(--success); font-size: 11px; }
   .status-code.bad { color: var(--danger); }
   :global(.row-details) { inline-size: 26px; block-size: 26px; }
-  :global(.request-detail) { margin: 0 0 0 auto; max-block-size: 100dvh; block-size: 100dvh; max-inline-size: min(100%, 430px); border-radius: 0; }
+  :global(.dialog-content.request-detail) { margin: 0 0 0 auto; max-block-size: 100dvh; block-size: 100dvh; max-inline-size: min(100%, 430px); border-radius: 0; }
   .detail-list { margin-block: 22px; }
   .detail-list div { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 10px; grid-template-columns: 130px minmax(0, 1fr); }
   .detail-list dt { color: var(--muted); }
