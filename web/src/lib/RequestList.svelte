@@ -10,7 +10,7 @@
   import { count, formatDateTime, guardEnter, money, tokens } from './format';
 
   interface Props {
-    requests: UsageRequest[];
+    requests?: UsageRequest[];
     loading: boolean;
     canPrevious: boolean;
     canNext: boolean;
@@ -61,7 +61,7 @@
       </div>
     {/if}
   </header>
-  {#if requests.length}
+  {#if requests?.length}
     <div class="table-scroll">
       <table>
         <thead>
@@ -97,7 +97,7 @@
   {:else}
     <div class="empty-state">
       <InboxIcon size={21} aria-hidden="true" />
-      <p>{loading ? 'Loading requests…' : 'No requests in this view.'}</p>
+      <p>{loading ? 'Loading requests…' : requests ? 'No requests in this view.' : 'Request results unavailable.'}</p>
     </div>
   {/if}
 </section>

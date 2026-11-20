@@ -13,6 +13,8 @@
 
   interface Props {
     data: Usage | null;
+    filterOptions?: Usage['filters'];
+    requestPage: Pick<Usage, 'requests' | 'nextCursor'> | null;
     loading: boolean;
     error: string;
     updatedAt: string;
@@ -28,7 +30,7 @@
     onNext: () => void;
   }
 
-  let { data, loading, error, updatedAt, range, source, client, model, bucket, canPrevious, update, refresh, onPrevious, onNext }: Props = $props();
+  let { data, filterOptions, requestPage, loading, error, updatedAt, range, source, client, model, bucket, canPrevious, update, refresh, onPrevious, onNext }: Props = $props();
   let ranking = $state('models');
   let unit = $state('dollars');
   let groups = $derived(
@@ -68,8 +70,8 @@
 <div class="filters">
   <SlidersHorizontalIcon size={16} aria-hidden="true" />
   <Filter label="Source" value={source} items={sourceOptions} onChange={(value) => update('source', value)} />
-  <Filter label="Client" value={client} items={[{ value: '', label: 'All clients' }, ...(data?.filters.clients ?? []).map((choice) => ({ value: choice.id, label: choice.name }))]} onChange={(value) => update('client', value)} />
-  <Filter label="Model" value={model} items={[{ value: '', label: 'All models' }, ...(data?.filters.models ?? []).map((choice) => ({ value: choice, label: choice }))]} onChange={(value) => update('model', value)} />
+  <Filter label="Client" value={client} items={[{ value: '', label: 'All clients' }, ...(filterOptions?.clients ?? []).map((choice) => ({ value: choice.id, label: choice.name }))]} onChange={(value) => update('client', value)} />
+  <Filter label="Model" value={model} items={[{ value: '', label: 'All models' }, ...(filterOptions?.models ?? []).map((choice) => ({ value: choice, label: choice }))]} onChange={(value) => update('model', value)} />
 </div>
 
 {#if error}
@@ -191,7 +193,7 @@
       <Button class="icon-button" aria-label="Clear chart time filter" onclick={() => update('bucket', '')}><XIcon size={14} aria-hidden="true" /></Button>
     </div>
   {/if}
-  <RequestList requests={data.requests} {loading} {canPrevious} canNext={Boolean(data.nextCursor)} {onPrevious} {onNext} />
+  <RequestList requests={requestPage?.requests} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)} {onPrevious} {onNext} />
 {/if}
 
 <style>

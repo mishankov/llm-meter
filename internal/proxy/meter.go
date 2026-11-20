@@ -35,7 +35,14 @@ func (m *httpMeter) finish() {
 		m.sse.finish()
 	}
 	if m.request != nil {
-		m.usage.applyFallback(m.request.message().wireMetadata)
+		request := m.request.message()
+		m.usage.applyFallback(request.wireMetadata)
+		if m.usage.Method == http.MethodPost && m.usage.Endpoint == "/v1/responses" && request.Background && request.BackgroundOptions != nil {
+			switch request.BackgroundOptions.CompletionWindow {
+			case "2h", "8h":
+				m.usage.CompletionWindow = request.BackgroundOptions.CompletionWindow
+			}
+		}
 	}
 }
 
@@ -57,6 +64,7 @@ type wireMetadata struct {
 
 type wireResult struct {
 	wireMetadata
+	Type         string `json:"type"`
 	ID           string `json:"id"`
 	GeminiID     string `json:"responseId"`
 	ModelVersion string `json:"modelVersion"`
@@ -67,13 +75,17 @@ type wireResult struct {
 
 type wireMessage struct {
 	wireResult
-	Type             string          `json:"type"`
-	StreamID         string          `json:"stream_id"`
-	RawStatus        json.RawMessage `json:"status"`
-	Response         *wireResult     `json:"response"`
-	Session          *wireMetadata   `json:"session"`
-	MeteredLimitName string          `json:"metered_limit_name"`
-	LimitName        string          `json:"limit_name"`
+	StreamID          string          `json:"stream_id"`
+	RawStatus         json.RawMessage `json:"status"`
+	Response          *wireResult     `json:"response"`
+	Message           *wireResult     `json:"message"`
+	Session           *wireMetadata   `json:"session"`
+	Background        bool            `json:"background"`
+	BackgroundOptions *struct {
+		CompletionWindow string `json:"completion_window"`
+	} `json:"background_options"`
+	MeteredLimitName string `json:"metered_limit_name"`
+	LimitName        string `json:"limit_name"`
 	RateLimits       *struct {
 		Primary   *wireWindow `json:"primary"`
 		Secondary *wireWindow `json:"secondary"`
@@ -89,6 +101,8 @@ type wireUsage struct {
 	TotalTokens   *int64            `json:"total_tokens"`
 	InputDetails  *wireInputDetails `json:"input_tokens_details"`
 	PromptDetails *wireInputDetails `json:"prompt_tokens_details"`
+	CacheRead     *int64            `json:"cache_read_input_tokens"`
+	CacheCreation *int64            `json:"cache_creation_input_tokens"`
 }
 
 type wireMoney struct {
@@ -144,10 +158,16 @@ func (m wireMessage) terminal() bool {
 }
 
 func (m wireMessage) reportsUsage() bool {
-	return m.terminal() || m.Usage != nil || len(m.GeminiUsage) != 0
+	return m.terminal() || m.Type == "message_start" || m.Usage != nil || len(m.GeminiUsage) != 0
 }
 
 func (u *Usage) applyMessage(message wireMessage, captureUsage bool) {
+	if message.Type == "message_start" && message.Message != nil {
+		result := *message.Message
+		result.Type = "message"
+		u.applyResult(result, captureUsage)
+		return
+	}
 	if message.Response != nil {
 		u.applyResult(*message.Response, captureUsage)
 	}
@@ -182,6 +202,10 @@ func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 		return
 	}
 	u.applyReportedCosts(tokens.wireMoney)
+	if result.Type == "message" || result.Type == "message_delta" || tokens.CacheRead != nil || tokens.CacheCreation != nil {
+		u.applyMessagesUsage(tokens)
+		return
+	}
 	input := firstReported(tokens.InputTokens, tokens.PromptTokens)
 	output := firstReported(tokens.OutputTokens, tokens.Completion)
 	if input == nil && output == nil && strings.HasSuffix(u.Endpoint, "/embeddings") {
@@ -207,6 +231,31 @@ func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 	if split := details.CacheWriteDetails; split != nil {
 		u.CacheWrite12hTokens = min(max(split.Long, 0), u.CacheWriteTokens)
 		u.HasCacheWriteSplit = true
+	}
+}
+
+func (u *Usage) applyMessagesUsage(tokens *wireUsage) {
+	// Messages reports uncached input separately. A cumulative delta can
+	// replace a count or omit it and leave the previous count in effect.
+	if tokens.InputTokens != nil || tokens.CacheRead != nil || tokens.CacheCreation != nil {
+		uncached := u.InputTokens - u.CachedInputTokens - u.CacheWriteTokens
+		if tokens.InputTokens != nil {
+			uncached = count(tokens.InputTokens)
+		}
+		if tokens.CacheRead != nil {
+			u.CachedInputTokens = count(tokens.CacheRead)
+		}
+		if tokens.CacheCreation != nil {
+			u.CacheWriteTokens = count(tokens.CacheCreation)
+		}
+		u.CachedInputTokens = min(u.CachedInputTokens, math.MaxInt64-uncached)
+		u.CacheWriteTokens = min(u.CacheWriteTokens, math.MaxInt64-uncached-u.CachedInputTokens)
+		u.InputTokens = uncached + u.CachedInputTokens + u.CacheWriteTokens
+		u.HasUsage = true
+	}
+	if tokens.OutputTokens != nil {
+		u.OutputTokens = count(tokens.OutputTokens)
+		u.HasUsage = true
 	}
 }
 

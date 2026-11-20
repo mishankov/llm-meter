@@ -117,10 +117,10 @@ func (s *objectSelector) feed(b byte) {
 		}
 		s.value = selectedValue{}
 		switch s.name {
-		case "type", "id", "model", "service_tier", "prompt_cache_retention", "usage", "rate_limits",
+		case "type", "id", "model", "service_tier", "prompt_cache_retention", "background", "background_options", "usage", "rate_limits",
 			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId":
 			s.value.keep = true
-		case "response", "session":
+		case "response", "session", "message":
 			if !s.flat && b == '{' {
 				s.value.nested = &objectSelector{flat: true}
 			}

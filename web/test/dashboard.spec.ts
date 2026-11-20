@@ -58,13 +58,20 @@ async function mockAPI(page: Page) {
       const cursor = url.searchParams.get('cursor');
       const bucket = url.searchParams.get('bucket');
       const client = url.searchParams.get('client');
+      const source = url.searchParams.get('source');
+      const days = url.searchParams.get('range') === '30d' ? 31 : url.searchParams.get('range') === '7d' ? 8 : 0;
+      const buckets = days ? Array.from({ length: days }, (_, index) => ({
+        ...response.buckets[0],
+        start: new Date(Date.parse(initialStart) + index * 86_400_000).toISOString()
+      })) : response.buckets;
       const requests = response.requests.filter((request) =>
         (!bucket || request.at.slice(0, 13) === bucket.slice(0, 13)) &&
         (!client || request.clientId === client) &&
+        (!source || request.source === source) &&
         (!cursor || request.source === 'codex')
       );
       const nextCursor = !cursor && !bucket && !client ? 'test-cursor' : null;
-      return route.fulfill({ json: { ...response, requests, nextCursor } });
+      return route.fulfill({ json: { ...response, buckets, requests, nextCursor } });
     }
     if (url.pathname === '/api/clients') {
       if (method === 'GET') return route.fulfill({ json: { clients } });
@@ -84,7 +91,7 @@ async function mockAPI(page: Page) {
     }
     return route.fulfill({ status: 404 });
   });
-  return { usageQueries };
+  return { usageQueries, expireSession: () => { authorized = false; } };
 }
 
 async function unlock(page: Page) {
@@ -108,6 +115,7 @@ test('filters requests from a chart and inspects and pages through them with the
   await expect(firstBucket).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(firstBucket).toHaveAttribute('aria-pressed', 'true');
+  await expect(firstBucket).toBeFocused();
   await expect.poll(() => usageQueries.at(-1)?.get('bucket')).toBe(initialStart);
   const request = page.getByRole('button', { name: /Details for gpt-api/ });
   await request.focus();
@@ -140,6 +148,69 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
+  }
+});
+
+test('hides previous results when loading the selected source fails', async ({ page }) => {
+  await mockAPI(page);
+  let failFilteredQuery = true;
+  await page.route('**/api/usage?**', (route) => {
+    const source = new URL(route.request().url()).searchParams.get('source');
+    return source === 'codex' && failFilteredQuery ? route.fulfill({ status: 503 }) : route.fallback();
+  });
+  await unlock(page);
+  const apiRequest = page.getByRole('button', { name: /Details for gpt-api/ });
+  await expect(apiRequest).toBeVisible();
+  await page.getByRole('combobox', { name: 'Source' }).click();
+  await page.getByRole('option', { name: 'Codex subscription' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Could not load usage. Retry');
+  await expect(apiRequest).not.toBeVisible();
+  await expect(page.getByRole('region', { name: 'Cost over time' })).not.toBeVisible();
+
+  failFilteredQuery = false;
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByRole('button', { name: /Details for gpt-codex/ })).toBeVisible();
+  await expect(apiRequest).not.toBeVisible();
+});
+
+test('keeps a client draft through session expiry and clears it on lock', async ({ page }) => {
+  const { expireSession } = await mockAPI(page);
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients' }).click();
+  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
+  await page.keyboard.press('n');
+  const name = page.getByRole('textbox', { name: 'Client name' });
+  await name.fill('Unsaved client');
+
+  expireSession();
+  await name.press('Enter');
+  const token = page.getByLabel('Access token');
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
+  await page.keyboard.press('n');
+  await expect(name).toHaveValue('Unsaved client');
+
+  await name.press('Escape');
+  await page.getByRole('button', { name: 'Lock dashboard' }).click();
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
+  await page.keyboard.press('n');
+  await expect(name).toHaveValue('');
+});
+
+test('shows spaced date labels for both daily chart ranges on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAPI(page);
+  await unlock(page);
+  for (const [range, count] of [['7 days', 8], ['30 days', 31]] as const) {
+    await page.getByRole('radio', { name: range }).click();
+    for (const name of ['Cost over time', 'Tokens over time']) {
+      const chart = page.getByRole('region', { name });
+      await expect(chart.getByRole('button')).toHaveCount(count);
+      await expect(chart.locator('.chart-labels span:visible').filter({ hasText: /\S/ })).toHaveCount(4);
+    }
   }
 });
 

@@ -54,6 +54,56 @@ func TestModelsDevUsesProviderScopedRatesAndRetainsKnownOpenAIRules(t *testing.T
 	}
 }
 
+func TestModelsDevDoesNotApplyTextRatesToMixedAudioUsage(t *testing.T) {
+	snapshot := fetchFixture(t, modelsDevSource, `{"openai":{"models":{
+		"gpt-realtime-2.1":{"cost":{"input":4,"output":24,"cache_read":0.4,"input_audio":32,"output_audio":64}},
+		"gpt-6-luna":{"cost":{"input":0.1,"output":0.5,"tiers":[
+			{"input":0.2,"output":0.75,"output_audio":0,"tier":{"type":"context","size":272000}}
+		]}},
+		"text-only":{"cost":{"input":4,"output":24}}
+	}}}`)
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Snapshot
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	var catalog Catalog
+	catalog.SetSnapshot(restored)
+	for _, tt := range []struct{ model, tier string }{
+		{"gpt-realtime-2.1", ""},
+		{"gpt-realtime-2.1-2026-07-06", ""},
+		{"gpt-6-luna", ""},
+		{"gpt-6-luna", "priority"},
+	} {
+		if rates, cost, source := catalog.ForProviderUsage("openai", tt.model, tt.tier, time.Now(), 300_000, 0, 0, 0, 1000); rates != nil || cost != nil || source != "" {
+			t.Fatalf("mixed audio %s at tier %q priced with rates %v, cost %v, source %q", tt.model, tt.tier, rates, cost, source)
+		}
+	}
+	if _, cost, source := catalog.ForProviderUsage("openai", "text-only", "", time.Now(), 1000, 0, 0, 0, 1000); cost == nil || *cost != .028 || source != modelsDevSource {
+		t.Fatalf("text-only model priced with cost %v, source %q", cost, source)
+	}
+}
+
+func TestLegacyModelsDevSnapshotCannotReintroduceAudioTextPricing(t *testing.T) {
+	var legacy Snapshot
+	if err := json.Unmarshal([]byte(`{"source":"models.dev","providers":{"openai":{
+		"gpt-realtime-2.1":{"rates":{"input":4,"output":24}}
+	}}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	var catalog Catalog
+	catalog.SetSnapshot(legacy)
+	if _, cost, _ := catalog.ForProviderUsage("openai", "gpt-realtime-2.1", "", time.Now(), 1000, 0, 0, 0, 1000); cost != nil {
+		t.Fatal("legacy snapshot was missing separate audio rates but still priced")
+	}
+	if _, cost, source := catalog.ForProviderUsage("openai", "gpt-6-luna", "", time.Now(), 1000, 0, 0, 0, 1000); cost == nil || source != "builtin" {
+		t.Fatalf("expected built-in rates before refresh, got cost %v, source %q", cost, source)
+	}
+}
+
 func TestOpenCodeGoRatesHonorTimeAndContext(t *testing.T) {
 	var catalog Catalog
 	catalog.SetSnapshot(fetchFixture(t, modelsDevSource, `{"opencode-go":{"models":{

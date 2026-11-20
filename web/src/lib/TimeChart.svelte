@@ -10,13 +10,15 @@
     onSelect: (start: string) => void;
   }
   let { buckets, kind, range, selection, onSelect }: Props = $props();
+  let chartWidth = $state(0);
   let focusedBucket = $state('');
   let firstBucket = $derived(buckets[0]?.start ?? '');
   let availableFocus = $derived(buckets.some((bucket) => bucket.start === focusedBucket) ? focusedBucket : firstBucket);
   let maximum = $derived(axisMaximum(Math.max(0, ...buckets.map((bucket) =>
     kind === 'cost' ? Math.max(bucket.apiCost, bucket.codexValue) : tokens(bucket)
   ))));
-  let stride = $derived(Math.max(1, Math.ceil(buckets.length / 6)));
+  const maxLabels = $derived(Math.max(1, Math.min(6, Math.floor(chartWidth / 64))));
+  const stride = $derived(Math.max(1, Math.ceil(buckets.length / maxLabels)));
   const levels = [1, 0.75, 0.5, 0.25, 0];
 
   function axisMaximum(value: number) {
@@ -61,7 +63,7 @@
     {/each}
   </div>
 
-  <div class="chart-content">
+  <div class="chart-content" bind:clientWidth={chartWidth}>
     <div class="chart-grid" aria-hidden="true">
       {#each levels as level (level)}
         <span></span>
@@ -140,7 +142,5 @@
     .chart-body { block-size: 170px; grid-template-columns: 40px minmax(0, 1fr); gap: 6px; }
     .chart-column { padding-inline: 1px; }
     .chart-labels { font-size: 9px; }
-    .chart-labels span:nth-child(odd) { visibility: hidden; }
-    .chart-labels span:first-child { visibility: visible; }
   }
 </style>

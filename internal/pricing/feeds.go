@@ -30,10 +30,11 @@ var DefaultFeeds = []Feed{
 
 // Snapshot stores validated text rates in dollars per million tokens.
 type Snapshot struct {
-	Source    string                           `json:"source"`
-	URL       string                           `json:"url"`
-	FetchedAt time.Time                        `json:"fetchedAt"`
-	Providers map[string]map[string]modelPrice `json:"providers"`
+	Source            string                           `json:"source"`
+	URL               string                           `json:"url"`
+	FetchedAt         time.Time                        `json:"fetchedAt"`
+	Providers         map[string]map[string]modelPrice `json:"providers"`
+	AudioRatesChecked bool                             `json:"audioRatesChecked,omitempty"`
 }
 
 // The pointer fields distinguish absent rates from explicitly free usage.
@@ -70,10 +71,11 @@ func (r *partialRates) overlay(override partialRates) {
 }
 
 type modelPrice struct {
-	Rates       partialRates     `json:"rates"`
-	Overrides   []rateOverride   `json:"overrides,omitempty"`
-	Multipliers []rateMultiplier `json:"multipliers,omitempty"`
-	Unsupported bool             `json:"unsupported,omitempty"`
+	Rates              partialRates     `json:"rates"`
+	Overrides          []rateOverride   `json:"overrides,omitempty"`
+	Multipliers        []rateMultiplier `json:"multipliers,omitempty"`
+	Unsupported        bool             `json:"unsupported,omitempty"`
+	SeparateAudioRates bool             `json:"separateAudioRates,omitempty"`
 }
 
 type rateOverride struct {
@@ -215,18 +217,27 @@ func Fetch(ctx context.Context, client *http.Client, feed Feed) (Snapshot, error
 	}
 	for _, models := range providers {
 		for _, model := range models {
-			if !model.Unsupported && (model.Rates.Input != nil || model.Rates.Output != nil) {
-				return Snapshot{Source: feed.Name, URL: feed.URL, FetchedAt: time.Now().UTC(), Providers: providers}, nil
+			if !model.Unsupported && !model.SeparateAudioRates && (model.Rates.Input != nil || model.Rates.Output != nil) {
+				return Snapshot{
+					Source: feed.Name, URL: feed.URL, FetchedAt: time.Now().UTC(), Providers: providers,
+					AudioRatesChecked: feed.Name == modelsDevSource,
+				}, nil
 			}
 		}
 	}
 	return result, fmt.Errorf("pricing feed contains no valid text rates")
 }
 
-type modelsDevPrice struct {
+type modelsDevRates struct {
 	partialRates
+	AudioInput  *float64 `json:"input_audio"`
+	AudioOutput *float64 `json:"output_audio"`
+}
+
+type modelsDevPrice struct {
+	modelsDevRates
 	Tiers []struct {
-		partialRates
+		modelsDevRates
 		Tier struct {
 			Type string `json:"type"`
 			Size *int64 `json:"size"`
@@ -250,8 +261,12 @@ func parseModelsDev(data []byte) (map[string]map[string]modelPrice, error) {
 			if model.Cost == nil || !model.Cost.partialRates.valid() {
 				continue
 			}
-			price := modelPrice{Rates: model.Cost.partialRates}
+			price := modelPrice{
+				Rates:              model.Cost.partialRates,
+				SeparateAudioRates: model.Cost.AudioInput != nil || model.Cost.AudioOutput != nil,
+			}
 			for _, tier := range model.Cost.Tiers {
+				price.SeparateAudioRates = price.SeparateAudioRates || tier.AudioInput != nil || tier.AudioOutput != nil
 				if tier.Tier.Type != "context" || tier.Tier.Size == nil || *tier.Tier.Size < 0 || !tier.partialRates.valid() {
 					price.Unsupported = true
 					break

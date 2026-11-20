@@ -59,9 +59,11 @@ The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route 
 
 The ledger saves provider-reported amounts, including zero, and uses local rates when the provider omits the amount. OpenCode Go list value and allowance use are recorded separately from the reported charge. Request details show both when available.
 
-The proxy refreshes the public OpenCode Go and Models.dev price catalogs at startup and every 24 hours. It stores the last usable catalogs in SQLite, so a failed refresh or temporary outage leaves rates available. Each priced request retains the amount and rates recorded at the time of use. Rows display **Unpriced** when a required price is unknown.
+The proxy refreshes the public OpenCode Go and Models.dev price catalogs at startup and every 24 hours. It stores the last usable catalogs in SQLite, so a failed refresh or temporary outage leaves rates available. Each priced request retains the amount and rates recorded at the time of use. Rows display **Unpriced** when a required price is unknown or Models.dev lists separate audio rates that cannot be applied to the total token counts.
 
-Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. Overrides take precedence over downloaded and built-in rates when estimating a cost. For example:
+Upgrading from an older catalog requires one successful Models.dev refresh to check for separate audio rates. The ledger also applies the published 2-hour and 8-hour discounts to eligible OpenAI background estimates when a completed response is retrieved.
+
+Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. Overrides take precedence over downloaded and built-in rates when estimating a cost. Include a rate for each token category used by the model. Use `0` for a category that is free. For example:
 
 ```json
 {

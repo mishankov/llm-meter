@@ -249,17 +249,21 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 	var originalCost sql.NullFloat64
 	if usage.UsageUpdate && (usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil) && usage.ResponseID != "" {
 		var originalTime int64
-		var originalModel string
-		err := s.db.QueryRowContext(ctx, `SELECT id, time, model, cost FROM requests
+		var originalModel, originalTier, completionWindow string
+		err := s.db.QueryRowContext(ctx, `SELECT id, time, model, cost, service_tier, completion_window FROM requests
             WHERE source = ? AND response_id = ? AND method = 'POST' AND usage_available = 0
-            ORDER BY id LIMIT 1`, usage.Source, usage.ResponseID).Scan(&originatingID, &originalTime, &originalModel, &originalCost)
+            ORDER BY id LIMIT 1`, usage.Source, usage.ResponseID).Scan(&originatingID, &originalTime, &originalModel, &originalCost, &originalTier, &completionWindow)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		if originatingID != 0 {
 			pricingAt = timestamp(originalTime)
+			usage.CompletionWindow = completionWindow
 			if usage.Model == "" {
 				usage.Model = originalModel
+			}
+			if usage.ServiceTier == "" {
+				usage.ServiceTier = originalTier
 			}
 		}
 	}
@@ -296,18 +300,19 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens = 0, 0, 0, 0, 0
 		cost, inputRate, cachedRate, writeRate, write12hRate, outputRate = nil, nil, nil, nil, nil, nil
 		priceSource = ""
+		usage.CompletionWindow = ""
 		usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance = nil, nil, nil
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
 		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
-		reported_cost, reported_list_cost, reported_allowance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		reported_cost, reported_list_cost, reported_allowance, service_tier, completion_window)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
 		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.Endpoint, usage.Method, usage.Status,
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
 		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
-		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance)
+		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, usage.ServiceTier, usage.CompletionWindow)
 	return err
 }
 

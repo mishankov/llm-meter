@@ -34,6 +34,7 @@ type Usage struct {
 	Method                string
 	ResponseID            string
 	ServiceTier           string
+	CompletionWindow      string
 	CacheRetention        string
 	Status                int
 	InputTokens           int64

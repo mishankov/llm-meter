@@ -27,11 +27,22 @@
 
   let filters = $state({ range: '24h', source: '', client: '', model: '', bucket: '' });
   let cursors = $state<string[]>(['']);
-  let usage = $state<Usage | null>(null);
+  let usageResult = $state<{ data: Usage; overviewQuery: string; query: string; updatedAt: string } | null>(null);
   let loadingUsage = $state(false);
   let usageError = $state('');
-  let updatedAt = $state('');
   let request: AbortController | null = null;
+  const overviewQuery = $derived(new URLSearchParams(
+    Object.entries(filters).filter(([name, value]) => name !== 'bucket' && value)
+  ).toString());
+  const usageQuery = $derived.by(() => {
+    const query = new URLSearchParams(overviewQuery);
+    if (filters.bucket) query.set('bucket', filters.bucket);
+    const cursor = cursors[cursors.length - 1];
+    if (cursor) query.set('cursor', cursor);
+    return query.toString();
+  });
+  const usageOverview = $derived(usageResult?.overviewQuery === overviewQuery ? usageResult : null);
+  const requestPage = $derived(usageResult?.query === usageQuery ? usageResult.data : null);
 
   onMount(() => {
     readHash();
@@ -84,9 +95,7 @@
     request?.abort();
     session = 'locked';
     token = '';
-    usage = null;
-    clientDraft = '';
-    updatedAt = '';
+    usageResult = null;
     filters = { range: '24h', source: '', client: '', model: '', bucket: '' };
     cursors = [''];
   }
@@ -126,32 +135,30 @@
     authError = '';
     try {
       await api('/logout', { method: 'POST' });
-      lockSession();
     } catch (cause) {
-      if (cause instanceof APIError && cause.status === 401) lockSession();
-      else authError = 'Could not lock the dashboard. Try again.';
+      if (!(cause instanceof APIError && cause.status === 401)) {
+        authError = 'Could not lock the dashboard. Try again.';
+        return;
+      }
     } finally {
       loggingOut = false;
     }
+    clientDraft = '';
+    lockSession();
   }
 
   async function fetchUsage() {
-    const query = new URLSearchParams();
-    for (const [name, value] of Object.entries(filters)) {
-      if (value) query.set(name, value);
-    }
-    const cursor = cursors[cursors.length - 1];
-    if (cursor) query.set('cursor', cursor);
+    const query = usageQuery;
+    const overview = overviewQuery;
     request?.abort();
     const current = new AbortController();
     request = current;
     loadingUsage = true;
     usageError = '';
     try {
-      const result = await api<Usage>('/usage?' + query, { signal: current.signal });
+      const data = await api<Usage>('/usage?' + query, { signal: current.signal });
       if (!current.signal.aborted) {
-        usage = result;
-        updatedAt = new Date().toISOString();
+        usageResult = { data, query, overviewQuery: overview, updatedAt: new Date().toISOString() };
       }
     } catch (cause) {
       if (current.signal.aborted) return;
@@ -225,16 +232,18 @@
       {#if authError}<div class="feedback error-feedback" role="alert">{authError}</div>{/if}
       {#if screen === 'usage'}
         <UsageView
-          data={usage}
+          data={usageOverview?.data ?? null}
+          filterOptions={usageResult?.data.filters}
+          {requestPage}
           loading={loadingUsage}
           error={usageError}
-          {updatedAt}
+          updatedAt={usageOverview?.updatedAt ?? ''}
           {...filters}
           canPrevious={cursors.length > 1}
           update={filtersChanged}
           refresh={() => void fetchUsage()}
           onPrevious={() => cursors = cursors.slice(0, -1)}
-          onNext={() => { if (usage?.nextCursor) cursors = [...cursors, usage.nextCursor]; }}
+          onNext={() => { if (requestPage?.nextCursor) cursors = [...cursors, requestPage.nextCursor]; }}
         />
       {:else}
         <ClientsView {clientId} bind:draft={clientDraft} navigate={navigateClient} {viewUsage} onUnauthorized={lockSession} />

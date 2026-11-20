@@ -67,6 +67,59 @@ func TestWebSocketRecordsReportedCostWithoutTokens(t *testing.T) {
 	assertReportedAmount(t, "allowance", records[0].ReportedAllowance, .003)
 }
 
+func TestOpenCodeGoMessagesStreamPreservesInputUsage(t *testing.T) {
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg-1","type":"message","model":"fixture-model","content":[],"usage":{"input_tokens":25,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"output_tokens":1}}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":8}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":15,"cost":0,"opencode":{"list_cost":0.005}}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer upstream.Close()
+	records := make(chan Usage, 1)
+	handler := New(nil, nil, parseURL(t, upstream.URL+"/inference/go"), func(usage Usage) { records <- usage })
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, OpenCodeGoPrefix+"/messages", nil))
+	if response.Body.String() != stream {
+		t.Fatal("proxy changed the upstream stream")
+	}
+	usage := nextRecord(t, records)
+	if !usage.HasUsage || usage.Model != "fixture-model" || usage.ResponseID != "opencode-go:msg-1" ||
+		usage.InputTokens != 1125 || usage.CachedInputTokens != 1000 || usage.CacheWriteTokens != 100 || usage.OutputTokens != 15 {
+		t.Fatalf("incorrect Messages usage: %+v", usage)
+	}
+	assertReportedAmount(t, "charged", usage.ReportedCost, 0)
+	assertReportedAmount(t, "list", usage.ReportedListCost, .005)
+}
+
+func TestResponsesPostCapturesBackgroundCompletionWindow(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_window","model":"gpt-6.2-sol","status":"queued"}`)
+	}))
+	defer upstream.Close()
+	records := make(chan Usage, 1)
+	handler := New(parseURL(t, upstream.URL+"/v1"), nil, nil, func(usage Usage) { records <- usage })
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"background":true,"background_options":{"completion_window":"8h"},"service_tier":"default"}`))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	usage := nextRecord(t, records)
+	if usage.CompletionWindow != "8h" || usage.ServiceTier != "default" || usage.ResponseID != "resp_window" || usage.HasUsage {
+		t.Fatalf("incorrect queued response metadata: %+v", usage)
+	}
+}
+
 func TestReportedCostsFollowVerifiedProviderSemantics(t *testing.T) {
 	message := decodeMessage([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.01,"opencode":{"estimated":true,"list_cost":0,"allowance":0}}}`))
 	var direct Usage

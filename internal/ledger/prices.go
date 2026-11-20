@@ -47,6 +47,8 @@ func preparePricing(db *sql.DB) error {
 		{"reported_cost", "REAL"},
 		{"reported_list_cost", "REAL"},
 		{"reported_allowance", "REAL"},
+		{"completion_window", "TEXT NOT NULL DEFAULT ''"},
+		{"service_tier", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if columns[column.name] {
 			continue
@@ -155,6 +157,10 @@ func (s *Store) priceFor(usage proxy.Usage, at time.Time) (*pricing.Rates, *floa
 	}
 	s.pricingMu.RLock()
 	defer s.pricingMu.RUnlock()
-	return s.pricing.ForProviderUsage(usage.Provider, usage.Model, usage.ServiceTier, at,
+	rates, cost, origin := s.pricing.ForProviderUsage(usage.Provider, usage.Model, usage.ServiceTier, at,
 		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens)
+	if usage.Provider == "openai" && rates != nil && origin != "override" {
+		*cost *= rates.ApplyBackgroundDiscount(usage.Model, usage.ServiceTier, usage.CompletionWindow)
+	}
+	return rates, cost, origin
 }

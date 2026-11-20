@@ -20,7 +20,7 @@ type Rates struct {
 }
 
 type Catalog struct {
-	overrides map[string]Rates
+	overrides map[string]partialRates
 	snapshots map[string]Snapshot
 }
 
@@ -64,13 +64,25 @@ func Load(path string) (Catalog, error) {
 	if err != nil {
 		return catalog, fmt.Errorf("read rates file: %w", err)
 	}
-	if err := json.Unmarshal(contents, &catalog.overrides); err != nil {
+	// Override files use camelCase rate names. Keep presence information when
+	// translating them to the same rate representation as downloaded prices.
+	var overrides map[string]struct {
+		Input         *float64 `json:"input"`
+		Output        *float64 `json:"output"`
+		CachedInput   *float64 `json:"cachedInput"`
+		CacheWrite    *float64 `json:"cacheWrite"`
+		CacheWrite12h *float64 `json:"cacheWrite12h"`
+	}
+	if err := json.Unmarshal(contents, &overrides); err != nil {
 		return catalog, fmt.Errorf("decode rates file: %w", err)
 	}
-	for name, rates := range catalog.overrides {
+	catalog.overrides = make(map[string]partialRates, len(overrides))
+	for name, configured := range overrides {
+		rates := partialRates(configured)
 		if strings.TrimSpace(name) == "" || !rates.valid() {
 			return catalog, fmt.Errorf("invalid rates for model %q", name)
 		}
+		catalog.overrides[name] = rates
 	}
 	return catalog, nil
 }
@@ -85,6 +97,11 @@ func (r Rates) valid() bool {
 }
 
 func (c *Catalog) SetSnapshot(snapshot Snapshot) {
+	// Old Models.dev snapshots discarded the metadata needed to identify models
+	// with separate audio prices. Wait for the startup refresh of that feed.
+	if snapshot.Source == modelsDevSource && !snapshot.AudioRatesChecked {
+		return
+	}
 	if c.snapshots == nil {
 		c.snapshots = make(map[string]Snapshot)
 	}
@@ -101,10 +118,15 @@ func (c Catalog) ForProviderUsage(provider, model, tier string, at time.Time, in
 		return nil, nil, ""
 	}
 	counts := tokenCounts{input - cached - writes, cached, writes - writes12h, writes12h, output}
-	if rates, ok := c.overrides[provider+"/"+model]; ok {
-		return estimate(rates, counts, "override")
+	override, found := c.overrides[provider+"/"+model]
+	if !found {
+		override, found = c.overrides[model]
 	}
-	if rates, ok := c.overrides[model]; ok {
+	if found {
+		rates, ok := override.resolve(counts, 1)
+		if !ok {
+			return nil, nil, ""
+		}
 		return estimate(rates, counts, "override")
 	}
 
@@ -114,6 +136,11 @@ func (c Catalog) ForProviderUsage(provider, model, tier string, at time.Time, in
 	base := model
 	if provider == "openai" {
 		base = openAIModel(model)
+	}
+	models := c.snapshots[modelsDevSource].Providers[provider]
+	price, found := models[model]
+	if !found && base != model {
+		price, found = models[base]
 	}
 	switch tier {
 	case "", "auto", "default", "standard":
@@ -126,17 +153,13 @@ func (c Catalog) ForProviderUsage(provider, model, tier string, at time.Time, in
 				return estimate(rates, counts, opencodeGoSource)
 			}
 		}
-		price, found := c.snapshots[modelsDevSource].Providers[provider][model]
-		if !found && base != model {
-			price, found = c.snapshots[modelsDevSource].Providers[provider][base]
-		}
 		if found && usableDownloadedRate(provider, base, at, input, price) {
 			if rates, ok := price.resolve(at.UTC(), input, counts); ok {
 				return estimate(rates, counts, modelsDevSource)
 			}
 		}
 	}
-	if provider == "openai" {
+	if provider == "openai" && !price.SeparateAudioRates {
 		if rates, ok := builtinRates(base, tier, at, input, writes); ok {
 			return estimate(rates, counts, "builtin")
 		}
@@ -161,7 +184,8 @@ func estimate(r Rates, counts tokenCounts, source string) (*Rates, *float64, str
 }
 
 func (m modelPrice) resolve(at time.Time, input int64, counts tokenCounts) (Rates, bool) {
-	if m.Unsupported {
+	// A single input or output count cannot distinguish the modalities.
+	if m.Unsupported || m.SeparateAudioRates {
 		return Rates{}, false
 	}
 	rates := m.Rates
@@ -179,17 +203,24 @@ func (m modelPrice) resolve(at time.Time, input int64, counts tokenCounts) (Rate
 			factor *= multiplier.Factor
 		}
 	}
+	return rates.resolve(counts, factor)
+}
+
+func (r partialRates) resolve(counts tokenCounts, factor float64) (Rates, bool) {
+	if r == (partialRates{}) {
+		return Rates{}, false
+	}
 	var resolved Rates
 	fields := []struct {
 		rate  *float64
 		count int64
 		dst   *float64
 	}{
-		{rates.Input, counts.input, &resolved.Input},
-		{rates.CachedInput, counts.cached, &resolved.CachedInput},
-		{rates.CacheWrite, counts.writes, &resolved.CacheWrite},
-		{rates.CacheWrite12h, counts.writes12h, &resolved.CacheWrite12h},
-		{rates.Output, counts.output, &resolved.Output},
+		{r.Input, counts.input, &resolved.Input},
+		{r.CachedInput, counts.cached, &resolved.CachedInput},
+		{r.CacheWrite, counts.writes, &resolved.CacheWrite},
+		{r.CacheWrite12h, counts.writes12h, &resolved.CacheWrite12h},
+		{r.Output, counts.output, &resolved.Output},
 	}
 	for _, field := range fields {
 		if field.rate != nil {
@@ -293,4 +324,34 @@ func tierMultiplier(model, tier string, at time.Time) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// ApplyBackgroundDiscount scales Standard OpenAI rates and returns the same
+// factor so the corresponding usage estimate can be adjusted.
+func (r *Rates) ApplyBackgroundDiscount(model, tier, window string) float64 {
+	switch tier {
+	case "", "auto", "default", "standard":
+	default:
+		return 1
+	}
+	switch openAIModel(model) {
+	case "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna":
+	default:
+		return 1
+	}
+	var factor float64
+	switch window {
+	case "2h":
+		factor = .7
+	case "8h":
+		factor = .6
+	default:
+		return 1
+	}
+	r.Input *= factor
+	r.CachedInput *= factor
+	r.CacheWrite *= factor
+	r.CacheWrite12h *= factor
+	r.Output *= factor
+	return factor
 }
