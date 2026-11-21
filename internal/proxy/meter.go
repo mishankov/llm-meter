@@ -429,6 +429,49 @@ func (u *Usage) mergeRateLimits(limits []RateLimit) {
 	}
 }
 
+const responseStreamProbeLimit = 8 << 10
+
+// responseStreamProbe checks for a framed Responses event during normal body reads.
+type responseStreamProbe struct {
+	meter     *httpMeter
+	stream    *eventStream
+	remaining int
+}
+
+func (m *httpMeter) probeResponseStream() *responseStreamProbe {
+	stream := &eventStream{}
+	stream.handle = func(message wireMessage) {
+		eventType, ok := strings.CutPrefix(message.Type, "response.")
+		if !ok || eventType == "" {
+			return
+		}
+		m.sse = stream
+		stream.handle = m.observeEvent
+		m.observeEvent(message)
+	}
+	return &responseStreamProbe{meter: m, stream: stream, remaining: responseStreamProbeLimit}
+}
+
+func (p *responseStreamProbe) Write(data []byte) (int, error) {
+	if p.meter.sse != nil {
+		return p.meter.sse.Write(data)
+	}
+	if p.stream == nil {
+		return len(data), nil
+	}
+
+	n := min(len(data), p.remaining)
+	p.remaining -= n
+	_, _ = p.stream.Write(data[:n])
+	if p.meter.sse != nil {
+		_, _ = p.meter.sse.Write(data[n:])
+	}
+	if p.remaining == 0 {
+		p.stream = nil
+	}
+	return len(data), nil
+}
+
 type eventStream struct {
 	handle     func(wireMessage)
 	prefix     [5]byte
