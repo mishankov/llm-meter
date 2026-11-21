@@ -12,7 +12,7 @@
   import RecoveryNotice from './RecoveryNotice.svelte';
   import TimeChart, { groupedSeries, tokenSeries, type ChartSeries } from './TimeChart.svelte';
 
-  type ChartMetric = 'cost' | 'tokens' | 'compare';
+  type ChartMetric = 'cost' | 'tokens';
   type Dimension = 'models' | 'clients';
 
   interface Props {
@@ -52,8 +52,7 @@
   }: Props = $props();
   let dimension = $state<Dimension>('models');
   let resetStatus = $state('');
-  const chartTitles = { cost: 'Usage value over time', tokens: 'Tokens over time', compare: 'Compare usage over time' };
-  let chartTitle = $derived(chartTitles[chartMetric]);
+  let chartTitle = $derived(chartMetric === 'tokens' ? 'Tokens over time' : 'Usage value over time');
   let scoped = $derived(Boolean(source || client || model || bucket || outcome));
   let loading = $derived(loadingScope !== null);
   let firstRun = $derived(data?.summary.requestCount === 0 && !data.filters.clients.length);
@@ -61,8 +60,7 @@
   let resetCommand = $derived(canUndoReset ? 'Undo reset' : 'Reset filters');
   let bucketLabel = $derived(bucket ? range === '24h' ? formatTimeWindow(bucket, 1) : formatUTCDay(bucket) + ' UTC' : '');
   const percentage = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 });
-  let costSeries = $derived(getSeries('estimatedCost'));
-  let tokensSeries = $derived(getSeries('tokens'));
+  let chartSeries = $derived(getSeries(chartMetric === 'tokens' ? 'tokens' : 'estimatedCost'));
 
   const sourceOptions = [
     { value: '', label: 'All sources' },
@@ -129,7 +127,7 @@
   }
 
   function changeChartMetric(value: string | null) {
-    if (value === 'cost' || value === 'tokens' || value === 'compare') chartMetric = value;
+    if (value === 'cost' || value === 'tokens') chartMetric = value;
   }
 
   function changeDimension(value: string | null) {
@@ -335,38 +333,25 @@
         <SegmentedControl class="segmented" aria-label="Chart metric" value={chartMetric} onValueChange={changeChartMetric}>
           <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
           <SegmentedControlItem value="cost">Usage value</SegmentedControlItem>
-          <SegmentedControlItem value="compare">Compare</SegmentedControlItem>
         </SegmentedControl>
       </div>
     </header>
-    <div class="chart-row" class:compare={chartMetric === 'compare'}>
-      {#if chartMetric !== 'cost'}
-        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'token-chart-title' : 'chart-heading'}>
-          <header>
-            {#if chartMetric === 'compare'}<h3 id="token-chart-title">{chartTitles.tokens}</h3>{/if}
-            {#if tokensSeries}
-              {@render groupLegend(tokensSeries)}
-            {:else}
-              <div class="legend">
-                {#each tokenSeries as series (series.key)}
-                  <span><i class={series.key + '-color'} data-series={series.key} aria-hidden="true"></i>{series.label}</span>
-                {/each}
-              </div>
-            {/if}
-          </header>
-          <TimeChart buckets={data.buckets} kind="tokens" series={tokensSeries} {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-        </section>
-      {/if}
-      {#if chartMetric !== 'tokens'}
-        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'cost-chart-title' : 'chart-heading'}>
-          <header>
-            {#if chartMetric === 'compare'}<h3 id="cost-chart-title">{chartTitles.cost}</h3>{/if}
-            {@render groupLegend(costSeries, data.buckets.some(unpricedBucket))}
-          </header>
-          <TimeChart buckets={data.buckets} kind="cost" series={costSeries} {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-        </section>
-      {/if}
-    </div>
+    <section class="chart-section" aria-labelledby="chart-heading">
+      <header>
+        {#if chartMetric === 'tokens' && !chartSeries}
+          <div class="legend">
+            {#each tokenSeries as series (series.key)}
+              <span><i class={series.key + '-color'} data-series={series.key} aria-hidden="true"></i>{series.label}</span>
+            {/each}
+          </div>
+        {:else}
+          {@render groupLegend(chartSeries, chartMetric === 'cost' && data.buckets.some(unpricedBucket))}
+        {/if}
+      </header>
+      {#key chartMetric}
+        <TimeChart buckets={data.buckets} kind={chartMetric} series={chartSeries} {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
+      {/key}
+    </section>
     <div class="chart-actions">
       {@render overviewFilter('request-window-filter', 'Request time window', bucket, windowOptions, (value) => update('bucket', value))}
       {@render chartSelection()}
@@ -412,7 +397,7 @@
   .loading-table { min-block-size: 190px; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-block-end: 6px; }
   .metric { display: flex; flex-direction: column; align-items: flex-start; padding-inline-end: var(--section-space); }
-  .metric + .metric, .compare .chart-section + .chart-section { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
+  .metric + .metric { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
   .metric-label { color: var(--muted); font-size: 12px; }
   .metric strong { display: block; margin: 4px 0 2px; font-size: clamp(22px, 3.2vw, 36px); font-weight: 620; letter-spacing: -.035em; line-height: 1.2; font-variant-numeric: tabular-nums; }
   .metric-caption { color: var(--muted); font-size: 12px; }
@@ -427,14 +412,9 @@
   }
   .chart-heading { flex-wrap: wrap; }
   .chart-controls { display: flex; gap: 6px; flex-wrap: wrap; }
-  .chart-row { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .chart-row.compare { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--section-space); }
-  .chart-section { display: grid; gap: 10px; min-inline-size: 0; }
+  .chart-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-inline-size: 0; }
   .chart-section header:empty { display: none; }
-  .compare .chart-section { grid-template-rows: 1fr auto; }
-  .chart-section h3 { font-size: 14px; margin-block-end: 0; }
   .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-  .chart-section h3 + .legend { margin-block-start: 6px; }
   .legend span { display: inline-flex; gap: 5px; align-items: center; overflow-wrap: anywhere; }
   .legend i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
   .legend .unpriced-mark { block-size: 0; inline-size: 14px; border-block-end: 2px dotted var(--muted); }
@@ -486,10 +466,6 @@
     :global(.allowance-track) { border: 1px solid CanvasText; }
     :global(.allowance-indicator) { forced-color-adjust: none; background: CanvasText; }
     .breakdown-panel :global(.breakdown-filter[aria-pressed=true]) { outline: 1px solid Highlight; }
-  }
-  @media (max-width: 900px) {
-    .chart-row.compare { grid-template-columns: minmax(0, 1fr); gap: var(--section-space); }
-    .compare .chart-section + .chart-section { border-inline-start: 0; border-block-start: 1px solid var(--line); padding: var(--section-space) 0 0; }
   }
   @media (max-width: 670px) {
     .chart-actions :global(.filter-trigger) { min-inline-size: 0; max-inline-size: none; }

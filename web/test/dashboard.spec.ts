@@ -242,30 +242,40 @@ test('keeps long request names compact while exposing cache writes and full deta
   await expect(detail.getByText('30-minute cache writes', { exact: true })).toBeVisible();
 });
 
-test('starts with one chart and makes both desktop trends available through Compare', async ({ page }) => {
+test('switches between Tokens and Usage value charts with the keyboard', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);
   await unlock(page);
   const metrics = page.getByRole('radiogroup', { name: 'Chart metric' });
+  const radios = metrics.getByRole('radio');
+  const tokens = metrics.getByRole('radio', { name: 'Tokens', exact: true });
+  const value = metrics.getByRole('radio', { name: 'Usage value', exact: true });
   const valueChart = page.getByRole('region', { name: 'Usage value over time' });
   const tokenChart = page.getByRole('region', { name: 'Tokens over time' });
-  await expect(metrics.getByRole('radio').first()).toHaveAccessibleName('Tokens');
-  await expect(metrics.getByRole('radio', { name: 'Tokens' })).toBeChecked();
+  await expect(radios).toHaveCount(2);
+  await expect(radios.first()).toHaveAccessibleName('Tokens');
+  await expect(radios.last()).toHaveAccessibleName('Usage value');
+  await expect(tokens).toBeChecked();
   await expect(tokenChart).toBeVisible();
   await expect(valueChart).toHaveCount(0);
-  await metrics.getByRole('radio', { name: 'Tokens' }).press('ArrowRight');
-  await expect(metrics.getByRole('radio', { name: 'Usage value' })).toBeChecked();
+
+  await tokens.press('ArrowRight');
+  await expect(value).toBeChecked();
+  await expect(value).toBeFocused();
   await expect(valueChart).toBeVisible();
   await expect(tokenChart).toHaveCount(0);
-  await metrics.getByRole('radio', { name: 'Usage value' }).press('ArrowRight');
-  await expect(metrics.getByRole('radio', { name: 'Compare' })).toBeChecked();
-  await expect(valueChart).toBeVisible();
-  await expect(tokenChart).toBeVisible();
+
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('link', { name: 'Usage', exact: true }).click();
-  await expect(metrics.getByRole('radio', { name: 'Compare' })).toBeChecked();
+  await expect(value).toBeChecked();
   await expect(valueChart).toBeVisible();
+  await expect(tokenChart).toHaveCount(0);
+
+  await value.press('ArrowLeft');
+  await expect(tokens).toBeChecked();
+  await expect(tokens).toBeFocused();
   await expect(tokenChart).toBeVisible();
+  await expect(valueChart).toHaveCount(0);
   const requests = page.getByRole('region', { name: 'Requests', exact: true });
   await expect(requests.getByText('4 requests on this page')).toBeVisible();
 });
