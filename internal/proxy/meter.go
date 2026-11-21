@@ -445,6 +445,8 @@ func (m *httpMeter) probeResponseStream() *responseStreamProbe {
 		if !ok || eventType == "" {
 			return
 		}
+		// Confirmed framing takes precedence over the response's MIME type.
+		m.response = nil
 		m.sse = stream
 		stream.handle = m.observeEvent
 		m.observeEvent(message)
@@ -456,18 +458,20 @@ func (p *responseStreamProbe) Write(data []byte) (int, error) {
 	if p.meter.sse != nil {
 		return p.meter.sse.Write(data)
 	}
-	if p.stream == nil {
-		return len(data), nil
+	if p.stream != nil {
+		n := min(len(data), p.remaining)
+		p.remaining -= n
+		_, _ = p.stream.Write(data[:n])
+		if p.meter.sse != nil {
+			_, _ = p.meter.sse.Write(data[n:])
+			return len(data), nil
+		}
+		if p.remaining == 0 {
+			p.stream = nil
+		}
 	}
-
-	n := min(len(data), p.remaining)
-	p.remaining -= n
-	_, _ = p.stream.Write(data[:n])
-	if p.meter.sse != nil {
-		_, _ = p.meter.sse.Write(data[n:])
-	}
-	if p.remaining == 0 {
-		p.stream = nil
+	if p.meter.response != nil {
+		return p.meter.response.Write(data)
 	}
 	return len(data), nil
 }
