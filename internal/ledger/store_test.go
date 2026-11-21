@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -12,6 +13,15 @@ import (
 )
 
 func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
+	const model = "gemini-replay-fixture"
+	priceFile := filepath.Join(t.TempDir(), "prices.json")
+	if err := os.WriteFile(priceFile, []byte(`{"antigravity/`+model+`":{"input":2,"cachedInput":1,"output":4}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := pricing.Load(priceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name                      string
 		firstOutput, replayOutput int64
@@ -21,7 +31,7 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := t.Context()
-			store, err := Open(":memory:", pricing.Catalog{})
+			store, err := Open(":memory:", catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -35,12 +45,13 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			usage := proxy.Usage{At: at, Source: "api", Provider: "antigravity", Status: 200, Method: "POST",
+			usage := proxy.Usage{At: at, Source: "api", Provider: "antigravity", Model: model, Status: 200, Method: "POST",
 				ResponseID: "antigravity:fixture", ClientID: origin.ID, HasUsage: true, InputTokens: 100, CachedInputTokens: 20, OutputTokens: test.firstOutput}
 			if err := store.Record(ctx, usage); err != nil {
 				t.Fatal(err)
 			}
 			usage.At, usage.ClientID, usage.OutputTokens = at.Add(time.Minute), replayer.ID, test.replayOutput
+			usage.Model = ""
 			if err := store.Record(ctx, usage); err != nil {
 				t.Fatal(err)
 			}
@@ -54,6 +65,10 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 			request := page.Requests[0]
 			if request.ClientID != origin.ID || !request.At.Equal(at) || request.InputTokens != 100 || request.CachedInputTokens != 20 || request.OutputTokens != 7 {
 				t.Fatalf("incorrect replayed request: %+v", request)
+			}
+			if request.Model != model || request.PriceSource != "override" || request.Rates == nil || request.Rates.Output != 4 ||
+				request.Cost == nil || math.Abs(*request.Cost-0.000208) > 1e-12 {
+				t.Fatalf("incorrect pricing for replayed request: %+v", request)
 			}
 		})
 	}

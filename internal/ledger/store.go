@@ -264,6 +264,31 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		return nil
 	}
 	pricingAt := at
+	execRequest := s.db.ExecContext
+	var replayTx *sql.Tx
+	if usage.Provider == "antigravity" && usage.HasUsage && !usage.UsageUpdate && usage.ResponseID != "" && usage.Model == "" {
+		// Resolve the original pricing context and persist the replay atomically.
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		replayTx, execRequest = tx, tx.ExecContext
+		var originalTime int64
+		var originalTier string
+		err = tx.QueryRowContext(ctx, `SELECT time, model, service_tier FROM requests
+            WHERE source = ? AND response_id = ? AND provider = 'antigravity' AND usage_available = 1`,
+			usage.Source, usage.ResponseID).Scan(&originalTime, &usage.Model, &originalTier)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			pricingAt = timestamp(originalTime)
+			if usage.ServiceTier == "" {
+				usage.ServiceTier = originalTier
+			}
+		}
+	}
 	var originatingID int64
 	var originalCost sql.NullFloat64
 	if usage.UsageUpdate && (usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil) && usage.ResponseID != "" {
@@ -324,7 +349,7 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 	}
 	// A replay of an Antigravity stream can report more usage for the same response.
 	// Keep the original request and replace its usage and price together.
-	_, err := s.db.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
+	_, err := execRequest(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
 		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
@@ -353,7 +378,10 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
 		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
 		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, usage.ServiceTier, usage.CompletionWindow)
-	return err
+	if err != nil || replayTx == nil {
+		return err
+	}
+	return replayTx.Commit()
 }
 
 func (s *Store) recordAllowances(ctx context.Context, clientID string, at time.Time, limits []proxy.RateLimit) error {
