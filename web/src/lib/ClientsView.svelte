@@ -4,7 +4,6 @@
   import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import CheckIcon from '@lucide/svelte/icons/check';
-  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import CopyIcon from '@lucide/svelte/icons/copy';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -12,13 +11,13 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { AlertDialog, AlertDialogBackdrop, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from '@ui-sdk/svelte/alert-dialog';
   import { Button } from '@ui-sdk/svelte/button';
-  import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '@ui-sdk/svelte/collapsible';
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
   import { Field, FieldError, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
   import { useShortcut } from '@ui-sdk/svelte/shortcuts';
   import { APIError, api, dashboardProblem, jsonPost, type Client, type Key, type NewKey, type RequestOutcome } from './api';
   import { dismissShortcut, formatDateTime, guardEnter, requestStatusGuidance, requestStatusLabel } from './format';
+  import ClientSetup from './ClientSetup.svelte';
   import RecoveryNotice from './RecoveryNotice.svelte';
 
   type Problem = ReturnType<typeof dashboardProblem>;
@@ -42,11 +41,6 @@
   let lastRequest = $derived(selected?.lastRequest);
   let lastRequestFailed = $derived(lastRequest && (lastRequest.status === 0 || lastRequest.status >= 400));
   let proxyOrigin = $state('');
-  const endpoints = [
-    { label: 'OpenAI API', path: '/v1' },
-    { label: 'Signed-in Codex', path: '/backend-api/codex' },
-    { label: 'OpenCode Go', path: '/opencode-go' }
-  ];
   let loading = $state(true);
   let loadError = $state<Problem | null>(null);
   const actionFailures = new SvelteMap<string, Problem>();
@@ -257,14 +251,18 @@
   }
 
   useShortcut('n', openCreate, { when: () => canCreate() && !clientId, description: 'New client' });
-  useShortcut('k', makeKey, { when: () => canCreate() && Boolean(selected), description: 'New key' });
+  useShortcut('k', makeKey, { when: canUseKeyShortcut, description: 'New key' });
+
+  function canUseKeyShortcut() {
+    return canCreate() && Boolean(selected) && !document.activeElement?.closest('[role="combobox"], [role="listbox"]');
+  }
 
   function physicalShortcut(event: KeyboardEvent) {
-    if (event.defaultPrevented || dismissShortcut(event) || /^[a-z]$/i.test(event.key) || event.key === 'Dead' || !canCreate()) return;
-    if (!clientId && event.code === 'KeyN') {
+    if (event.defaultPrevented || dismissShortcut(event) || /^[a-z]$/i.test(event.key) || event.key === 'Dead') return;
+    if (event.code === 'KeyN' && !clientId && canCreate()) {
       event.preventDefault();
       openCreate();
-    } else if (selected && event.code === 'KeyK') {
+    } else if (event.code === 'KeyK' && canUseKeyShortcut()) {
       event.preventDefault();
       void makeKey();
     }
@@ -311,16 +309,11 @@
     </header>
     {#if actionError && !revokeOpen}<RecoveryNotice problem={actionError} />{/if}
     <section class="connection" aria-labelledby="connection-title">
-      <h2 id="connection-title">Connection settings</h2>
+      <h2 id="connection-title">Connect this client</h2>
       <div class="connection-columns">
-        <div>
-          <dl class="connection-urls">
-            {#each endpoints as endpoint (endpoint.path)}
-              <div><dt>{endpoint.label}</dt><dd><code>{proxyOrigin}{endpoint.path}</code></dd></div>
-            {/each}
-          </dl>
-          <p class="connection-header muted">Send your active proxy key in <code>X-LLM-Proxy-Key</code> alongside your provider credentials.</p>
-        </div>
+        {#key clientId}
+          <ClientSetup origin={proxyOrigin} disabled={busy || dialogOpen || revokeOpen} />
+        {/key}
         <div class="connection-instructions">
           <div class="connection-status" role="status">
             {#if !hasActiveKey}
@@ -355,18 +348,6 @@
           {/if}
         </div>
       </div>
-      <Collapsible class="connection-help">
-        <CollapsibleTrigger class="secondary-button" title="Provider setup instructions (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>
-          Provider setup instructions <ChevronDownIcon size={14} aria-hidden="true" />
-        </CollapsibleTrigger>
-        <CollapsiblePanel>
-          <dl class="provider-instructions">
-            <div><dt>OpenAI API</dt><dd>Set the OpenAI base URL in your client. Keep your provider API key in <code>Authorization</code>.</dd></div>
-            <div><dt>Signed-in Codex</dt><dd>Set <code>base_url</code> for your model provider in <code>config.toml</code>. Keep <code>requires_openai_auth = true</code> and map <code>X-LLM-Proxy-Key</code> to <code>LLM_PROXY_KEY</code> in <code>env_http_headers</code>. Set the variable in the Codex process environment and start a new session.</dd></div>
-            <div><dt>OpenCode Go</dt><dd>Set <code>settings.baseURL</code> for the <code>opencode-go</code> provider in <code>opencode.jsonc</code>. Add <code>X-LLM-Proxy-Key</code> to that provider’s <code>headers</code> and keep your saved provider credentials.</dd></div>
-          </dl>
-        </CollapsiblePanel>
-      </Collapsible>
     </section>
     <section class="client-table" aria-labelledby="keys-title">
       <header class="section-head"><h2 id="keys-title">Proxy keys</h2></header>
@@ -542,23 +523,12 @@
   .client-name :global(svg) { color: var(--accent); }
   .connection { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   .connection-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 32px; margin-block-start: 12px; }
-  .connection-urls { display: grid; gap: 7px; margin: 0; }
-  .connection-urls div { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 2px 10px; }
-  .connection-urls dt, .connection-instructions { color: var(--muted); }
-  .connection-urls dd { margin: 0; }
-  .connection-urls code { color: var(--text); overflow-wrap: anywhere; }
+  .connection-instructions { color: var(--muted); }
   .connection-status { display: grid; gap: 3px; }
   .connection-status strong { color: var(--text); }
   .request-result { color: var(--text); font-weight: 600; }
   .request-result.failed { color: var(--danger); }
-  .connection-header { margin-block: 8px 0; }
-  .connection-header code { color: var(--text); overflow-wrap: anywhere; }
   .connection-instructions :global(.investigate-button) { margin-block-start: 8px; }
-  .connection :global(.connection-help) { margin-block-start: 10px; }
-  .connection :global(.connection-help [aria-expanded=true] svg) { transform: rotate(180deg); }
-  .provider-instructions { display: grid; gap: 10px; max-inline-size: 70ch; margin-block: 10px 0; }
-  .provider-instructions dt { font-weight: 600; }
-  .provider-instructions dd { margin: 2px 0 0; color: var(--muted); overflow-wrap: anywhere; }
   .key-status { color: var(--success); }
   .key-status.revoked { color: var(--muted); }
   .key-dates { display: none; }

@@ -31,6 +31,7 @@
   let open = $state(false);
   let heading: HTMLHeadingElement;
   let outcomeFilter: HTMLDivElement;
+  let detailTrigger: HTMLButtonElement | null = null;
 
   const outcomeOptions = [
     { value: '', label: 'All outcomes' },
@@ -58,7 +59,8 @@
     retry();
   }
 
-  function showDetail(request: UsageRequest) {
+  function showDetail(request: UsageRequest, event: MouseEvent) {
+    detailTrigger = event.currentTarget as HTMLButtonElement;
     selected = request;
     open = true;
   }
@@ -74,7 +76,7 @@
     if (request.priceSource === 'provider-reported') return 'Reported cost';
     if (request.priceSource === 'provider-list') return 'Provider list value';
     if (request.priceSource === 'provider-estimate') return 'Provider estimate';
-    return 'Estimated usage';
+    return 'Estimated cost';
   }
 
   const providerLabels: Record<string, string> = {
@@ -107,7 +109,10 @@
   {@const label = requestStatusLabel(request.status)}
   <span class="status-code" class:bad={request.status === 0 || request.status >= 400} title={label}>
     {#if request.status}
-      <span aria-hidden="true">{request.status}</span><span class="sr-only">HTTP {request.status}, {label}</span>
+      <span class="status-number" aria-hidden="true">{request.status}</span><span class="sr-only">HTTP {request.status}, {label}</span>
+      {#if request.status === 101 || request.status >= 400}
+        <span class="status-label" aria-hidden="true">{label}</span>
+      {/if}
     {:else}
       {label}
     {/if}
@@ -117,8 +122,16 @@
 <section class="requests-section" id="requests" aria-labelledby="requests-title" aria-busy={loading}>
   <header class="section-head request-heading">
     <div>
-      <h2 id="requests-title" bind:this={heading} tabindex="-1">Recent requests</h2>
-      {#if bucketLabel}<p class="request-window muted">{bucketLabel}</p>{/if}
+      <h2 id="requests-title" bind:this={heading} tabindex="-1">Requests</h2>
+      {#if bucketLabel || requests?.length}
+        <p class="request-summary muted">
+          {#if bucketLabel}<span>{bucketLabel}</span>{/if}
+          {#if bucketLabel && requests?.length}<span aria-hidden="true">·</span>{/if}
+          {#if requests?.length}
+            <span>{count(requests.length)} {requests.length === 1 ? 'request' : 'requests'} on this page</span>
+          {/if}
+        </p>
+      {/if}
     </div>
     <div class="request-controls">
       <div class="outcome-filter" bind:this={outcomeFilter}>
@@ -148,9 +161,9 @@
       <table>
         <thead>
           <tr>
-            <th scope="col">Time<span class="compact-only"> / Status</span></th><th scope="col" class="wide-only">Client</th><th scope="col">Model</th>
-            <th scope="col" class="wide-only">Endpoint</th><th scope="col" class="wide-only">Status</th>
-            <th scope="col" class="numeric wide-only">Tokens</th><th scope="col" class="numeric">Usage (USD)</th><th scope="col" class="details-column"><span class="sr-only">Details</span></th>
+            <th scope="col">Time<span class="compact-only"> / Status</span></th><th scope="col">Model</th><th scope="col" class="wide-only">Client</th>
+            <th scope="col" class="wide-only">Status</th>
+            <th scope="col" class="numeric wide-only">Tokens</th><th scope="col" class="numeric">Usage value (USD)</th><th scope="col" class="details-column"><span class="sr-only">Request actions</span></th>
           </tr>
         </thead>
         <tbody>
@@ -164,23 +177,24 @@
                 </time>
                 <span class="compact-only compact-status">{@render requestStatus(request)}</span>
               </td>
-              <td class="wide-only client-cell">{@render attribution(request)}</td>
               <td class="model-cell">
                 <span class="clip" title={request.model}>{request.model || '—'}</span>
                 <div class="compact-only">{@render attribution(request)}</div>
               </td>
-              <td class="endpoint-cell wide-only" title={request.method + ' ' + request.endpoint}>{request.method} {request.endpoint}</td>
+              <td class="wide-only client-cell">{@render attribution(request)}</td>
               <td class="wide-only">{@render requestStatus(request)}</td>
               <td class="numeric wide-only">{request.usageAvailable ? count(tokens(request)) : '—'}</td>
               <td class="numeric amount-cell" class:muted={request.cost === null}>
                 {amount(request)}
                 {#if request.cost !== null}
-                  <span class="amount-method muted">{basis === 'Estimated usage' ? 'Estimated' : basis}</span>
+                  <span class="amount-method muted">{basis}</span>
                 {/if}
               </td>
               <td>
-                <Button class="icon-button row-details" title="Request details (Enter)" aria-label={'Details for ' + (request.model || request.endpoint) + ' at ' + formatDateTime(request.at)} onkeydown={guardEnter} onclick={() => showDetail(request)}>
-                  <ChevronRightIcon size={15} aria-hidden="true" />
+                <Button class="secondary-button row-details" title="Request details (Enter)"
+                  aria-label={'Details for ' + (request.model || request.endpoint) + ' at ' + formatDateTime(request.at)}
+                  aria-keyshortcuts="Enter" onkeydown={guardEnter} onclick={(event) => showDetail(request, event)}>
+                  Details <ChevronRightIcon size={14} aria-hidden="true" />
                 </Button>
               </td>
             </tr>
@@ -206,9 +220,9 @@
 
 <Dialog bind:open>
   <DialogBackdrop class="dialog-backdrop" />
-  <DialogContent class="dialog-content request-detail" initialFocus="content">
+  <DialogContent class="dialog-content request-detail" initialFocus="content" finalFocus={() => detailTrigger?.isConnected ? detailTrigger : heading}>
     {#if selected}
-      <DialogClose class="icon-button dialog-x" aria-label="Close request details (Escape)">
+      <DialogClose class="icon-button dialog-x" aria-label="Close request details" title="Close request details (Escape)" aria-keyshortcuts="Escape">
         <XIcon size={19} aria-hidden="true" />
       </DialogClose>
       <DialogTitle class="dialog-title">Request details</DialogTitle>
@@ -257,22 +271,22 @@
   #requests-title { scroll-margin-block-start: 75px; }
   .request-heading, .request-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .request-controls { justify-content: space-between; }
-  .request-window { margin: 4px 0 0; }
+  .request-summary { display: flex; flex-wrap: wrap; gap: 0 6px; margin: 4px 0 0; }
   .pagination { display: flex; align-items: center; gap: 5px; }
   .page-number { min-inline-size: 5ch; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .request-error { margin-block-end: var(--gap); }
   th, td { white-space: nowrap; }
   td { vertical-align: top; }
-  .clip, .endpoint-cell, .client-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
+  .clip, .client-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
   .clip, .request-client { display: block; overflow: hidden; text-overflow: ellipsis; }
-  .endpoint-cell { font-family: var(--mono); color: var(--muted); font-size: 12px; }
   .request-source, .amount-method { display: block; margin-block-start: 3px; font-size: 12px; }
   .request-source { color: var(--api-light); }
   .request-source.codex { color: var(--codex-light); }
-  .status-code { font-family: var(--mono); color: var(--success); font-size: 12px; }
+  .status-code { color: var(--success); font-size: 12px; }
   .status-code.bad { color: var(--danger); }
+  .status-number { font-family: var(--mono); }
+  .status-label { display: block; margin-block-start: 3px; color: var(--muted); white-space: normal; }
   td:last-child { vertical-align: middle; }
-  :global(.row-details) { inline-size: 32px; block-size: 32px; }
   :global(.dialog-content.request-detail) { margin: 0 0 0 auto; max-block-size: 100dvh; block-size: 100dvh; max-inline-size: min(100%, 430px); border-radius: 0; }
   .detail-list { margin-block: 22px; }
   .detail-list div { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 10px; grid-template-columns: 130px minmax(0, 1fr); }
@@ -295,7 +309,8 @@
     .amount-cell, .model-cell { overflow-wrap: anywhere; }
     .compact-time, .compact-status, div.compact-only { display: block; }
     .compact-status { margin-block-start: 3px; overflow-wrap: anywhere; }
-    .details-column { inline-size: 48px; }
-    :global(.row-details) { inline-size: 40px; block-size: 40px; }
+    .details-column { inline-size: 68px; }
+    :global(.row-details) { min-block-size: 44px; min-inline-size: 54px; padding-inline: 6px; }
+    :global(.row-details > svg) { display: none; }
   }
 </style>

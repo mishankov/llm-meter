@@ -2,6 +2,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
   import { Select, SelectContent, SelectItem, SelectItemIndicator, SelectTrigger, SelectValue } from '@ui-sdk/svelte/select';
+  import { guardEnter } from './format';
 
   interface Props {
     label: string;
@@ -14,11 +15,11 @@
 </script>
 
 <Select {value} {items} onValueChange={(next) => { if (next !== null) onChange(next); }}>
-  <SelectTrigger class="filter-trigger" aria-label={label}>
+  <SelectTrigger class="filter-trigger" aria-label={label} onkeydown={guardEnter}>
     <SelectValue />
     <ChevronDownIcon size={14} aria-hidden="true" />
   </SelectTrigger>
-  <SelectContent class="select-content">
+  <SelectContent class="select-content" onkeydown={guardEnter}>
     {#each items as item (item.value)}
       <SelectItem class="select-item" value={item.value}>
         <span>{item.label}</span>

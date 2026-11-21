@@ -59,7 +59,7 @@
 
   function describe(bucket: UsageBucket, coverage: string) {
     const values = kind === 'cost'
-      ? 'Estimated usage ' + bucketAmount(bucket)
+      ? 'Usage value ' + bucketAmount(bucket)
       : 'Uncached input ' + count(uncachedInput(bucket)) + ', cached input ' + count(bucket.cachedInputTokens) + ', output ' + count(bucket.outputTokens);
     return [bucketTime(bucket), values, coverage].filter(Boolean).join(' · ');
   }
@@ -105,7 +105,7 @@
           <span aria-hidden="true" class="chart-tooltip" class:near-start={index < 2} class:near-end={index > buckets.length - 3}>
             <strong>{bucketTime(bucket)}</strong>
             {#if kind === 'cost'}
-              <span>Estimated usage <b>{bucketAmount(bucket)}</b></span>
+              <span>Usage value <b>{bucketAmount(bucket)}</b></span>
               {#if coverage}<span>{coverage}</span>{/if}
             {:else}
               <span>Uncached input <b>{count(uncachedInput(bucket))}</b></span>

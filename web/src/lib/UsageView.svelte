@@ -12,6 +12,8 @@
   import RecoveryNotice from './RecoveryNotice.svelte';
   import TimeChart from './TimeChart.svelte';
 
+  type ChartMetric = 'cost' | 'tokens' | 'compare';
+
   interface Props {
     data: Usage | null;
     filterOptions?: Usage['filters'];
@@ -29,8 +31,13 @@
     outcome: RequestOutcome;
     canPrevious: boolean;
     pageNumber: number;
+    chartMetric?: ChartMetric;
     update: (name: 'range' | 'source' | 'client' | 'model' | 'bucket' | 'outcome', value: string) => void;
     clearFilters: () => void;
+    canUndoReset: boolean;
+    undoFilters: () => void;
+    focusRequests: boolean;
+    onRequestFocus: () => void;
     refresh: () => void;
     retryRequests: () => void;
     onPrevious: () => void;
@@ -39,21 +46,25 @@
 
   let {
     data, filterOptions, requestPage, loadingScope, online, overviewError, requestError, updatedAt,
-    range, source, client, model, bucket, outcome, canPrevious, pageNumber, update, clearFilters,
-    refresh, retryRequests, onPrevious, onNext
+    range, source, client, model, bucket, outcome, canPrevious, pageNumber, chartMetric = $bindable('cost'), update,
+    clearFilters, canUndoReset, undoFilters, focusRequests, onRequestFocus, refresh, retryRequests, onPrevious, onNext
   }: Props = $props();
   let ranking = $state('models');
   let unit = $state('dollars');
-  let chartMetric = $state('cost');
+  let resetStatus = $state('');
+  const chartTitles = { cost: 'Usage value over time', tokens: 'Tokens over time', compare: 'Compare usage over time' };
+  let chartTitle = $derived(chartTitles[chartMetric]);
   let scoped = $derived(Boolean(source || client || model || bucket || outcome));
   let loading = $derived(loadingScope !== null);
   let firstRun = $derived(data?.summary.requestCount === 0 && !data.filters.clients.length);
-  let showFilters = $derived(!firstRun || scoped || range !== '24h');
+  let showFilters = $derived(!firstRun || scoped || range !== '24h' || canUndoReset);
+  let resetCommand = $derived(canUndoReset ? 'Undo reset' : 'Reset filters');
   let bucketLabel = $derived(bucket ? range === '24h' ? formatTimeWindow(bucket, 1) : formatUTCDay(bucket) + ' UTC' : '');
-  let groups = $derived(
+  let rankedGroups = $derived(
     (data?.groups[ranking === 'models' ? 'models' : 'clients'] ?? [])
-      .slice().sort((a, b) => groupValue(b) - groupValue(a) || a.name.localeCompare(b.name)).slice(0, 6)
+      .slice().sort((a, b) => groupValue(b) - groupValue(a) || a.name.localeCompare(b.name))
   );
+  let groups = $derived(rankedGroups.slice(0, 6));
   let maxRank = $derived(Math.max(0, ...groups.map(groupValue)));
 
   const sourceOptions = [
@@ -80,14 +91,44 @@
   }
 
   function selectGroup(group: UsageGroup) {
-    if (ranking === 'models') update('model', model === group.id ? '' : group.id);
-    else update('client', client === group.id ? '' : group.id);
+    const filter = ranking === 'models' ? 'model' : 'client';
+    const control = document.getElementById(filter + '-filter')?.querySelector<HTMLElement>('[role="combobox"]');
+    control?.focus({ preventScroll: true });
+    control?.scrollIntoView({ block: 'center' });
+    update(filter, (filter === 'model' ? model : client) === group.id ? '' : group.id);
   }
 
   function viewRequests() {
-    const heading = document.getElementById('requests-title');
+    const heading = document.getElementById('requests-title') ?? document.getElementById('empty-usage-title') ?? document.getElementById('usage-title');
     heading?.focus({ preventScroll: true });
     heading?.scrollIntoView({ block: 'start' });
+  }
+
+  $effect(() => {
+    if (!focusRequests || loading || !(requestPage || requestError || overviewError || data?.summary.requestCount === 0)) return;
+    viewRequests();
+    onRequestFocus();
+  });
+
+  function resetOrUndoFilters() {
+    if (canUndoReset) {
+      undoFilters();
+      resetStatus = 'Previous filters restored.';
+    } else {
+      clearFilters();
+      resetStatus = 'Filters reset.';
+    }
+  }
+
+  function clearRequestWindow() {
+    const control = document.getElementById('request-window-filter')?.querySelector<HTMLElement>('[role="combobox"]')
+      ?? document.getElementById('empty-usage-title');
+    control?.focus({ preventScroll: true });
+    update('bucket', '');
+  }
+
+  function changeChartMetric(value: string | null) {
+    if (value === 'cost' || value === 'tokens' || value === 'compare') chartMetric = value;
   }
 
   function retryOverview() {
@@ -116,11 +157,20 @@
 {/snippet}
 
 {#snippet chartSelection()}
-  <div class="chart-selection">
-    <span aria-live="polite">{bucketLabel ? `Requests for ${bucketLabel}` : 'Choose a time window to filter requests.'}</span>
+  <div class="chart-selection" class:has-selection={Boolean(bucket)}>
+    <span aria-live="polite">{bucketLabel ? `Requests for ${bucketLabel}` : ''}</span>
     {#if bucket}
-      <Button class="icon-button" title="Clear chart time filter" aria-label="Clear chart time filter" onclick={() => update('bucket', '')} onkeydown={guardEnter}><XIcon size={14} aria-hidden="true" /></Button>
+      <Button class="icon-button" title="Clear chart time filter (Enter)" aria-label="Clear chart time filter" aria-keyshortcuts="Enter" onclick={clearRequestWindow} onkeydown={guardEnter}>
+        <XIcon size={14} aria-hidden="true" />
+      </Button>
     {/if}
+  </div>
+{/snippet}
+
+{#snippet overviewFilter(id: string, label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void)}
+  <div class="filter-field" {id}>
+    <span aria-hidden="true">{label}</span>
+    <Filter {label} {value} items={options} {onChange} />
   </div>
 {/snippet}
 
@@ -153,14 +203,15 @@
 
 {#if showFilters}
   <div class="filters">
-    <Filter label="Source" value={source} items={sourceOptions} onChange={(value) => update('source', value)} />
-    <Filter label="Client" value={client} items={clientOptions} onChange={(value) => update('client', value)} />
-    <Filter label="Model" value={model} items={modelOptions} onChange={(value) => update('model', value)} />
-    {#if scoped || range !== '24h'}
-      <Button class="secondary-button" onclick={clearFilters} onkeydown={guardEnter}>Clear all</Button>
+    {@render overviewFilter('source-filter', 'Source', source, sourceOptions, (value) => update('source', value))}
+    {@render overviewFilter('client-filter', 'Client', client, clientOptions, (value) => update('client', value))}
+    {@render overviewFilter('model-filter', 'Model', model, modelOptions, (value) => update('model', value))}
+    {#if scoped || range !== '24h' || canUndoReset}
+      <Button class="secondary-button" title={resetCommand + ' (Enter)'} aria-keyshortcuts="Enter" onclick={resetOrUndoFilters} onkeydown={guardEnter}>{resetCommand}</Button>
     {/if}
   </div>
 {/if}
+<span class="sr-only" aria-live="polite" aria-atomic="true">{resetStatus}</span>
 
 {#if overviewError}
   <RecoveryNotice problem={overviewError} retry={retryOverview} retryLabel="Retry usage" busy={loading || !online} cached={Boolean(data)} cachedMessage="Showing the last loaded data for these filters." />
@@ -171,21 +222,21 @@
     <div class="usage-loading" role="status">
       <span class="muted">Loading usage…</span>
       <div class="loading-metrics" aria-hidden="true"><span></span><span></span></div>
-      <div class="loading-charts" aria-hidden="true"><span></span><span></span></div>
+      <div class="loading-chart" aria-hidden="true"></div>
       <div class="loading-table" aria-hidden="true"></div>
     </div>
   {/if}
 {:else if data.summary.requestCount === 0}
   <section class="usage-empty" aria-labelledby="empty-usage-title">
     {#if firstRun}
-      <h2 id="empty-usage-title">No clients connected</h2>
+      <h2 id="empty-usage-title" tabindex="-1">No clients connected</h2>
       <p>Create a client to get a proxy key and set up your first request.</p>
       <a class="primary-button" href="#clients" title="Connect a client (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>Connect a client</a>
     {:else}
-      <h2 id="empty-usage-title">No requests in this view</h2>
+      <h2 id="empty-usage-title" tabindex="-1">No requests in this view</h2>
       {#if bucket}{@render chartSelection()}{/if}
       {#if scoped}
-        <p>No requests match your filters. Clear them or select a different date range.</p>
+        <p>No requests match your filters. Reset the filters or choose another date range.</p>
       {:else}
         <p>Send a request from a configured client to see its usage here.</p>
       {/if}
@@ -198,13 +249,13 @@
   {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
 {:else}
   <div class="metrics">
-    <section class="metric" aria-label="Estimated usage">
-      <div class="metric-label">Estimated usage</div>
+    <section class="metric" aria-label="Usage value">
+      <div class="metric-label">Usage value</div>
       <strong>{data.summary.pricedRequestCount === 0 ? 'Unpriced' : money(data.summary.estimatedCost)}</strong>
       {#if data.summary.pricedRequestCount != null}
         <span class="metric-caption">{count(data.summary.pricedRequestCount)} of {count(data.summary.requestCount)} {data.summary.requestCount === 1 ? 'request' : 'requests'} priced</span>
       {/if}
-      <span class="metric-caption cost-explanation">Reported charges, list values, and estimates.</span>
+      <span class="metric-caption cost-explanation">Reported charges, provider list values and estimates, in USD.</span>
     </section>
     <section class="metric" aria-label="Total tokens">
       <div class="metric-label">Total tokens</div>
@@ -213,39 +264,53 @@
     </section>
   </div>
 
-  <div class="chart-toggle">
-    <SegmentedControl class="segmented" aria-label="Chart metric" value={chartMetric} onValueChange={(value) => { if (value) chartMetric = value; }}>
-      <SegmentedControlItem value="cost">Cost</SegmentedControlItem>
-      <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
-    </SegmentedControl>
+  <div class="timeline">
+    <header class="section-head chart-heading">
+      <h2 id="chart-heading">{chartTitle}</h2>
+      <SegmentedControl class="segmented" aria-label="Chart metric" value={chartMetric} onValueChange={changeChartMetric}>
+        <SegmentedControlItem value="cost">Usage value</SegmentedControlItem>
+        <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
+        <SegmentedControlItem value="compare">Compare</SegmentedControlItem>
+      </SegmentedControl>
+    </header>
+    <div class="chart-row" class:compare={chartMetric === 'compare'}>
+      {#if chartMetric !== 'tokens'}
+        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'cost-chart-title' : 'chart-heading'}>
+          <header>
+            {#if chartMetric === 'compare'}<h3 id="cost-chart-title">{chartTitles.cost}</h3>{/if}
+            {#if data.buckets.some(unpricedBucket)}
+              <div class="legend"><span><i class="unpriced-mark"></i>Unpriced window</span></div>
+            {/if}
+          </header>
+          <TimeChart buckets={data.buckets} kind="cost" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
+        </section>
+      {/if}
+      {#if chartMetric !== 'cost'}
+        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'token-chart-title' : 'chart-heading'}>
+          <header>
+            {#if chartMetric === 'compare'}<h3 id="token-chart-title">{chartTitles.tokens}</h3>{/if}
+            <div class="legend">
+              <span><i class="input-color"></i>Uncached input</span>
+              <span><i class="cache-color"></i>Cached input</span>
+              <span><i class="output-color"></i>Output</span>
+            </div>
+          </header>
+          <TimeChart buckets={data.buckets} kind="tokens" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
+        </section>
+      {/if}
+    </div>
+    <div class="chart-actions">
+      {@render overviewFilter('request-window-filter', 'Request time window', bucket, windowOptions, (value) => update('bucket', value))}
+      <Button class="secondary-button" title="View requests (Enter)" aria-keyshortcuts="Enter" onclick={viewRequests} onkeydown={guardEnter}>View requests</Button>
+      {@render chartSelection()}
+    </div>
   </div>
-  <div class="chart-row">
-    <section class="chart-section" class:inactive-chart={chartMetric !== 'cost'} aria-labelledby="cost-chart-title">
-      <header>
-        <h2 id="cost-chart-title">Estimated usage over time</h2>
-        {#if data.buckets.some(unpricedBucket)}
-          <div class="legend"><span><i class="unpriced-mark"></i>Unpriced window</span></div>
-        {/if}
-      </header>
-      <TimeChart buckets={data.buckets} kind="cost" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-    </section>
-    <section class="chart-section" class:inactive-chart={chartMetric !== 'tokens'} aria-labelledby="token-chart-title">
-      <header>
-        <h2 id="token-chart-title">Tokens over time</h2>
-        <div class="legend">
-          <span><i class="input-color"></i>Uncached input</span>
-          <span><i class="cache-color"></i>Cached input</span>
-          <span><i class="output-color"></i>Output</span>
-        </div>
-      </header>
-      <TimeChart buckets={data.buckets} kind="tokens" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-    </section>
-  </div>
-  <div class="chart-actions">
-    <Filter label="Request time window" value={bucket} items={windowOptions} onChange={(value) => update('bucket', value)} />
-    <Button class="secondary-button" title="View requests (Enter)" aria-keyshortcuts="Enter" onclick={viewRequests} onkeydown={guardEnter}>View requests</Button>
-    {@render chartSelection()}
-  </div>
+
+  <RequestList
+    requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)}
+    {outcome} onOutcomeChange={(value) => update('outcome', value)} {pageNumber} error={requestError} retry={retryRequests}
+    {onPrevious} {onNext}
+  />
 
   <div class="secondary-row" class:with-allowance={data.allowance.length > 0}>
     <section aria-labelledby="ranking-title">
@@ -257,12 +322,18 @@
             <SegmentedControlItem value="clients">Client</SegmentedControlItem>
           </SegmentedControl>
           <SegmentedControl class="segmented" aria-label="Breakdown unit" value={unit} onValueChange={(value) => { if (value) unit = value; }}>
-            <SegmentedControlItem value="dollars">Est. USD</SegmentedControlItem>
+            <SegmentedControlItem value="dollars">Usage value</SegmentedControlItem>
             <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
           </SegmentedControl>
         </div>
       </header>
       {#if groups.length}
+        <p class="rank-hint muted">
+          {#if rankedGroups.length > groups.length}
+            Showing the top {groups.length} of {rankedGroups.length} {ranking}.
+          {/if}
+          Select a row to filter usage.
+        </p>
         <div class="rank-list">
           {#each groups as group (group.id)}
             {@const value = groupValue(group)}
@@ -271,11 +342,15 @@
               type="button"
               class="rank-item"
               aria-pressed={ranking === 'models' ? model === group.id : client === group.id}
+              aria-keyshortcuts={group.id ? 'Enter Space' : undefined}
               disabled={!group.id}
               onclick={() => selectGroup(group)}
               onkeydown={guardEnter}
             >
-              <span class="rank-name" title={group.name}>{group.name}</span>
+              <span class="rank-name" title={group.name}>
+                {#if group.id}<span class="sr-only">Filter by {ranking === 'models' ? 'model' : 'client'} </span>{/if}
+                {group.name}
+              </span>
               <span class="rank-track" aria-hidden="true">
                 {#if maxRank > 0}
                   <span class="usage-color" style:width={(100 * value / maxRank) + '%'}></span>
@@ -295,50 +370,54 @@
 
     {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
   </div>
-
-  <RequestList
-    requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)}
-    {outcome} onOutcomeChange={(value) => update('outcome', value)} {pageNumber} error={requestError} retry={retryRequests}
-    {onPrevious} {onNext}
-  />
 {/if}
 
 <style>
   .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-block-start: 4px; }
   .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
   .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
-  .metrics, .chart-row, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .metrics, .timeline, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .filters { align-items: flex-end; }
+  .filter-field { display: grid; gap: 4px; min-inline-size: 0; }
+  .filter-field > span { color: var(--muted); font-size: 12px; }
   .usage-empty { border-block-start: 1px solid var(--line); padding-block: var(--section-space); }
-  .usage-empty h2 { margin-block-end: 6px; }
+  .usage-empty h2 { margin-block-end: 6px; scroll-margin-block-start: 75px; }
   .usage-empty p { max-inline-size: 55ch; color: var(--muted); }
   .usage-empty a { text-decoration: none; }
   .usage-loading { display: grid; gap: var(--gap); border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
-  .loading-metrics, .loading-charts { display: grid; gap: var(--section-space); grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .loading-metrics span, .loading-charts span, .loading-table { border-radius: 6px; background: var(--surface); }
+  .loading-metrics { display: grid; gap: var(--section-space); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .loading-metrics span, .loading-chart, .loading-table { border-radius: 6px; background: var(--surface); }
   .loading-metrics span { min-block-size: 55px; }
-  .loading-charts span { min-block-size: 230px; }
+  .loading-chart { min-block-size: 230px; }
   .loading-table { min-block-size: 190px; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-block-end: 6px; }
   .metric { display: flex; flex-direction: column; align-items: flex-start; padding-inline-end: var(--section-space); }
-  .metric + .metric, .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
+  .metric + .metric, .compare .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
   .metric-label { color: var(--muted); font-size: 12px; }
   .metric strong { display: block; margin: 4px 0 2px; font-size: clamp(22px, 3.2vw, 36px); font-weight: 620; letter-spacing: -.035em; line-height: 1.2; font-variant-numeric: tabular-nums; }
   .metric-caption { color: var(--muted); font-size: 12px; }
   .cost-explanation { margin-block-start: 4px; }
-  .chart-toggle { display: none; }
-  .chart-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .chart-section { display: grid; grid-template-rows: 1fr auto; gap: 17px; min-inline-size: 0; }
-  .chart-section:first-child { padding-inline-end: var(--section-space); }
-  .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-block-start: 8px; }
+  .chart-heading { flex-wrap: wrap; }
+  .chart-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .chart-row.compare { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--section-space); }
+  .chart-section { display: grid; gap: 10px; min-inline-size: 0; }
+  .chart-section header:empty { display: none; }
+  .compare .chart-section { grid-template-rows: 1fr auto; }
+  .chart-section h3 { font-size: 14px; margin-block-end: 0; }
+  .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .chart-section h3 + .legend { margin-block-start: 6px; }
   .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
   .legend .unpriced-mark { block-size: 0; inline-size: 14px; border-block-end: 2px dotted var(--muted); }
   .chart-actions, .chart-selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .chart-actions { align-items: flex-end; margin-block-start: 12px; }
   .chart-actions :global(.filter-trigger) { min-inline-size: 145px; }
   .chart-selection { color: var(--muted); font-size: 12px; min-block-size: 30px; }
+  .chart-selection:not(.has-selection) { position: absolute; inline-size: 1px; block-size: 1px; min-block-size: 0; overflow: hidden; clip-path: inset(50%); }
   .chart-selection :global(.icon-button) { border-color: transparent; background: transparent; }
   .secondary-row.with-allowance { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--section-space); }
   .rank-heading { flex-wrap: wrap; }
+  .rank-hint { margin: 0 0 6px; font-size: 12px; }
   .rank-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
   .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
@@ -357,20 +436,16 @@
   :global(.allowance-track) { background: var(--line); border-radius: 4px; overflow: hidden; block-size: 6px; }
   :global(.allowance-indicator) { display: block; block-size: 100%; background: var(--codex); width: var(--meter-value, 0%); }
   @media (max-width: 900px) {
-    .chart-row, .secondary-row.with-allowance, .loading-charts { grid-template-columns: minmax(0, 1fr); gap: var(--section-space); }
-    .chart-section:first-child { padding-inline-end: 0; }
-    .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 0; border-block-start: 1px solid var(--line); padding: var(--section-space) 0 0; }
+    .chart-row.compare, .secondary-row.with-allowance { grid-template-columns: minmax(0, 1fr); gap: var(--section-space); }
+    .compare .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 0; border-block-start: 1px solid var(--line); padding: var(--section-space) 0 0; }
   }
   @media (max-width: 670px) {
-    .chart-toggle { display: flex; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
-    .chart-row, .chart-section + .chart-section { border: 0; padding: 0; }
-    .chart-section.inactive-chart, .loading-charts span + span { display: none; }
     .chart-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
     .chart-actions :global(.filter-trigger) { min-inline-size: 0; max-inline-size: none; }
-    .chart-actions :global(.filter-trigger), .chart-actions :global(.secondary-button) { min-block-size: 44px; }
+    .chart-actions :global(.filter-trigger), .chart-actions :global(.secondary-button), .filters :global(button) { min-block-size: 44px; }
     .chart-selection { grid-column: 1 / -1; }
     .chart-selection :global(.icon-button) { inline-size: 36px; block-size: 36px; }
-    .loading-charts span { min-block-size: 240px; }
+    .loading-chart { min-block-size: 240px; }
   }
   @media (max-width: 600px) {
     .metrics { grid-template-columns: 1fr; padding-block: 0; }

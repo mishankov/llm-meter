@@ -129,17 +129,17 @@ async function unlock(page: Page) {
 test('filters requests from a chart and inspects and pages through them with the keyboard', async ({ page }) => {
   const { usageQueries, usagePaths } = await mockAPI(page);
   await unlock(page);
-  const metric = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  const metric = page.getByRole('region', { name: 'Usage value', exact: true });
   await expect(metric.getByText('$0.02', { exact: true })).toBeVisible();
   await expect(metric.getByText('2 of 4 requests priced', { exact: true })).toBeVisible();
-  const requests = page.getByRole('region', { name: 'Recent requests' });
+  const requests = page.getByRole('region', { name: 'Requests' });
   await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
   await expect(requests.getByText('Unpriced', { exact: true })).toHaveCount(2);
-  const chart = page.getByRole('region', { name: 'Estimated usage over time' });
+  const chart = page.getByRole('region', { name: 'Usage value over time' });
   const firstBucket = chart.getByRole('button').first();
   const secondBucket = chart.getByRole('button').nth(1);
-  await expect(firstBucket).toHaveAccessibleName(/Estimated usage \$0\.00 · 1 of 2 priced$/);
-  await expect(secondBucket).toHaveAccessibleName(/Estimated usage \$0\.02$/);
+  await expect(firstBucket).toHaveAccessibleName(/Usage value \$0\.00 · 1 of 2 priced$/);
+  await expect(secondBucket).toHaveAccessibleName(/Usage value \$0\.02$/);
   await expect(chart.getByRole('button').last()).toHaveAccessibleName(/Unpriced$/i);
   await expect(secondBucket.locator('.bars > span')).toHaveCount(1);
   const tickLabels = await chart.locator('.chart-axis span').allTextContents();
@@ -176,7 +176,7 @@ test('filters requests from a chart and inspects and pages through them with the
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
   expect(usagePaths.at(-1)).toBe('/api/usage/requests');
   await page.getByRole('button', { name: /Details for gpt-codex/ }).press('Enter');
-  await expect(detail.getByText('Estimated usage', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Estimated cost', { exact: true })).toBeVisible();
   await expect(detail.getByText('$0.02', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Previous requests' })).toBeEnabled();
@@ -196,13 +196,40 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
   }
 });
 
+test('starts with one chart and makes both desktop trends available through Compare', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await unlock(page);
+  const metrics = page.getByRole('radiogroup', { name: 'Chart metric' });
+  const valueChart = page.getByRole('region', { name: 'Usage value over time' });
+  const tokenChart = page.getByRole('region', { name: 'Tokens over time' });
+  await expect(metrics.getByRole('radio', { name: 'Usage value' })).toBeChecked();
+  await expect(valueChart).toBeVisible();
+  await expect(tokenChart).toHaveCount(0);
+  await metrics.getByRole('radio', { name: 'Usage value' }).press('ArrowRight');
+  await expect(metrics.getByRole('radio', { name: 'Tokens' })).toBeChecked();
+  await expect(tokenChart).toBeVisible();
+  await expect(valueChart).toHaveCount(0);
+  await metrics.getByRole('radio', { name: 'Tokens' }).press('ArrowRight');
+  await expect(metrics.getByRole('radio', { name: 'Compare' })).toBeChecked();
+  await expect(valueChart).toBeVisible();
+  await expect(tokenChart).toBeVisible();
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('link', { name: 'Usage', exact: true }).click();
+  await expect(metrics.getByRole('radio', { name: 'Compare' })).toBeChecked();
+  await expect(valueChart).toBeVisible();
+  await expect(tokenChart).toBeVisible();
+  const requests = page.getByRole('region', { name: 'Requests', exact: true });
+  await expect(requests.getByText('4 requests on this page')).toBeVisible();
+});
+
 test('shows one estimated USD bar per model and switches units with the keyboard', async ({ page }) => {
   await mockAPI(page);
   await unlock(page);
   const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
   const highestEstimate = breakdown.getByRole('button', { name: /gpt-codex/ });
   const fills = highestEstimate.locator('.rank-track > span');
-  const usd = breakdown.getByRole('radio', { name: 'Est. USD' });
+  const usd = breakdown.getByRole('radio', { name: 'Usage value' });
   const tokens = breakdown.getByRole('radio', { name: 'Tokens' });
 
   await expect(breakdown.getByRole('button').first()).toHaveAccessibleName(/gpt-codex/);
@@ -238,12 +265,16 @@ test('aligns usage bars with differently sized amounts and keeps rows keyboard-o
     expect(columns).toEqual(columns.map(() => columns[0]));
   }
 
-  const luna = breakdown.getByRole('button', { name: /gpt-6-luna/ });
+  const luna = breakdown.getByRole('button', { name: /Filter by model gpt-6-luna/ });
+  const model = page.getByRole('combobox', { name: 'Model' });
   await luna.press('Enter');
   await expect(luna).toHaveAttribute('aria-pressed', 'true');
+  await expect(model).toBeFocused();
+  await expect(model).toBeInViewport();
   await expect.poll(() => usageQueries.at(-1)?.get('model')).toBe('gpt-6-luna');
   await luna.press('Space');
   await expect(luna).toHaveAttribute('aria-pressed', 'false');
+  await expect(model).toBeFocused();
   await expect.poll(() => usageQueries.at(-1)?.get('model')).toBeNull();
 });
 
@@ -271,7 +302,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(page.getByRole('alert')).toContainText('Could not load usage');
   await expect(page.getByRole('alert')).toContainText('Check the LLM Proxy service and its logs.');
   await expect(apiRequest).not.toBeVisible();
-  await expect(page.getByRole('region', { name: 'Estimated usage over time' })).not.toBeVisible();
+  await expect(page.getByRole('region', { name: 'Usage value over time' })).not.toBeVisible();
 
   failFilteredQuery = false;
   await page.getByRole('button', { name: 'Retry usage' }).press('Enter');
@@ -284,7 +315,7 @@ test('shows stale data during an outage and refreshes the same scope on reconnec
   let failRefresh = false;
   await page.route('**/api/usage?**', (route) => failRefresh ? route.fulfill({ status: 503 }) : route.fallback());
   await unlock(page);
-  const total = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  const total = page.getByRole('region', { name: 'Usage value', exact: true });
   await expect(total.getByText('$0.02')).toBeVisible();
   await page.getByRole('radio', { name: '7 days' }).click();
   await expect(total.getByText('$0.02')).toBeVisible();
@@ -344,8 +375,8 @@ test('retries failed request pages in place and links client diagnostics to the 
   let rejectRequests = true;
   await page.route('**/api/usage/requests?**', (route) => rejectRequests ? route.fulfill({ status: 429 }) : route.fallback());
   await unlock(page);
-  const requests = page.getByRole('region', { name: 'Recent requests' });
-  const amount = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  const requests = page.getByRole('region', { name: 'Requests' });
+  const amount = page.getByRole('region', { name: 'Usage value', exact: true });
   await expect(amount.getByText('$0.02')).toBeVisible();
   const websocketRow = requests.getByRole('button', { name: /Details for gpt-websocket/ });
   await expect(websocketRow).toBeVisible();
@@ -380,11 +411,79 @@ test('retries failed request pages in place and links client diagnostics to the 
   await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
   await expect(page.getByText('Latest recorded request')).toBeVisible();
   await expect(page.getByText('Rate limited (429)')).toBeVisible();
+  const clientType = page.getByRole('combobox', { name: 'Connection type' });
+  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/v1$/);
+  await clientType.press('Enter');
+  await page.getByRole('option', { name: 'Codex (ChatGPT sign-in)' }).click();
+  const baseURL = new URL('/backend-api/codex', page.url()).href;
+  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
+  await expect(copyURL).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await copyURL.press('Enter');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(baseURL);
   await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
   await expect(page.getByText('config.toml', { exact: true })).toBeVisible();
+  await clientType.press('Enter');
+  await page.getByRole('option', { name: 'OpenCode (ChatGPT sign-in)' }).click();
+  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
+  await expect(page.getByText('opencode.jsonc', { exact: true })).toBeVisible();
+  await clientType.press('Enter');
+  await page.getByRole('option', { name: 'OpenCode Go' }).click();
+  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/opencode-go$/);
   await page.getByRole('button', { name: 'View failed requests' }).press('Enter');
   await expect(page).toHaveURL(/range=30d&client=open-code&outcome=failed$/);
   await expect(failedRow).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Requests', exact: true })).toBeFocused();
+});
+
+test('keeps key shortcuts and repeated Enter from interrupting connection selection', async ({ page }) => {
+  await mockAPI(page, {
+    initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [] }]
+  });
+  let keyRequests = 0;
+  await page.route('**/api/clients/open-code/keys', async (route) => {
+    if (route.request().method() === 'POST') keyRequests++;
+    await route.fallback();
+  });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  const connection = page.getByRole('combobox', { name: 'Connection type' });
+  const baseURL = page.getByRole('textbox', { name: 'Base URL' });
+  const options = page.getByRole('listbox');
+  const newKey = page.getByRole('button', { name: 'New key', exact: true });
+
+  await connection.press('k');
+  await connection.dispatchEvent('keydown', { key: 'л', code: 'KeyK' });
+  await connection.focus();
+  await connection.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+  await expect(options).toBeHidden();
+  await page.keyboard.down('Enter');
+  await expect(options).toBeVisible();
+  await page.keyboard.down('Enter');
+  await expect(options).toBeVisible();
+  await page.keyboard.press('End');
+  await page.keyboard.down('Enter');
+  await expect(options).toBeVisible();
+  await expect(baseURL).toHaveValue(/\/v1$/);
+  await page.keyboard.up('Enter');
+  await page.keyboard.press('Enter');
+  await expect(options).toBeHidden();
+  await expect(baseURL).toHaveValue(/\/opencode-go$/);
+
+  await connection.press('Enter');
+  await page.keyboard.press('k');
+  await page.evaluate(() => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'л', code: 'KeyK', bubbles: true, cancelable: true
+  })));
+  await expect(options).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(keyRequests).toBe(0);
+  await page.keyboard.press('Escape');
+  await newKey.press('k');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  expect(keyRequests).toBe(1);
 });
 
 test('keeps an uncertain key issuance notice with the affected client', async ({ page }) => {
@@ -415,8 +514,8 @@ test('keeps an uncertain key issuance notice with the affected client', async ({
   await expect(error).toBeVisible();
 });
 
-test('restores usage filters after reload and navigation and supports clearing them', async ({ page }) => {
-  await mockAPI(page);
+test('restores filter scope and pagination after undo and supports keyboard navigation', async ({ page }) => {
+  const { usageQueries } = await mockAPI(page);
   await unlock(page);
   await page.getByRole('radio', { name: '7 days' }).click();
   await page.getByRole('combobox', { name: 'Source' }).click();
@@ -428,13 +527,27 @@ test('restores usage filters after reload and navigation and supports clearing t
   await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
   await expect(page.getByRole('combobox', { name: 'Source' })).toHaveText('API providers');
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('link', { name: 'Skip to main content' }).press('Enter');
+  await expect(page.getByRole('main')).toBeFocused();
+  await expect(page).toHaveURL(/#clients$/);
   await page.getByRole('link', { name: 'Usage', exact: true }).click();
   await expect(page).toHaveURL(/#usage\?range=7d&source=api$/);
-  await page.getByRole('button', { name: 'Clear all' }).click();
+  const next = page.getByRole('button', { name: 'Next requests' });
+  await expect(next).toBeEnabled();
+  await next.press('Enter');
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+  await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
+  await page.getByRole('button', { name: 'Reset filters' }).press('Enter');
   await expect(page).toHaveURL(/#usage$/);
   await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
+  const undo = page.getByRole('button', { name: 'Undo reset' });
+  await expect(undo).toBeFocused();
+  await undo.press('Enter');
+  await expect(page).toHaveURL(/#usage\?range=7d&source=api$/);
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+  await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
   await page.goBack();
-  await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
+  await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
 });
 
 test('guides an empty dashboard to a client and protects the first key before copying', async ({ page }) => {
@@ -511,7 +624,7 @@ test.describe('mobile daily ranges west of UTC', () => {
     await unlock(page);
     for (const [range, count] of [['7 days', 8], ['30 days', 31]] as const) {
       await page.getByRole('radio', { name: range }).click();
-      for (const [metric, name] of [['Cost', 'Estimated usage over time'], ['Tokens', 'Tokens over time']] as const) {
+      for (const [metric, name] of [['Usage value', 'Usage value over time'], ['Tokens', 'Tokens over time']] as const) {
         await page.getByRole('radiogroup', { name: 'Chart metric' }).getByRole('radio', { name: metric }).click();
         const chart = page.getByRole('region', { name });
         await expect(chart.getByRole('button')).toHaveCount(count);
@@ -523,7 +636,7 @@ test.describe('mobile daily ranges west of UTC', () => {
     await page.getByRole('option', { name: 'Nov 20 UTC', exact: true }).click();
     await expect(page).toHaveURL(/bucket=2026-11-20/);
     await page.getByRole('button', { name: 'View requests' }).press('Enter');
-    await expect(page.getByRole('heading', { name: 'Recent requests' })).toBeFocused();
+    await expect(page.getByRole('heading', { name: 'Requests' })).toBeFocused();
     const request = page.getByRole('row', { name: /gpt-api.*OpenCode Go/ });
     await expect(request).toBeVisible();
     await request.getByRole('button', { name: /Details for gpt-api/ }).press('Enter');

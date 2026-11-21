@@ -16,7 +16,8 @@
   import RecoveryNotice from '../lib/RecoveryNotice.svelte';
 
   const defaultFilters = { range: '24h', source: '', client: '', model: '', bucket: '', outcome: '' as RequestOutcome };
-  type Filter = keyof typeof defaultFilters;
+  type Filters = typeof defaultFilters;
+  type Filter = keyof Filters;
   type Screen = 'usage' | 'clients';
   type UsageScope = 'overview' | 'requests';
   type ScopedProblem = { query: string; problem: DashboardProblem };
@@ -35,7 +36,10 @@
   let online = $state(true);
 
   let filters = $state({ ...defaultFilters });
+  let chartMetric = $state<'cost' | 'tokens' | 'compare'>('cost');
   let cursors = $state<string[]>(['']);
+  let resetSnapshot = $state<{ filters: Filters; cursors: string[] } | null>(null);
+  let requestFocusHash = $state<string | null>(null);
   let overviewResult = $state<{ data: Usage; query: string; updatedAt: string } | null>(null);
   let requestResult = $state<{ data: RequestPage; query: string } | null>(null);
   let loadingScope = $state<UsageScope | null>(null);
@@ -86,7 +90,7 @@
     untrack(() => void fetchUsage(overview, query, refreshOnReturn));
   });
 
-  function usageHash(values: typeof defaultFilters) {
+  function usageHash(values: Filters) {
     const query = new URLSearchParams();
     for (const name of Object.keys(defaultFilters) as Filter[]) {
       if (values[name] !== defaultFilters[name]) query.set(name, values[name]);
@@ -99,7 +103,7 @@
     const range = params.get('range');
     const source = params.get('source');
     const outcome = params.get('outcome');
-    const next: typeof defaultFilters = {
+    const next: Filters = {
       range: range === '7d' || range === '30d' ? range : defaultFilters.range,
       source: source === 'api' || source === 'codex' ? source : defaultFilters.source,
       client: filterText(params.get('client'), 100),
@@ -110,7 +114,9 @@
     const interval = (next.range === '24h' ? 1 : 24) * 3_600_000;
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(next.bucket) ||
       Date.parse(next.bucket) % interval !== 0) next.bucket = '';
-    if (usageHash(next) !== usageHash(filters)) {
+    const nextHash = usageHash(next);
+    if (nextHash !== usageHash(filters)) {
+      if (nextHash !== '#usage') resetSnapshot = null;
       filters = next;
       cursors = [''];
     }
@@ -121,7 +127,9 @@
   }
 
   function readHash() {
-    const [path, query = ''] = window.location.hash.slice(1).split('?');
+    const hash = window.location.hash;
+    if (requestFocusHash !== hash) requestFocusHash = null;
+    const [path, query = ''] = hash.slice(1).split('?');
     const [section, selected] = path.split('/');
     screen = section === 'clients' ? 'clients' : 'usage';
     clientId = screen === 'clients' && selected ? selected : '';
@@ -135,7 +143,7 @@
   }
 
   function viewUsage(id: string, outcome: RequestOutcome = '') {
-    navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id, source: '', model: '', bucket: '', outcome });
+    navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id, source: '', model: '', bucket: '', outcome }, outcome !== '');
   }
 
   function filtersChanged(name: Filter, value: string) {
@@ -143,10 +151,31 @@
     navigateUsage({ ...filters, [name]: value, bucket: name === 'bucket' ? value : name === 'outcome' ? filters.bucket : '' });
   }
 
-  function navigateUsage(values: typeof defaultFilters) {
+  function navigateUsage(values: Filters, focusRequests = false) {
     cursors = [''];
-    window.location.hash = usageHash(values);
+    const hash = usageHash(values);
+    requestFocusHash = focusRequests ? hash : null;
+    window.location.hash = hash;
     readHash();
+  }
+
+  function resetFilters() {
+    if (usageHash(filters) === '#usage') return;
+    resetSnapshot = { filters: { ...filters }, cursors: [...cursors] };
+    navigateUsage(defaultFilters);
+  }
+
+  function undoFilters() {
+    const previous = resetSnapshot;
+    if (!previous) return;
+    resetSnapshot = null;
+    navigateUsage(previous.filters);
+    cursors = previous.cursors;
+  }
+
+  function skipToContent(event: MouseEvent) {
+    event.preventDefault();
+    document.getElementById('content')?.focus();
   }
 
   function refreshUsage() {
@@ -176,6 +205,8 @@
     tokenRejected = false;
     overviewResult = null;
     requestResult = null;
+    resetSnapshot = null;
+    requestFocusHash = null;
     overviewFailures.clear();
     requestFailure = null;
     cursors = [''];
@@ -310,6 +341,7 @@
   </main>
 {:else}
   <div class="shell">
+    <a class="skip-link" href="#content" onclick={skipToContent} onkeydown={guardEnter}>Skip to main content</a>
     <aside class="sidebar">
       <a class="brand" href={usageHref}>
         <span class="app-mark"><Layers3Icon size={19} aria-hidden="true" /></span>
@@ -330,10 +362,11 @@
       </div>
     </aside>
 
-    <main id="content" class="content">
+    <main id="content" class="content" tabindex="-1">
       {#if authError}<RecoveryNotice problem={authError} />{/if}
       {#if screen === 'usage'}
         <UsageView
+          bind:chartMetric
           data={usageOverview?.data ?? null}
           filterOptions={overviewResult?.data.filters}
           {requestPage}
@@ -346,7 +379,11 @@
           canPrevious={cursors.length > 1}
           pageNumber={cursors.length}
           update={filtersChanged}
-          clearFilters={() => navigateUsage(defaultFilters)}
+          clearFilters={resetFilters}
+          canUndoReset={resetSnapshot !== null}
+          {undoFilters}
+          focusRequests={requestFocusHash !== null}
+          onRequestFocus={() => { requestFocusHash = null; }}
           refresh={refreshUsage}
           {retryRequests}
           onPrevious={() => cursors = cursors.slice(0, -1)}
