@@ -50,7 +50,8 @@ func (m *httpMeter) observeEvent(message wireMessage) {
 	if m.usage.Source == "codex" {
 		m.usage.mergeRateLimits(message.limits())
 	}
-	m.usage.applyMessage(message, m.captureUsage && message.reportsUsage())
+	wrappedGeminiUsage := m.usage.geminiUsageAvailable() && message.Response != nil && len(message.Response.GeminiUsage) != 0
+	m.usage.applyMessage(message, m.captureUsage && (message.reportsUsage() || wrappedGeminiUsage))
 	if message.Response != nil && message.Response.ID != "" {
 		m.usage.ResponseID = message.Response.ID
 	}
@@ -76,6 +77,7 @@ type wireResult struct {
 type wireMessage struct {
 	wireResult
 	StreamID          string          `json:"stream_id"`
+	TraceID           string          `json:"traceId"`
 	RawStatus         json.RawMessage `json:"status"`
 	Response          *wireResult     `json:"response"`
 	Message           *wireResult     `json:"message"`
@@ -172,6 +174,9 @@ func (u *Usage) applyMessage(message wireMessage, captureUsage bool) {
 		u.applyResult(*message.Response, captureUsage)
 	}
 	u.applyResult(message.wireResult, captureUsage && message.Response == nil)
+	if u.Provider == antigravityProvider && captureUsage && message.TraceID != "" {
+		u.ResponseID = message.TraceID
+	}
 }
 
 func (u *Usage) applyResult(result wireResult, captureUsage bool) {
@@ -261,7 +266,7 @@ func (u *Usage) applyMessagesUsage(tokens *wireUsage) {
 
 func (u *Usage) geminiUsageAvailable() bool {
 	switch u.Provider {
-	case "google", "opencode", "opencode-go":
+	case "google", "opencode", "opencode-go", antigravityProvider:
 		return true
 	default:
 		return false

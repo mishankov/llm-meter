@@ -118,7 +118,7 @@ func (s *objectSelector) feed(b byte) {
 		s.value = selectedValue{}
 		switch s.name {
 		case "type", "id", "model", "service_tier", "prompt_cache_retention", "background", "background_options", "usage", "rate_limits",
-			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId":
+			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId", "traceId":
 			s.value.keep = true
 		case "response", "session", "message":
 			if !s.flat && b == '{' {

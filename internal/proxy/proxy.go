@@ -1,4 +1,4 @@
-// Package proxy forwards OpenAI-compatible requests and observes usage reported upstream.
+// Package proxy forwards model provider requests and observes usage reported upstream.
 package proxy
 
 import (
@@ -16,10 +16,12 @@ import (
 )
 
 const (
-	apiPrefix        = "/v1"
-	codexPrefix      = "/backend-api/codex"
-	accessKey        = "X-LLM-Proxy-Key"
-	OpenCodeGoPrefix = "/opencode-go"
+	apiPrefix           = "/v1"
+	codexPrefix         = "/backend-api/codex"
+	accessKey           = "X-LLM-Proxy-Key"
+	OpenCodeGoPrefix    = "/opencode-go"
+	AntigravityPrefix   = "/antigravity"
+	antigravityProvider = "antigravity"
 )
 
 // Usage is the metadata available for an upstream request or WebSocket response.
@@ -106,6 +108,17 @@ func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Us
 	})
 }
 
+// NewAntigravity creates a Cloud Code Assist reverse proxy for authenticated clients.
+func NewAntigravity(baseURL url.URL, record func(Usage)) http.Handler {
+	route := newUpstream(AntigravityPrefix, "api", baseURL, func(usage Usage) {
+		if usage.ResponseID != "" {
+			usage.ResponseID = antigravityProvider + ":" + usage.ResponseID
+		}
+		record(usage)
+	})
+	return http.HandlerFunc(route.serve)
+}
+
 type upstream struct {
 	prefix   string
 	source   string
@@ -159,7 +172,7 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 		Endpoint: r.URL.Path,
 		Method:   r.Method,
 	}
-	if websocket.IsWebSocketUpgrade(r) {
+	if u.provider != antigravityProvider && websocket.IsWebSocketUpgrade(r) {
 		u.serveWebSocket(w, r, usage)
 		return
 	}
@@ -167,6 +180,9 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
 	usage.UsageUpdate = r.Method == http.MethodGet && isResponse && responsePath != "" && !strings.Contains(responsePath, "/")
 	meter := &httpMeter{usage: usage, captureUsage: r.Method == http.MethodPost || usage.UsageUpdate}
+	if u.provider == antigravityProvider {
+		meter.captureUsage = r.Method == http.MethodPost && (suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent")
+	}
 	request := r.WithContext(context.WithValue(r.Context(), meterContextKey{}, meter))
 	if request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) &&
 		request.Header.Get("Content-Encoding") == "" {
@@ -186,6 +202,8 @@ func upstreamProvider(prefix string, baseURL url.URL) string {
 		return "codex"
 	case OpenCodeGoPrefix:
 		return "opencode-go"
+	case AntigravityPrefix:
+		return antigravityProvider
 	}
 	switch strings.ToLower(baseURL.Hostname()) {
 	case "api.openai.com":

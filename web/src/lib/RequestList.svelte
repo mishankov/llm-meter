@@ -95,6 +95,7 @@
   }
 
   const providerLabels: Record<string, string> = {
+    antigravity: 'Antigravity',
     openai: 'OpenAI API',
     openrouter: 'OpenRouter',
     'opencode-go': 'OpenCode Go',
