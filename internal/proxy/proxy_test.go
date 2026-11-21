@@ -147,6 +147,106 @@ func TestSSEStreamsAndReadsReportedUsageAfterAnOversizedEvent(t *testing.T) {
 	}
 }
 
+const plainSSECompleted = `data: {"type":"response.completed","response":{"id":"resp_plain","usage":{"input_tokens":11,"output_tokens":5}}}`
+
+func TestPlainTextResponsesStreamIsForwardedAndMetered(t *testing.T) {
+	const contentType = "text/plain; charset=utf-8"
+	const first = "da"
+	const created = `ta: {"type":"response.created","response":{"id":"resp_plain","model":"gpt-sse"}}`
+	// Metering must continue beyond the probe budget once framing is confirmed.
+	tail := created + "\r\n\r\n: " + strings.Repeat("x", 8<<10) + "\r\n\r\n" + plainSSECompleted + "\r\n\r\n"
+	release := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		_, _ = io.WriteString(w, first)
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, tail)
+	}))
+	defer upstream.Close()
+
+	records := make(chan Usage, 2)
+	server := httptest.NewServer(testProxy(parseURL(t, upstream.URL), nil, records))
+	defer server.Close()
+	defer close(release)
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	client := server.Client()
+	client.Timeout = 5 * time.Second
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != contentType {
+		t.Fatalf("unexpected response status %d, content type %q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	prefix := make([]byte, len(first))
+	if _, err := io.ReadFull(response.Body, prefix); err != nil || string(prefix) != first {
+		t.Fatalf("stream failed to flush its first fragment: %q, %v", prefix, err)
+	}
+	release <- struct{}{}
+	rest, err := io.ReadAll(response.Body)
+	if err != nil || string(rest) != tail {
+		t.Fatalf("stream body changed: read %d bytes, want %d, error %v", len(rest), len(tail), err)
+	}
+	server.Close()
+	if len(records) != 1 {
+		t.Fatalf("got %d usage records, want 1", len(records))
+	}
+	record := nextRecord(t, records)
+	if !record.HasUsage || record.InputTokens != 11 || record.OutputTokens != 5 ||
+		record.ResponseID != "resp_plain" || record.Model != "gpt-sse" {
+		t.Fatalf("unexpected usage: %+v", record)
+	}
+}
+
+func TestPlainTextResponsesFallbackRequiresFramingWithinScope(t *testing.T) {
+	const responses = "/v1/responses"
+	const framed = plainSSECompleted + "\n\n"
+	const contentType = "text/plain"
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{"ordinary text", http.MethodPost, responses, http.StatusOK, "plain text\n"},
+		{"untyped data field", http.MethodPost, responses, http.StatusOK, "data: {\"usage\":{\"input_tokens\":11}}\n\n"},
+		{"incomplete frame", http.MethodPost, responses, http.StatusOK, plainSSECompleted + "\n"},
+		{"frame beyond budget", http.MethodPost, responses, http.StatusOK, ":" + strings.Repeat("x", 8<<10) + "\n\n" + framed},
+		{"other route", http.MethodPost, responses + "/resp_plain", http.StatusOK, framed},
+		{"other method", http.MethodGet, responses, http.StatusOK, framed},
+		{"error response", http.MethodPost, responses, http.StatusBadRequest, framed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer upstream.Close()
+
+			records := make(chan Usage, 1)
+			handler := testProxy(parseURL(t, upstream.URL), nil, records)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
+			if response.Code != tc.status || response.Header().Get("Content-Type") != contentType || response.Body.String() != tc.body {
+				t.Fatalf("proxy changed upstream response: status %d, content type %q, body length %d", response.Code,
+					response.Header().Get("Content-Type"), response.Body.Len())
+			}
+			if record := nextRecord(t, records); record.HasUsage || record.ResponseID != "" {
+				t.Fatalf("unexpected usage: %+v", record)
+			}
+		})
+	}
+}
+
 func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 	const limitEvent = `{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":27,"window_minutes":300,"reset_at":1790000000}}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

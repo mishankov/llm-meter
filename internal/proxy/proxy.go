@@ -230,6 +230,12 @@ func (u *upstream) observeResponse(response *http.Response) error {
 	case mediaType == "text/event-stream":
 		meter.sse = &eventStream{handle: meter.observeEvent}
 		response.Body = &observedBody{ReadCloser: response.Body, observer: meter.sse}
+	case mediaType == "text/plain" && response.StatusCode == http.StatusOK &&
+		meter.usage.Method == http.MethodPost && meter.usage.Endpoint == "/v1/responses":
+		encoding := response.Header.Get("Content-Encoding")
+		if encoding == "" || strings.EqualFold(encoding, "identity") {
+			response.Body = &observedBody{ReadCloser: response.Body, observer: meter.probeResponseStream()}
+		}
 	case isJSON(mediaType):
 		meter.response = &metadataCapture{}
 		response.Body = &observedBody{ReadCloser: response.Body, observer: meter.response}
