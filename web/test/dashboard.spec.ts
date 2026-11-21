@@ -4,18 +4,18 @@ import type { Client, Key, Usage } from '../src/lib/api';
 const initialStart = '2026-11-20T12:00:00Z';
 const rates = { input: 1, cachedInput: .1, output: 2, cacheWrite: null };
 const response: Usage = {
-  summary: { apiCost: 0, codexValue: .016, inputTokens: 360, cachedInputTokens: 60, outputTokens: 40, requestCount: 2 },
+  summary: { estimatedCost: .016, inputTokens: 360, cachedInputTokens: 60, outputTokens: 40, requestCount: 2 },
   buckets: [
-    { start: initialStart, apiCost: 0, codexValue: 0, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30 },
-    { start: '2026-11-20T13:00:00Z', apiCost: 0, codexValue: .016, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10 }
+    { start: initialStart, estimatedCost: 0, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30 },
+    { start: '2026-11-20T13:00:00Z', estimatedCost: .016, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10 }
   ],
   groups: {
     models: [
-      { id: 'gpt-api', name: 'gpt-api', apiCost: 0, codexValue: 0, tokens: 330 },
-      { id: 'gpt-codex', name: 'gpt-codex', apiCost: 0, codexValue: .016, tokens: 70 },
-      { id: 'gpt-6-luna', name: 'gpt-6-luna', apiCost: 0, codexValue: .001346, tokens: 10 }
+      { id: 'gpt-api', name: 'gpt-api', estimatedCost: 0, tokens: 330 },
+      { id: 'gpt-codex', name: 'gpt-codex', estimatedCost: .016, tokens: 70 },
+      { id: 'gpt-6-luna', name: 'gpt-6-luna', estimatedCost: .001346, tokens: 10 }
     ],
-    clients: [{ id: 'open-code', name: 'OpenCode', apiCost: 0, codexValue: 0, tokens: 330 }]
+    clients: [{ id: 'open-code', name: 'OpenCode', estimatedCost: 0, tokens: 330 }]
   },
   requests: [
     { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
@@ -106,12 +106,16 @@ async function unlock(page: Page) {
 test('filters requests from a chart and inspects and pages through them with the keyboard', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
-  const chart = page.getByRole('region', { name: 'Cost over time' });
-  await expect(chart).toBeVisible();
+  const metric = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  await expect(metric.getByText('$0.02', { exact: true })).toBeVisible();
+  const chart = page.getByRole('region', { name: 'Estimated usage over time' });
   const firstBucket = chart.getByRole('button').first();
+  const secondBucket = chart.getByRole('button').nth(1);
+  await expect(secondBucket).toHaveAccessibleName(/Estimated usage \$0\.02$/);
+  await expect(secondBucket.locator('.bars > span')).toHaveCount(1);
   await firstBucket.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(chart.getByRole('button').nth(1)).toBeFocused();
+  await expect(secondBucket).toBeFocused();
   await page.keyboard.press('ArrowLeft');
   await expect(firstBucket).toBeFocused();
   await page.keyboard.press('Enter');
@@ -136,6 +140,10 @@ test('filters requests from a chart and inspects and pages through them with the
   await page.getByRole('button', { name: 'Clear chart time filter' }).click();
   await page.getByRole('button', { name: 'Next requests' }).click();
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
+  await page.getByRole('button', { name: /Details for gpt-codex/ }).press('Enter');
+  await expect(detail.getByText('Estimated usage', { exact: true })).toBeVisible();
+  await expect(detail.getByText('$0.02', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Previous requests' })).toBeEnabled();
   await page.getByRole('button', { name: 'Previous requests' }).click();
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBeNull();
@@ -153,25 +161,25 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
   }
 });
 
-test('shows the usage breakdown cost legend only in USD mode', async ({ page }) => {
+test('shows one estimated USD bar per model and switches units with the keyboard', async ({ page }) => {
   await mockAPI(page);
   await unlock(page);
   const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
-  const apiCost = breakdown.getByText('API cost', { exact: true });
-  const codexValue = breakdown.getByText('Codex value', { exact: true });
-  const usd = breakdown.getByRole('radio', { name: 'USD' });
+  const highestEstimate = breakdown.getByRole('button', { name: /gpt-codex/ });
+  const fills = highestEstimate.locator('.rank-track > span');
+  const usd = breakdown.getByRole('radio', { name: 'Est. USD' });
   const tokens = breakdown.getByRole('radio', { name: 'Tokens' });
 
-  await expect(apiCost).toBeVisible();
-  await expect(codexValue).toBeVisible();
+  await expect(breakdown.getByRole('button').first()).toHaveAccessibleName(/gpt-codex/);
+  await expect(highestEstimate.getByText('$0.02', { exact: true })).toBeVisible();
+  await expect(fills).toHaveCount(1);
+  await expect(fills).toHaveAttribute('style', /width: 100%/);
   await usd.press('ArrowRight');
   await expect(tokens).toBeChecked();
-  await expect(apiCost).toBeHidden();
-  await expect(codexValue).toBeHidden();
+  await expect(highestEstimate.getByText('70', { exact: true })).toBeVisible();
   await tokens.press('ArrowLeft');
   await expect(usd).toBeChecked();
-  await expect(apiCost).toBeVisible();
-  await expect(codexValue).toBeVisible();
+  await expect(highestEstimate.getByText('$0.02', { exact: true })).toBeVisible();
 });
 
 test('aligns usage bars with differently sized amounts and keeps rows keyboard-operable', async ({ page }) => {
@@ -213,7 +221,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await page.getByRole('option', { name: 'Codex subscription' }).click();
   await expect(page.getByRole('alert')).toHaveText('Could not load usage. Retry');
   await expect(apiRequest).not.toBeVisible();
-  await expect(page.getByRole('region', { name: 'Cost over time' })).not.toBeVisible();
+  await expect(page.getByRole('region', { name: 'Estimated usage over time' })).not.toBeVisible();
 
   failFilteredQuery = false;
   await page.getByRole('button', { name: 'Retry' }).click();
@@ -254,7 +262,7 @@ test('shows spaced date labels for both daily chart ranges on mobile', async ({ 
   await unlock(page);
   for (const [range, count] of [['7 days', 8], ['30 days', 31]] as const) {
     await page.getByRole('radio', { name: range }).click();
-    for (const name of ['Cost over time', 'Tokens over time']) {
+    for (const name of ['Estimated usage over time', 'Tokens over time']) {
       const chart = page.getByRole('region', { name });
       await expect(chart.getByRole('button')).toHaveCount(count);
       await expect(chart.locator('.chart-labels span:visible').filter({ hasText: /\S/ })).toHaveCount(4);

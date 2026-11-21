@@ -38,7 +38,7 @@ func TestBackgroundUsageUsesTheOriginalPricingDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Summary.APICost != 0.004 || data.Summary.InputTokens != 1000 {
+	if data.Summary.EstimatedCost != 0.004 || data.Summary.InputTokens != 1000 {
 		t.Fatalf("background request used the wrong rate: %+v", data.Summary)
 	}
 }
@@ -88,7 +88,7 @@ func TestBackgroundUsageRetainsCompletionWindowAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(data.Summary.APICost-.0156) > 1e-12 || data.Summary.InputTokens != 2000 {
+	if math.Abs(data.Summary.EstimatedCost-.0156) > 1e-12 || data.Summary.InputTokens != 2000 {
 		t.Fatalf("incorrect discounted background estimate: %+v", data.Summary)
 	}
 	for window, want := range map[string]float64{"2h": .7, "8h": .6} {

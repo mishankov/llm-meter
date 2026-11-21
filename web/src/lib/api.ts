@@ -56,15 +56,13 @@ export interface UsageRequest extends TokenCounts {
 
 export interface UsageBucket extends TokenCounts {
   start: string;
-  apiCost: number;
-  codexValue: number;
+  estimatedCost: number;
 }
 
 export interface UsageGroup {
   id: string;
   name: string;
-  apiCost: number;
-  codexValue: number;
+  estimatedCost: number;
   tokens: number;
 }
 

@@ -1,6 +1,6 @@
 # LLM Proxy
 
-A Go reverse proxy with a SvelteKit dashboard for tracking token usage across OpenAI-compatible clients and signed-in Codex sessions. The dashboard charts estimated API costs, values Codex subscription usage at API rates, and attributes requests to clients by their proxy keys.
+A Go reverse proxy with a SvelteKit dashboard for tracking token usage across OpenAI-compatible clients and signed-in Codex sessions. The dashboard shows estimated usage in USD and attributes requests to clients by their proxy keys.
 
 ## Run with Docker
 

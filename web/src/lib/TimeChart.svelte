@@ -15,7 +15,7 @@
   let firstBucket = $derived(buckets[0]?.start ?? '');
   let availableFocus = $derived(buckets.some((bucket) => bucket.start === focusedBucket) ? focusedBucket : firstBucket);
   let maximum = $derived(axisMaximum(Math.max(0, ...buckets.map((bucket) =>
-    kind === 'cost' ? Math.max(bucket.apiCost, bucket.codexValue) : tokens(bucket)
+    kind === 'cost' ? bucket.estimatedCost : tokens(bucket)
   ))));
   const maxLabels = $derived(Math.max(1, Math.min(6, Math.floor(chartWidth / 64))));
   const stride = $derived(Math.max(1, Math.ceil(buckets.length / maxLabels)));
@@ -50,7 +50,7 @@
 
   function describe(bucket: UsageBucket) {
     const values = kind === 'cost'
-      ? 'API cost ' + money(bucket.apiCost) + ', Codex value ' + money(bucket.codexValue)
+      ? 'Estimated usage ' + money(bucket.estimatedCost)
       : 'Uncached input ' + count(uncachedInput(bucket)) + ', cached input ' + count(bucket.cachedInputTokens) + ', output ' + count(bucket.outputTokens);
     return formatDateTime(bucket.start) + ' · ' + values;
   }
@@ -84,8 +84,7 @@
         >
           <span class="bars" aria-hidden="true">
             {#if kind === 'cost'}
-              <span class="bar api-color" style:height={height(bucket.apiCost)}></span>
-              <span class="bar codex-color" style:height={height(bucket.codexValue)}></span>
+              <span class="bar usage-color" style:height={height(bucket.estimatedCost)}></span>
             {:else}
               <span class="bar input-color" style:height={height(uncachedInput(bucket))}></span>
               <span class="bar cache-color" style:height={height(bucket.cachedInputTokens)}></span>
@@ -95,8 +94,7 @@
           <span aria-hidden="true" class="chart-tooltip" class:near-start={index < 2} class:near-end={index > buckets.length - 3}>
             <strong>{formatDateTime(bucket.start)}</strong>
             {#if kind === 'cost'}
-              <span>API <b>{money(bucket.apiCost)}</b></span>
-              <span>Codex <b>{money(bucket.codexValue)}</b></span>
+              <span>Estimated usage <b>{money(bucket.estimatedCost)}</b></span>
             {:else}
               <span>Uncached input <b>{count(uncachedInput(bucket))}</b></span>
               <span>Cached input <b>{count(bucket.cachedInputTokens)}</b></span>
@@ -127,10 +125,10 @@
   .chart-column { position: relative; appearance: none; background: transparent; border: 0; min-width: 0; padding: 0 2px; cursor: pointer; border-radius: 3px 3px 0 0; }
   .chart-column:hover,.chart-column[aria-pressed=true] { background: #ffffff08; }
   .chart-column[aria-pressed=true] { box-shadow: inset 0 -2px var(--accent); }
-  .bars { block-size: 100%; display: flex; align-items: end; justify-content: center; gap: 2px; pointer-events: none; }
-  .bar { display: inline-block; inline-size: 48%; max-inline-size: 24px; border-radius: 2px 2px 0 0; }
-  .stacked .bars { flex-direction: column-reverse; justify-content: flex-start; align-items: center; gap: 0; }
-  .stacked .bar { inline-size: 74%; max-inline-size: 44px; border-radius: 0; }
+  .bars { block-size: 100%; display: flex; align-items: end; justify-content: center; pointer-events: none; }
+  .bar { display: inline-block; inline-size: 74%; max-inline-size: 44px; border-radius: 2px 2px 0 0; }
+  .stacked .bars { flex-direction: column-reverse; justify-content: flex-start; align-items: center; }
+  .stacked .bar { border-radius: 0; }
   .chart-tooltip { display: none; min-inline-size: 150px; white-space: nowrap; position: absolute; z-index: 2; inset: 7px auto auto 50%; transform: translateX(-50%); text-align: start; padding: 9px 10px; border: 1px solid var(--strong-line); background: var(--surface-raised); border-radius: 7px; box-shadow: 0 8px 26px #0007; color: var(--muted); font-size: 11px; pointer-events: none; }
   .chart-tooltip strong { color: var(--text); font-size: 11px; font-weight: 600; }
   .chart-tooltip span { display: flex; justify-content: space-between; gap: 14px; }
