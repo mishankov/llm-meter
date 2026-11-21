@@ -21,6 +21,19 @@
       "commit": "81a945db15560a2e2f052fbda05749f37cf62993",
       "sha256": "66d196ad5eb9d00f9114b5e0d43ecf77d5e57597f9cf11a61460274994c43972"
     },
+    "impeccable": {
+      "commit": "b49177d32788f2dc585c42831d845dacf1ebed2c",
+      "sha256": "100803e6091f6f0033dc4e6f7cfbcdca8aa86473bd031159bcc3d4ec8dda42ec",
+      "release": "skill-v4.10.0",
+      "source": {
+        "repository": "https://github.com/pbakaus/impeccable.git",
+        "path": ".agents/skills/impeccable",
+        "include": [
+          "LICENSE",
+          "NOTICE.md"
+        ]
+      }
+    },
     "implement": {
       "commit": "81a945db15560a2e2f052fbda05749f37cf62993",
       "sha256": "f18dbf231e53b930e68f7f183260d6a0a16ec53f3a34694b1853baac001d7734"
