@@ -61,7 +61,7 @@ export function formatTimeWindow(value: string, hours: number) {
 }
 
 export const uncachedInput = (value: TokenCounts) =>
-  Math.max(0, value.inputTokens - value.cachedInputTokens);
+  Math.max(0, value.inputTokens - value.cachedInputTokens - (value.cacheWriteTokens ?? 0));
 export const tokens = (value: TokenCounts) => value.inputTokens + value.outputTokens;
 export const unpricedBucket = (value: UsageBucket) => (value.requestCount ?? 0) > 0 && value.pricedRequestCount === 0;
 

@@ -11,8 +11,6 @@
   import { Input } from '@ui-sdk/svelte/input';
   import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../lib/api';
   import { guardEnter } from '../lib/format';
-  import UsageView from '../lib/UsageView.svelte';
-  import ClientsView from '../lib/ClientsView.svelte';
   import RecoveryNotice from '../lib/RecoveryNotice.svelte';
 
   const defaultFilters = { range: '24h', source: '', client: '', model: '', bucket: '', outcome: '' as RequestOutcome };
@@ -306,6 +304,13 @@
   }
 </script>
 
+{#snippet screenLoadError(name: string)}
+  <RecoveryNotice
+    problem={{ title: 'Could not load ' + name, detail: 'Reload the dashboard to try opening this screen again.' }}
+    retry={() => window.location.reload()} retryLabel="Reload dashboard"
+  />
+{/snippet}
+
 <svelte:head>
   <title>LLM Proxy</title>
   <meta name="description" content="OpenAI API and Codex usage dashboard." />
@@ -365,33 +370,45 @@
     <main id="content" class="content" tabindex="-1">
       {#if authError}<RecoveryNotice problem={authError} />{/if}
       {#if screen === 'usage'}
-        <UsageView
-          bind:chartMetric
-          data={usageOverview?.data ?? null}
-          filterOptions={overviewResult?.data.filters}
-          {requestPage}
-          {loadingScope}
-          {online}
-          {overviewError}
-          {requestError}
-          updatedAt={usageOverview?.updatedAt ?? ''}
-          {...filters}
-          canPrevious={cursors.length > 1}
-          pageNumber={cursors.length}
-          update={filtersChanged}
-          clearFilters={resetFilters}
-          canUndoReset={resetSnapshot !== null}
-          {undoFilters}
-          focusRequests={requestFocusHash !== null}
-          onRequestFocus={() => { requestFocusHash = null; }}
-          refresh={refreshUsage}
-          {retryRequests}
-          onPrevious={() => cursors = cursors.slice(0, -1)}
-          onNext={() => { if (requestPage?.nextCursor) cursors = [...cursors, requestPage.nextCursor]; }}
-        />
+        {#await import('../lib/UsageView.svelte')}
+          <p class="muted" role="status">Opening usage…</p>
+        {:then { default: UsageView }}
+          <UsageView
+            bind:chartMetric
+            data={usageOverview?.data ?? null}
+            filterOptions={overviewResult?.data.filters}
+            {requestPage}
+            {loadingScope}
+            {online}
+            {overviewError}
+            {requestError}
+            updatedAt={usageOverview?.updatedAt ?? ''}
+            {...filters}
+            canPrevious={cursors.length > 1}
+            pageNumber={cursors.length}
+            update={filtersChanged}
+            clearFilters={resetFilters}
+            canUndoReset={resetSnapshot !== null}
+            {undoFilters}
+            focusRequests={requestFocusHash !== null}
+            onRequestFocus={() => { requestFocusHash = null; }}
+            refresh={refreshUsage}
+            {retryRequests}
+            onPrevious={() => cursors = cursors.slice(0, -1)}
+            onNext={() => { if (requestPage?.nextCursor) cursors = [...cursors, requestPage.nextCursor]; }}
+          />
+        {:catch}
+          {@render screenLoadError('usage')}
+        {/await}
       {/if}
       {#if screen === 'clients' || keyDialogOpen}
-        <ClientsView active={screen === 'clients'} {clientId} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
+        {#await import('../lib/ClientsView.svelte')}
+          <p class="muted" role="status">Opening clients…</p>
+        {:then { default: ClientsView }}
+          <ClientsView active={screen === 'clients'} {clientId} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
+        {:catch}
+          {@render screenLoadError('clients')}
+        {/await}
       {/if}
     </main>
   </div>

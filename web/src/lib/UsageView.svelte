@@ -10,7 +10,7 @@
   import Filter from './Filter.svelte';
   import RequestList from './RequestList.svelte';
   import RecoveryNotice from './RecoveryNotice.svelte';
-  import TimeChart from './TimeChart.svelte';
+  import TimeChart, { tokenSeries } from './TimeChart.svelte';
 
   type ChartMetric = 'cost' | 'tokens' | 'compare';
 
@@ -290,9 +290,9 @@
           <header>
             {#if chartMetric === 'compare'}<h3 id="token-chart-title">{chartTitles.tokens}</h3>{/if}
             <div class="legend">
-              <span><i class="input-color"></i>Uncached input</span>
-              <span><i class="cache-color"></i>Cached input</span>
-              <span><i class="output-color"></i>Output</span>
+              {#each tokenSeries as series (series.key)}
+                <span><i class={series.key + '-color'} data-series={series.key} aria-hidden="true"></i>{series.label}</span>
+              {/each}
             </div>
           </header>
           <TimeChart buckets={data.buckets} kind="tokens" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
@@ -377,6 +377,7 @@
   .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
   .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
   .metrics, .timeline, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .timeline { --cache-write: #72c9dc; }
   .filters { align-items: flex-end; }
   .filter-field { display: grid; gap: 4px; min-inline-size: 0; }
   .filter-field > span { color: var(--muted); font-size: 12px; }
@@ -408,6 +409,7 @@
   .chart-section h3 + .legend { margin-block-start: 6px; }
   .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
+  .legend i[data-series=cache-write] { background: var(--cache-write); }
   .legend .unpriced-mark { block-size: 0; inline-size: 14px; border-block-end: 2px dotted var(--muted); }
   .chart-actions, .chart-selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .chart-actions { align-items: flex-end; margin-block-start: 12px; }
@@ -435,6 +437,19 @@
   .allowance-heading span { color: var(--codex-light); white-space: nowrap; }
   :global(.allowance-track) { background: var(--line); border-radius: 4px; overflow: hidden; block-size: 6px; }
   :global(.allowance-indicator) { display: block; block-size: 100%; background: var(--codex); width: var(--meter-value, 0%); }
+  @media (forced-colors: active) {
+    .timeline {
+      --input: CanvasText;
+      --cache: repeating-linear-gradient(135deg, CanvasText 0 1px, Canvas 1px 3px);
+      --cache-write: repeating-linear-gradient(0deg, CanvasText 0 1px, Canvas 1px 3px);
+      --output: repeating-linear-gradient(90deg, CanvasText 0 1px, Canvas 1px 3px);
+    }
+    .legend i[data-series] { forced-color-adjust: none; }
+    .rank-track, :global(.allowance-track) { border: 1px solid CanvasText; }
+    .rank-track .usage-color, :global(.allowance-indicator) { forced-color-adjust: none; background: CanvasText; }
+    .rank-item[aria-pressed=true]:not(:disabled) { position: relative; }
+    .rank-item[aria-pressed=true]:not(:disabled)::after { content: ''; position: absolute; inset: 0; border: 1px solid Highlight; border-radius: inherit; pointer-events: none; }
+  }
   @media (max-width: 900px) {
     .chart-row.compare, .secondary-row.with-allowance { grid-template-columns: minmax(0, 1fr); gap: var(--section-space); }
     .compare .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 0; border-block-start: 1px solid var(--line); padding: var(--section-space) 0 0; }

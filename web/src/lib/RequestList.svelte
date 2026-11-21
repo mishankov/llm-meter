@@ -8,7 +8,7 @@
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
   import type { DashboardProblem, RequestOutcome, UsageRequest } from './api';
   import Filter from './Filter.svelte';
-  import { count, formatDateTime, formatDay, formatTime, guardEnter, money, requestStatusGuidance, requestStatusLabel, tokens } from './format';
+  import { count, formatDateTime, formatDay, formatTime, guardEnter, money, requestStatusGuidance, requestStatusLabel, tokens, uncachedInput } from './format';
   import RecoveryNotice from './RecoveryNotice.svelte';
 
   interface Props {
@@ -251,7 +251,7 @@
         <h3 class="details-heading">{selected.rates ? 'Usage and rates' : 'Token usage'}</h3>
         <div class="detail-rates" class:with-rates={selected.rates}>
           <span></span><span>Tokens</span>{#if selected.rates}<span>USD / 1M</span>{/if}
-          <span>Uncached input</span><b>{count(Math.max(0, selected.inputTokens - selected.cachedInputTokens - (selected.cacheWriteTokens ?? 0)))}</b>{#if selected.rates}<b>{rate(selected.rates.input)}</b>{/if}
+          <span>Uncached input</span><b>{count(uncachedInput(selected))}</b>{#if selected.rates}<b>{rate(selected.rates.input)}</b>{/if}
           <span>Cached input</span><b>{count(selected.cachedInputTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.cachedInput)}</b>{/if}
           {#if (selected.cacheWriteTokens ?? 0) > (selected.cacheWrite12hTokens ?? 0)}
             <span>30-minute cache writes</span><b>{count((selected.cacheWriteTokens ?? 0) - (selected.cacheWrite12hTokens ?? 0))}</b>{#if selected.rates}<b>{rate(selected.rates.cacheWrite)}</b>{/if}
@@ -306,11 +306,16 @@
     .wide-only { display: none; }
     .compact-only { display: inline; }
     th:first-child { inline-size: 25%; }
-    .amount-cell, .model-cell { overflow-wrap: anywhere; }
+    .amount-cell, .request-source { overflow-wrap: anywhere; }
+    .model-cell :is(.clip, .request-client) { white-space: nowrap; }
     .compact-time, .compact-status, div.compact-only { display: block; }
     .compact-status { margin-block-start: 3px; overflow-wrap: anywhere; }
     .details-column { inline-size: 68px; }
     :global(.row-details) { min-block-size: 44px; min-inline-size: 54px; padding-inline: 6px; }
     :global(.row-details > svg) { display: none; }
+  }
+  @media (max-width: 360px) {
+    th:first-child { inline-size: 22%; }
+    th:nth-last-child(2) { inline-size: 33%; }
   }
 </style>
