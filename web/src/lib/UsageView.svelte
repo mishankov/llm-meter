@@ -213,8 +213,8 @@
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
   .secondary-row.with-allowance { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--section-space); }
   .rank-controls { display: flex; gap: 6px; align-items: center; }
-  .rank-list { display: grid; gap: 4px; }
-  .rank-item { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); align-items: center; text-align: start; gap: 11px; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
+  .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
+  .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
   .rank-item:is(:hover, [aria-pressed=true]):not(:disabled) { background: var(--hover); }
   .rank-item:disabled { cursor: default; }
   .rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
