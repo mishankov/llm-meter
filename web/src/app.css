@@ -16,13 +16,12 @@
   --muted: #a4aebd;
   --hover: #232a34;
   --accent: #a4b8ff;
-  --api: #7397fa;
   --api-light: #a6bbff;
   --codex: #53c9ac;
   --codex-light: #7de2c8;
-  --input: #7f9cfa;
+  --input: #8290a7;
   --cache: #a594f6;
-  --output: #5bc5ac;
+  --output: #e6b66c;
   --success: #7ad8b4;
   --danger: #ffa3a6;
   --gap: 16px;
@@ -46,8 +45,7 @@ kbd { padding: 0 4px; border: 1px solid currentColor; border-radius: 4px; font: 
 .sr-only { position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .muted { color: var(--muted); }
 .numeric { font-variant-numeric: tabular-nums; }
-.api-color { background: var(--api); }
-.codex-color { background: var(--codex); }
+.usage-color { background: var(--muted); }
 .input-color { background: var(--input); }
 .cache-color { background: var(--cache); }
 .output-color { background: var(--output); }

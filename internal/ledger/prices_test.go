@@ -69,7 +69,7 @@ func TestPricingSnapshotSurvivesARefreshFailureAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Requests) != 2 || data.Summary.APICost != 0.0005 {
+	if len(data.Requests) != 2 || data.Summary.EstimatedCost != 0.0005 {
 		t.Fatalf("unexpected cost totals: %+v", data.Summary)
 	}
 	reported, estimate := data.Requests[0], data.Requests[1]

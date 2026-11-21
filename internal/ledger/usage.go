@@ -22,8 +22,7 @@ type Filter struct {
 }
 
 type Totals struct {
-	APICost           float64 `json:"apiCost"`
-	CodexValue        float64 `json:"codexValue"`
+	EstimatedCost     float64 `json:"estimatedCost"`
 	InputTokens       int64   `json:"inputTokens"`
 	CachedInputTokens int64   `json:"cachedInputTokens"`
 	CacheWriteTokens  int64   `json:"cacheWriteTokens"`
@@ -37,11 +36,10 @@ type Bucket struct {
 }
 
 type Group struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	APICost    float64 `json:"apiCost"`
-	CodexValue float64 `json:"codexValue"`
-	Tokens     int64   `json:"tokens"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	EstimatedCost float64 `json:"estimatedCost"`
+	Tokens        int64   `json:"tokens"`
 }
 
 type Request struct {
@@ -134,13 +132,13 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 	for at := first; !at.After(filter.End); at = at.Add(filter.Interval) {
 		result.Buckets = append(result.Buckets, Bucket{Start: at})
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.time / ?, r.source, r.client_id, c.name, r.model,
+	rows, err := s.db.QueryContext(ctx, `SELECT r.time / ?, r.client_id, c.name, r.model,
         COALESCE(SUM(r.cost), 0), SUM(CASE WHEN r.usage_available THEN r.input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cached_input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cache_write_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.output_tokens ELSE 0 END), COUNT(*)
         FROM requests r JOIN clients c ON c.id = r.client_id`+where+
-		` GROUP BY 1, 2, 3, 4, 5`, append([]any{filter.Interval.Milliseconds()}, args...)...)
+		` GROUP BY 1, 2, 3, 4`, append([]any{filter.Interval.Milliseconds()}, args...)...)
 	if err != nil {
 		return err
 	}
@@ -148,17 +146,11 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 	models, clients := make(map[string]Group), make(map[string]Group)
 	for rows.Next() {
 		var timeBucket int64
-		var source, client, name, model string
-		var cost float64
+		var client, name, model string
 		var totals Totals
-		if err := rows.Scan(&timeBucket, &source, &client, &name, &model, &cost, &totals.InputTokens,
+		if err := rows.Scan(&timeBucket, &client, &name, &model, &totals.EstimatedCost, &totals.InputTokens,
 			&totals.CachedInputTokens, &totals.CacheWriteTokens, &totals.OutputTokens, &totals.RequestCount); err != nil {
 			return err
-		}
-		if source == "codex" {
-			totals.CodexValue = cost
-		} else {
-			totals.APICost = cost
 		}
 		index := timeBucket - first.UnixMilli()/filter.Interval.Milliseconds()
 		result.Buckets[index].Totals.add(totals)
@@ -174,8 +166,7 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 }
 
 func (t *Totals) add(other Totals) {
-	t.APICost += other.APICost
-	t.CodexValue += other.CodexValue
+	t.EstimatedCost += other.EstimatedCost
 	t.InputTokens += other.InputTokens
 	t.CachedInputTokens += other.CachedInputTokens
 	t.CacheWriteTokens += other.CacheWriteTokens
@@ -186,8 +177,7 @@ func (t *Totals) add(other Totals) {
 func addGroup(groups map[string]Group, id, name string, totals Totals) {
 	group := groups[id]
 	group.ID, group.Name = id, name
-	group.APICost += totals.APICost
-	group.CodexValue += totals.CodexValue
+	group.EstimatedCost += totals.EstimatedCost
 	group.Tokens += totals.InputTokens + totals.OutputTokens
 	groups[id] = group
 }

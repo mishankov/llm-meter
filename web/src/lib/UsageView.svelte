@@ -46,7 +46,7 @@
   ];
 
   function groupValue(group: UsageGroup) {
-    return unit === 'tokens' ? group.tokens : group.apiCost + group.codexValue;
+    return unit === 'tokens' ? group.tokens : group.estimatedCost;
   }
 
   function selectGroup(group: UsageGroup) {
@@ -54,11 +54,6 @@
     else update('client', client === group.id ? '' : group.id);
   }
 </script>
-
-{#snippet costLegend()}
-  <span><i class="api-color" aria-hidden="true"></i>API cost</span>
-  <span><i class="codex-color" aria-hidden="true"></i>Codex value</span>
-{/snippet}
 
 <header class="page-head">
   <div>
@@ -90,15 +85,9 @@
   {#if !error}<div class="empty-state" role="status">Loading usage…</div>{/if}
 {:else}
   <div class="metrics">
-    <section class="metric" aria-label="Estimated API cost">
-      <div class="metric-label">Estimated API cost</div>
-      <strong>{money(data.summary.apiCost)}</strong>
-      <span class="metric-caption">API-key requests</span>
-    </section>
-    <section class="metric" aria-label="Codex value at API rates">
-      <div class="metric-label">Codex value at API rates</div>
-      <strong>{money(data.summary.codexValue)}</strong>
-      <span class="metric-caption">Subscription requests</span>
+    <section class="metric" aria-label="Estimated usage">
+      <div class="metric-label">Estimated usage</div>
+      <strong>{money(data.summary.estimatedCost)}</strong>
     </section>
     <section class="metric" aria-label="Total tokens">
       <div class="metric-label">Total tokens</div>
@@ -109,19 +98,18 @@
 
   <div class="chart-row">
     <section class="chart-section" aria-labelledby="cost-chart-title">
-      <h2 id="cost-chart-title">Cost over time</h2>
-      <div class="legend">
-        {@render costLegend()}
-      </div>
+      <h2 id="cost-chart-title">Estimated usage over time</h2>
       <TimeChart buckets={data.buckets} kind="cost" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
     </section>
     <section class="chart-section" aria-labelledby="token-chart-title">
-      <h2 id="token-chart-title">Tokens over time</h2>
-      <div class="legend">
-        <span><i class="input-color"></i>Uncached input</span>
-        <span><i class="cache-color"></i>Cached input</span>
-        <span><i class="output-color"></i>Output</span>
-      </div>
+      <header>
+        <h2 id="token-chart-title">Tokens over time</h2>
+        <div class="legend">
+          <span><i class="input-color"></i>Uncached input</span>
+          <span><i class="cache-color"></i>Cached input</span>
+          <span><i class="output-color"></i>Output</span>
+        </div>
+      </header>
       <TimeChart buckets={data.buckets} kind="tokens" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
     </section>
   </div>
@@ -136,19 +124,15 @@
             <SegmentedControlItem value="clients">Client</SegmentedControlItem>
           </SegmentedControl>
           <SegmentedControl class="segmented small" aria-label="Breakdown unit" value={unit} onValueChange={(value) => { if (value) unit = value; }}>
-            <SegmentedControlItem value="dollars">USD</SegmentedControlItem>
+            <SegmentedControlItem value="dollars">Est. USD</SegmentedControlItem>
             <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
           </SegmentedControl>
         </div>
       </header>
       {#if groups.length}
-        {#if unit === 'dollars'}
-          <div class="legend rank-legend">
-            {@render costLegend()}
-          </div>
-        {/if}
         <div class="rank-list">
           {#each groups as group (group.id)}
+            {@const value = groupValue(group)}
             <button
               type="button"
               class="rank-item"
@@ -160,15 +144,10 @@
               <span class="rank-name" title={group.name}>{group.name}</span>
               <span class="rank-track" aria-hidden="true">
                 {#if maxRank > 0}
-                  {#if unit === 'tokens'}
-                    <span class="input-color" style:width={(100 * group.tokens / maxRank) + '%'}></span>
-                  {:else}
-                    <span class="api-color" style:width={(100 * group.apiCost / maxRank) + '%'}></span>
-                    <span class="codex-color" style:width={(100 * group.codexValue / maxRank) + '%'}></span>
-                  {/if}
+                  <span class="usage-color" style:width={(100 * value / maxRank) + '%'}></span>
                 {/if}
               </span>
-              <strong>{unit === 'tokens' ? compactCount(group.tokens) : money(groupValue(group))}</strong>
+              <strong>{unit === 'tokens' ? compactCount(value) : money(value)}</strong>
             </button>
           {/each}
         </div>
@@ -208,21 +187,20 @@
 <style>
   .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; }
   .metrics, .chart-row, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
-  .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-block-end: 6px; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-block-end: 6px; }
   .metric { display: flex; flex-direction: column; align-items: flex-start; padding-inline-end: var(--section-space); }
   .metric + .metric, .chart-section + .chart-section, .allowance-section { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
   .metric-label { color: var(--muted); font-size: 12px; }
   .metric strong { display: block; margin: 4px 0 2px; font-size: clamp(22px, 3.2vw, 36px); font-weight: 620; letter-spacing: -.05em; line-height: 1.2; font-variant-numeric: tabular-nums; }
   .metric-caption { color: var(--muted); font-size: 11px; }
   .chart-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .chart-section { min-inline-size: 0; }
+  .chart-section { display: grid; grid-template-rows: 1fr auto; gap: 17px; min-inline-size: 0; }
   .chart-section:first-child { padding-inline-end: var(--section-space); }
-  .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 8px 0 17px; }
+  .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-block-start: 8px; }
   .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
   .secondary-row.with-allowance { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--section-space); }
   .rank-controls { display: flex; gap: 6px; align-items: center; }
-  .rank-legend { margin-block: 0 8px; }
   .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
   .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
   .rank-item:is(:hover, [aria-pressed=true]):not(:disabled) { background: var(--hover); }

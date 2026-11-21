@@ -38,10 +38,9 @@
   }
 
   function costLabel(request: UsageRequest) {
-    if (request.source === 'codex') return 'Value at API rates';
     if (request.priceSource === 'provider-reported') return 'Reported cost';
     if (request.priceSource === 'provider-list') return 'Provider list value';
-    return 'Estimated cost';
+    return 'Estimated usage';
   }
 
   const rate = (n: number | null | undefined) => n == null ? '—' : money(n);

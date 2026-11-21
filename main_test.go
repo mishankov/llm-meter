@@ -25,7 +25,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 		if r.Header.Get("X-LLM-Proxy-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
 			t.Errorf("incorrect authorization handling for %s", r.URL.Path)
 		}
-		id := "resp_api"
+		id, outputTokens := "resp_api", 30
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/responses/resp_background" {
 			_, _ = io.WriteString(w, `{"id":"resp_background","model":"gpt-6.2-sol","status":"completed","usage":{"input_tokens":12000,"output_tokens":30,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,"cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}}}`)
@@ -39,12 +39,13 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 			}
 		case "/backend-api/codex/responses":
 			id = "resp_codex"
+			outputTokens = 40
 		default:
 			t.Errorf("unexpected upstream route %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": id, "model": "gpt-6.2-sol", "usage": map[string]any{
-				"input_tokens": 120, "input_tokens_details": map[string]int{"cached_tokens": 20}, "output_tokens": 30,
+				"input_tokens": 120, "input_tokens_details": map[string]int{"cached_tokens": 20}, "output_tokens": outputTokens,
 			},
 		})
 	}))
@@ -127,13 +128,36 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	if err := json.Unmarshal(body, &dashboard); err != nil {
 		t.Fatal(err)
 	}
+	const combinedEstimate = 0.001104
 	summary := dashboard.Summary
-	if summary.RequestCount != 2 || summary.InputTokens != 240 || summary.CachedInputTokens != 40 || summary.OutputTokens != 60 ||
-		math.Abs(summary.APICost-0.000502) > 1e-10 || math.Abs(summary.CodexValue-0.000502) > 1e-10 {
+	if summary.RequestCount != 2 || summary.InputTokens != 240 || summary.CachedInputTokens != 40 || summary.OutputTokens != 70 ||
+		math.Abs(summary.EstimatedCost-combinedEstimate) > 1e-10 {
 		t.Fatalf("incorrect usage summary: %+v", summary)
+	}
+	var bucketEstimate float64
+	for _, bucket := range dashboard.Buckets {
+		bucketEstimate += bucket.EstimatedCost
+	}
+	if math.Abs(bucketEstimate-combinedEstimate) > 1e-10 {
+		t.Fatalf("incorrect usage estimate across time buckets: %g", bucketEstimate)
+	}
+	for _, groups := range [][]ledger.Group{dashboard.Groups.Models, dashboard.Groups.Clients} {
+		if len(groups) != 1 || math.Abs(groups[0].EstimatedCost-combinedEstimate) > 1e-10 {
+			t.Fatalf("incorrect grouped usage estimate: %+v", groups)
+		}
 	}
 	if len(dashboard.Requests) != 2 || dashboard.Requests[0].Client != "Fixture Client" {
 		t.Fatalf("incorrect request attribution: %+v", dashboard.Requests)
+	}
+	for source, want := range map[string]float64{"api": 0.000502, "codex": 0.000602} {
+		var filtered ledger.Dashboard
+		body = request("GET", "/api/usage?client="+created.Client.ID+"&source="+source, "", "", 200)
+		if err := json.Unmarshal(body, &filtered); err != nil {
+			t.Fatal(err)
+		}
+		if filtered.Summary.RequestCount != 1 || math.Abs(filtered.Summary.EstimatedCost-want) > 1e-10 {
+			t.Fatalf("incorrect usage summary filtered by %s: %+v", source, filtered.Summary)
+		}
 	}
 
 	var poller struct{ Key ledger.Key }
@@ -148,7 +172,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	if err := json.Unmarshal(body, &dashboard); err != nil {
 		t.Fatal(err)
 	}
-	if dashboard.Summary.InputTokens != 12240 || math.Abs(dashboard.Summary.APICost-0.030702) > 1e-10 {
+	if dashboard.Summary.InputTokens != 12240 || math.Abs(dashboard.Summary.EstimatedCost-0.031304) > 1e-10 {
 		t.Fatalf("background usage was not priced exactly once on its originating client: %+v", dashboard.Summary)
 	}
 	if r := dashboard.Requests[0]; r.CacheWriteTokens != 7000 || r.CacheWrite12hTokens != 4000 || r.Rates == nil || r.Rates.CacheWrite12h != 5 {
