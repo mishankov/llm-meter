@@ -49,6 +49,7 @@ func New(store *ledger.Store, token string, secureCookie bool, log *slog.Logger)
 	mux.HandleFunc("POST /api/clients/{client}/keys", s.requireSession(s.createKey))
 	mux.HandleFunc("DELETE /api/clients/{client}/keys/{key}", s.requireSession(s.revokeKey))
 	mux.HandleFunc("GET /api/usage", s.requireSession(s.usage))
+	mux.HandleFunc("GET /api/usage/requests", s.requireSession(s.usageRequests))
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -191,11 +192,26 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+func (s *server) usageRequests(w http.ResponseWriter, r *http.Request) {
+	filter, err := usageFilter(r, s.now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := s.store.Requests(r.Context(), filter)
+	if err != nil {
+		s.failed(w, "read dashboard requests", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	values := r.URL.Query()
 	f := ledger.Filter{
 		End: now, Interval: time.Hour,
 		Source: values.Get("source"), Client: values.Get("client"), Model: values.Get("model"),
+		Outcome: values.Get("outcome"),
 	}
 	switch values.Get("range") {
 	case "", "24h":
@@ -211,6 +227,11 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	}
 	if f.Source != "" && f.Source != "api" && f.Source != "codex" {
 		return f, errors.New("Invalid usage source")
+	}
+	switch f.Outcome {
+	case "", ledger.OutcomeSucceeded, ledger.OutcomeFailed:
+	default:
+		return f, errors.New("Invalid request outcome")
 	}
 	if len(f.Client) > 100 || len(f.Model) > 500 {
 		return f, errors.New("Invalid client or model filter")

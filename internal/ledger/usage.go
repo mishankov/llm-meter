@@ -17,17 +17,24 @@ type Filter struct {
 	Start, End            time.Time
 	Interval              time.Duration
 	Source, Client, Model string
+	Outcome               string
 	Bucket                *time.Time
 	Cursor                int64
 }
 
+const (
+	OutcomeSucceeded = "succeeded"
+	OutcomeFailed    = "failed"
+)
+
 type Totals struct {
-	EstimatedCost     float64 `json:"estimatedCost"`
-	InputTokens       int64   `json:"inputTokens"`
-	CachedInputTokens int64   `json:"cachedInputTokens"`
-	CacheWriteTokens  int64   `json:"cacheWriteTokens"`
-	OutputTokens      int64   `json:"outputTokens"`
-	RequestCount      int64   `json:"requestCount"`
+	EstimatedCost      float64 `json:"estimatedCost"`
+	InputTokens        int64   `json:"inputTokens"`
+	CachedInputTokens  int64   `json:"cachedInputTokens"`
+	CacheWriteTokens   int64   `json:"cacheWriteTokens"`
+	OutputTokens       int64   `json:"outputTokens"`
+	RequestCount       int64   `json:"requestCount"`
+	PricedRequestCount int64   `json:"pricedRequestCount"`
 }
 
 type Bucket struct {
@@ -36,10 +43,12 @@ type Bucket struct {
 }
 
 type Group struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	EstimatedCost float64 `json:"estimatedCost"`
-	Tokens        int64   `json:"tokens"`
+	ID                 string  `json:"id"`
+	Name               string  `json:"name"`
+	EstimatedCost      float64 `json:"estimatedCost"`
+	Tokens             int64   `json:"tokens"`
+	RequestCount       int64   `json:"requestCount"`
+	PricedRequestCount int64   `json:"pricedRequestCount"`
 }
 
 type Request struct {
@@ -74,6 +83,11 @@ type Allowance struct {
 	ResetsAt         *time.Time `json:"resetsAt"`
 }
 
+type RequestPage struct {
+	Requests   []Request `json:"requests"`
+	NextCursor *string   `json:"nextCursor"`
+}
+
 type Dashboard struct {
 	Summary Totals   `json:"summary"`
 	Buckets []Bucket `json:"buckets"`
@@ -81,10 +95,9 @@ type Dashboard struct {
 		Models  []Group `json:"models"`
 		Clients []Group `json:"clients"`
 	} `json:"groups"`
-	Requests   []Request   `json:"requests"`
-	NextCursor *string     `json:"nextCursor"`
-	Allowance  []Allowance `json:"allowance"`
-	Filters    struct {
+	RequestPage
+	Allowance []Allowance `json:"allowance"`
+	Filters   struct {
 		Models  []string `json:"models"`
 		Clients []Group  `json:"clients"`
 	} `json:"filters"`
@@ -98,7 +111,7 @@ func (s *Store) Dashboard(ctx context.Context, filter Filter) (Dashboard, error)
 	if err := s.collectTotals(ctx, filter, where, args, &result); err != nil {
 		return result, err
 	}
-	if err := s.collectRequests(ctx, filter, where, args, &result); err != nil {
+	if err := s.collectRequests(ctx, filter, where, args, &result.RequestPage); err != nil {
 		return result, err
 	}
 	if err := s.collectFilters(ctx, filter, &result); err != nil {
@@ -106,6 +119,13 @@ func (s *Store) Dashboard(ctx context.Context, filter Filter) (Dashboard, error)
 	}
 	var err error
 	result.Allowance, err = s.allowance(ctx, filter)
+	return result, err
+}
+
+func (s *Store) Requests(ctx context.Context, filter Filter) (RequestPage, error) {
+	var result RequestPage
+	where, args := filter.conditions()
+	err := s.collectRequests(ctx, filter, where, args, &result)
 	return result, err
 }
 
@@ -136,7 +156,7 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
         COALESCE(SUM(r.cost), 0), SUM(CASE WHEN r.usage_available THEN r.input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cached_input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cache_write_tokens ELSE 0 END),
-        SUM(CASE WHEN r.usage_available THEN r.output_tokens ELSE 0 END), COUNT(*)
+        SUM(CASE WHEN r.usage_available THEN r.output_tokens ELSE 0 END), COUNT(*), COUNT(r.cost)
         FROM requests r JOIN clients c ON c.id = r.client_id`+where+
 		` GROUP BY 1, 2, 3, 4`, append([]any{filter.Interval.Milliseconds()}, args...)...)
 	if err != nil {
@@ -149,7 +169,7 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 		var client, name, model string
 		var totals Totals
 		if err := rows.Scan(&timeBucket, &client, &name, &model, &totals.EstimatedCost, &totals.InputTokens,
-			&totals.CachedInputTokens, &totals.CacheWriteTokens, &totals.OutputTokens, &totals.RequestCount); err != nil {
+			&totals.CachedInputTokens, &totals.CacheWriteTokens, &totals.OutputTokens, &totals.RequestCount, &totals.PricedRequestCount); err != nil {
 			return err
 		}
 		index := timeBucket - first.UnixMilli()/filter.Interval.Milliseconds()
@@ -172,6 +192,7 @@ func (t *Totals) add(other Totals) {
 	t.CacheWriteTokens += other.CacheWriteTokens
 	t.OutputTokens += other.OutputTokens
 	t.RequestCount += other.RequestCount
+	t.PricedRequestCount += other.PricedRequestCount
 }
 
 func addGroup(groups map[string]Group, id, name string, totals Totals) {
@@ -179,6 +200,8 @@ func addGroup(groups map[string]Group, id, name string, totals Totals) {
 	group.ID, group.Name = id, name
 	group.EstimatedCost += totals.EstimatedCost
 	group.Tokens += totals.InputTokens + totals.OutputTokens
+	group.RequestCount += totals.RequestCount
+	group.PricedRequestCount += totals.PricedRequestCount
 	groups[id] = group
 }
 
@@ -193,7 +216,13 @@ func groupList(groups map[string]Group) []Group {
 	return list
 }
 
-func (s *Store) collectRequests(ctx context.Context, filter Filter, where string, args []any, result *Dashboard) error {
+func (s *Store) collectRequests(ctx context.Context, filter Filter, where string, args []any, result *RequestPage) error {
+	switch filter.Outcome {
+	case OutcomeSucceeded:
+		where += ` AND r.status BETWEEN 200 AND 299`
+	case OutcomeFailed:
+		where += ` AND (r.status = 0 OR r.status >= 400)`
+	}
 	if filter.Bucket != nil {
 		where += ` AND r.time >= ? AND r.time < ?`
 		args = append(args, filter.Bucket.UnixMilli(), filter.Bucket.Add(filter.Interval).UnixMilli())
