@@ -153,6 +153,27 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
   }
 });
 
+test('shows the usage breakdown cost legend only in USD mode', async ({ page }) => {
+  await mockAPI(page);
+  await unlock(page);
+  const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
+  const apiCost = breakdown.getByText('API cost', { exact: true });
+  const codexValue = breakdown.getByText('Codex value', { exact: true });
+  const usd = breakdown.getByRole('radio', { name: 'USD' });
+  const tokens = breakdown.getByRole('radio', { name: 'Tokens' });
+
+  await expect(apiCost).toBeVisible();
+  await expect(codexValue).toBeVisible();
+  await usd.press('ArrowRight');
+  await expect(tokens).toBeChecked();
+  await expect(apiCost).toBeHidden();
+  await expect(codexValue).toBeHidden();
+  await tokens.press('ArrowLeft');
+  await expect(usd).toBeChecked();
+  await expect(apiCost).toBeVisible();
+  await expect(codexValue).toBeVisible();
+});
+
 test('aligns usage bars with differently sized amounts and keeps rows keyboard-operable', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
