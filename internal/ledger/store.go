@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS requests (
     output_rate REAL
 );
 CREATE INDEX IF NOT EXISTS requests_time ON requests(time, id);
+CREATE INDEX IF NOT EXISTS requests_client_time ON requests(client_id, time, id);
 CREATE INDEX IF NOT EXISTS requests_post_response ON requests(source, response_id)
     WHERE method = 'POST';
 CREATE UNIQUE INDEX IF NOT EXISTS requests_response ON requests(source, response_id)
@@ -110,10 +111,17 @@ func Open(path string, catalog pricing.Catalog) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 type Client struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"createdAt"`
-	Keys      []Key     `json:"keys"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	Keys        []Key          `json:"keys"`
+	LastRequest *ClientRequest `json:"lastRequest,omitempty"`
+}
+
+type ClientRequest struct {
+	At             time.Time `json:"at"`
+	Status         int       `json:"status"`
+	UsageAvailable bool      `json:"usageAvailable"`
 }
 
 type Key struct {
@@ -126,9 +134,15 @@ type Key struct {
 }
 
 func (s *Store) Clients(ctx context.Context) ([]Client, error) {
+	// Keep the latest-request lookup before the one-to-many key join.
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.name, c.created_at,
-        k.id, k.prefix, k.created_at, k.last_used_at, k.revoked_at
-        FROM clients c JOIN client_keys k ON k.client_id = c.id
+        k.id, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
+        r.time, r.status, r.usage_available
+        FROM clients c
+        LEFT JOIN requests r ON r.id = (
+            SELECT id FROM requests WHERE client_id = c.id ORDER BY time DESC, id DESC LIMIT 1
+        )
+        CROSS JOIN client_keys k ON k.client_id = c.id
         ORDER BY c.created_at DESC, c.id, k.created_at DESC, k.id`)
 	if err != nil {
 		return nil, err
@@ -139,8 +153,10 @@ func (s *Store) Clients(ctx context.Context) ([]Client, error) {
 		var client Client
 		var key Key
 		var clientTime, keyTime int64
-		var lastUsed, revoked sql.NullInt64
-		if err := rows.Scan(&client.ID, &client.Name, &clientTime, &key.ID, &key.Prefix, &keyTime, &lastUsed, &revoked); err != nil {
+		var lastUsed, revoked, requestTime, requestStatus sql.NullInt64
+		var usageAvailable sql.NullBool
+		if err := rows.Scan(&client.ID, &client.Name, &clientTime, &key.ID, &key.Prefix, &keyTime, &lastUsed, &revoked,
+			&requestTime, &requestStatus, &usageAvailable); err != nil {
 			return nil, err
 		}
 		key.CreatedAt = timestamp(keyTime)
@@ -148,6 +164,9 @@ func (s *Store) Clients(ctx context.Context) ([]Client, error) {
 		key.RevokedAt = optionalTime(revoked)
 		if len(clients) == 0 || clients[len(clients)-1].ID != client.ID {
 			client.CreatedAt = timestamp(clientTime)
+			if requestTime.Valid {
+				client.LastRequest = &ClientRequest{At: timestamp(requestTime.Int64), Status: int(requestStatus.Int64), UsageAvailable: usageAvailable.Bool}
+			}
 			clients = append(clients, client)
 		}
 		latest := &clients[len(clients)-1]

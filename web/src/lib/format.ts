@@ -31,6 +31,30 @@ export const formatTime = (value: string) => time.format(new Date(value));
 export const formatDay = (value: string) => calendar.format(new Date(value));
 export const formatUTCDay = (value: string) => utcCalendar.format(new Date(value));
 export const formatDateTime = (value: string) => dateAndTime.format(new Date(value));
+
+export function requestStatusLabel(status: number) {
+  if (status === 0) return 'Interrupted';
+  if (status === 101) return 'WebSocket connected';
+  if (status < 200) return 'Informational response';
+  if (status < 300) return 'Response received';
+  if (status >= 300 && status < 400) return 'Redirected';
+  if (status === 400) return 'Invalid request';
+  if (status === 401) return 'Authentication failed';
+  if (status === 403) return 'Access denied';
+  if (status === 404) return 'Model or endpoint not found';
+  if (status === 429) return 'Rate limited';
+  return status >= 500 ? 'Server error' : 'Request failed';
+}
+
+export function requestStatusGuidance(status: number) {
+  if (status === 0) return 'Check the client and proxy logs for a connection that closed before the request completed.';
+  if (status === 401 || status === 403) return 'Check the credentials your client uses with the provider and that they can access this model.';
+  if (status === 404) return 'Check the base URL and model configured in your client.';
+  if (status === 429) return 'Check the provider’s rate limit or remaining allowance before trying the request again.';
+  if (status >= 500) return 'Check the provider status and the proxy logs, then retry from your client.';
+  return 'Check the model and request settings in your client, then send a new request.';
+}
+
 export function formatTimeWindow(value: string, hours: number) {
   const start = new Date(value);
   return dateAndTime.formatRange(start, new Date(start.getTime() + hours * 3_600_000));

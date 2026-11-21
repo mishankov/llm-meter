@@ -211,6 +211,7 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	f := ledger.Filter{
 		End: now, Interval: time.Hour,
 		Source: values.Get("source"), Client: values.Get("client"), Model: values.Get("model"),
+		Outcome: values.Get("outcome"),
 	}
 	switch values.Get("range") {
 	case "", "24h":
@@ -226,6 +227,11 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	}
 	if f.Source != "" && f.Source != "api" && f.Source != "codex" {
 		return f, errors.New("Invalid usage source")
+	}
+	switch f.Outcome {
+	case "", ledger.OutcomeSucceeded, ledger.OutcomeFailed:
+	default:
+		return f, errors.New("Invalid request outcome")
 	}
 	if len(f.Client) > 100 || len(f.Model) > 500 {
 		return f, errors.New("Invalid client or model filter")

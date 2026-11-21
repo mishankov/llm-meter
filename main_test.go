@@ -121,8 +121,8 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 		t.Fatalf("invalid client/key creation response: %v", err)
 	}
 	body = request("GET", "/api/clients", "", "", 200)
-	if bytes.Contains(body, []byte(created.Key.Token)) || !bytes.Contains(body, []byte(created.Key.Prefix)) {
-		t.Fatal("client listing must include the key prefix but only show the key at creation")
+	if bytes.Contains(body, []byte(created.Key.Token)) || !bytes.Contains(body, []byte(created.Key.Prefix)) || bytes.Contains(body, []byte(`"lastRequest"`)) {
+		t.Fatal("client listing must expose only the key prefix and omit unavailable request metadata")
 	}
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
 	request("POST", "/backend-api/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
@@ -165,12 +165,31 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	}
 
 	latest := dashboard.Requests[0]
+	var listed struct {
+		Clients []ledger.Client `json:"clients"`
+	}
+	body = request("GET", "/api/clients", "", "", 200)
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Clients) != 1 || listed.Clients[0].LastRequest == nil ||
+		*listed.Clients[0].LastRequest != (ledger.ClientRequest{At: latest.At, Status: latest.Status, UsageAvailable: latest.UsageAvailable}) {
+		t.Fatalf("incorrect latest request in client list: %+v", listed)
+	}
+	body = request("GET", "/api/usage?outcome=failed", "", "", 200)
+	var outcomeDashboard ledger.Dashboard
+	if err := json.Unmarshal(body, &outcomeDashboard); err != nil || outcomeDashboard.Summary != summary || len(outcomeDashboard.Requests) != 0 {
+		t.Fatalf("incorrect outcome-filtered overview: %s, decode error %v", body, err)
+	}
+	request("GET", "/api/usage?outcome=other", "", "", 400)
+	request("GET", "/api/usage/requests?outcome=other", "", "", 400)
 	query := url.Values{
-		"range":  {"24h"},
-		"client": {created.Client.ID},
-		"source": {latest.Source},
-		"model":  {latest.Model},
-		"bucket": {latest.At.Truncate(time.Hour).Format(time.RFC3339)},
+		"range":   {"24h"},
+		"client":  {created.Client.ID},
+		"source":  {latest.Source},
+		"model":   {latest.Model},
+		"bucket":  {latest.At.Truncate(time.Hour).Format(time.RFC3339)},
+		"outcome": {"succeeded"},
 	}
 	body = request("GET", "/api/usage/requests?"+query.Encode(), "", "", 200)
 	wantPage, err := json.Marshal(ledger.RequestPage{Requests: []ledger.Request{latest}})

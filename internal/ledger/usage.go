@@ -17,9 +17,15 @@ type Filter struct {
 	Start, End            time.Time
 	Interval              time.Duration
 	Source, Client, Model string
+	Outcome               string
 	Bucket                *time.Time
 	Cursor                int64
 }
+
+const (
+	OutcomeSucceeded = "succeeded"
+	OutcomeFailed    = "failed"
+)
 
 type Totals struct {
 	EstimatedCost      float64 `json:"estimatedCost"`
@@ -211,6 +217,12 @@ func groupList(groups map[string]Group) []Group {
 }
 
 func (s *Store) collectRequests(ctx context.Context, filter Filter, where string, args []any, result *RequestPage) error {
+	switch filter.Outcome {
+	case OutcomeSucceeded:
+		where += ` AND r.status BETWEEN 200 AND 299`
+	case OutcomeFailed:
+		where += ` AND (r.status = 0 OR r.status >= 400)`
+	}
 	if filter.Bucket != nil {
 		where += ` AND r.time >= ? AND r.time < ?`
 		args = append(args, filter.Bucket.UnixMilli(), filter.Bucket.Add(filter.Interval).UnixMilli())

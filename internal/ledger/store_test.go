@@ -3,12 +3,139 @@ package ledger
 import (
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/mishankov/llm-proxy/internal/pricing"
 	"github.com/mishankov/llm-proxy/internal/proxy"
 )
+
+func TestClientsReportLatestRecordedRequest(t *testing.T) {
+	ctx := t.Context()
+	store, err := Open(":memory:", pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	idle, _, err := store.CreateClient(ctx, "Idle", at.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, _, err := store.CreateClient(ctx, "Connected", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateKey(ctx, client.ID, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	latest := at.Add(5 * time.Minute)
+	for _, usage := range []proxy.Usage{
+		{At: latest, Status: 200, HasUsage: true},
+		{At: latest, Status: 429},
+		{At: at, Status: 500},
+	} {
+		usage.ClientID, usage.Source = client.ID, "api"
+		if err := store.Record(ctx, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clients, err := store.Clients(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 2 || clients[0].ID != client.ID || len(clients[0].Keys) != 2 ||
+		clients[1].ID != idle.ID || clients[1].LastRequest != nil {
+		t.Fatalf("unexpected clients: %+v", clients)
+	}
+	if request := clients[0].LastRequest; request == nil || !request.At.Equal(latest) || request.Status != 429 || request.UsageAvailable {
+		t.Fatalf("incorrect latest request metadata: %+v", request)
+	}
+}
+
+func TestRequestOutcomeFiltersPagesWithoutChangingOverview(t *testing.T) {
+	ctx := t.Context()
+	store, err := Open(":memory:", pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	at := time.Date(2026, 11, 20, 12, 30, 0, 0, time.UTC)
+	client, _, err := store.CreateClient(ctx, "Outcome fixture", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := proxy.Usage{At: at, Source: "codex", ClientID: client.ID, Model: "gpt-example", Status: 400, ResponseID: "interrupted"}
+	if err := store.Record(ctx, usage); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE requests SET status = 0 WHERE response_id = ?", usage.ResponseID); err != nil {
+		t.Fatal(err)
+	}
+	usage.ResponseID = ""
+	usage.Status = 429
+	for range requestPageSize {
+		if err := store.Record(ctx, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, status := range []int{101, 199, 200, 299, 300} {
+		usage.Status = status
+		if err := store.Record(ctx, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Record(ctx, proxy.Usage{At: at, ClientID: client.ID, RateLimits: []proxy.RateLimit{
+		{ID: "codex", Window: "primary", WindowMinutes: 300, UsedPercent: 25},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	filter := Filter{Start: at.Add(-time.Hour), End: at.Add(time.Minute), Interval: time.Hour, Client: client.ID}
+	baseline, err := store.Dashboard(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.Summary.RequestCount != requestPageSize+6 || len(baseline.Allowance) != 1 {
+		t.Fatalf("invalid outcome fixture: %+v, allowances=%+v", baseline.Summary, baseline.Allowance)
+	}
+	filter.Outcome = OutcomeFailed
+	failed, err := store.Dashboard(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Summary != baseline.Summary || !reflect.DeepEqual(failed.Buckets, baseline.Buckets) ||
+		!reflect.DeepEqual(failed.Groups, baseline.Groups) || !reflect.DeepEqual(failed.Allowance, baseline.Allowance) {
+		t.Fatal("outcome filter changed the overview")
+	}
+	if failed.NextCursor == nil || len(failed.Requests) != requestPageSize {
+		t.Fatalf("incorrect failed page length or cursor: %d rows, cursor=%v", len(failed.Requests), failed.NextCursor)
+	}
+	for _, request := range failed.Requests {
+		if request.Status != 429 {
+			t.Fatalf("unexpected request on first failed page: %+v", request)
+		}
+	}
+	filter.Cursor, err = ParseCursor(*failed.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.Requests(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Requests) != 1 || page.Requests[0].Status != 0 || page.NextCursor != nil {
+		t.Fatalf("unexpected second failed page: %+v", page)
+	}
+	filter.Cursor, filter.Outcome = 0, OutcomeSucceeded
+	page, err = store.Requests(ctx, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Requests) != 2 || page.Requests[0].Status != 299 || page.Requests[1].Status != 200 || page.NextCursor != nil {
+		t.Fatalf("unexpected succeeded page: %+v", page)
+	}
+}
 
 func TestBackgroundUsageUsesTheOriginalPricingDate(t *testing.T) {
 	ctx := t.Context()

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import CheckIcon from '@lucide/svelte/icons/check';
+  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import CopyIcon from '@lucide/svelte/icons/copy';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -10,12 +12,17 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { AlertDialog, AlertDialogBackdrop, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from '@ui-sdk/svelte/alert-dialog';
   import { Button } from '@ui-sdk/svelte/button';
+  import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '@ui-sdk/svelte/collapsible';
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
-  import { Field, FieldLabel } from '@ui-sdk/svelte/field';
+  import { Field, FieldError, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
   import { useShortcut } from '@ui-sdk/svelte/shortcuts';
-  import { APIError, api, jsonPost, type Client, type Key, type NewKey } from './api';
-  import { dismissShortcut, formatDateTime, guardEnter } from './format';
+  import { APIError, api, dashboardProblem, jsonPost, type Client, type Key, type NewKey, type RequestOutcome } from './api';
+  import { dismissShortcut, formatDateTime, guardEnter, requestStatusGuidance, requestStatusLabel } from './format';
+  import RecoveryNotice from './RecoveryNotice.svelte';
+
+  type Problem = ReturnType<typeof dashboardProblem>;
+  const responseTimeout = 15_000;
 
   interface Props {
     active: boolean;
@@ -23,7 +30,7 @@
     draft?: string;
     keyDialogOpen?: boolean;
     navigate: (clientId?: string) => void;
-    viewUsage: (clientId: string) => void;
+    viewUsage: (clientId: string, outcome?: RequestOutcome) => void;
     onUnauthorized: () => void;
   }
   let { active, clientId, draft = $bindable(''), keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
@@ -31,7 +38,9 @@
   let clients = $state<Client[]>([]);
   let selected = $derived(clients.find((client) => client.id === clientId));
   let hasActiveKey = $derived(selected?.keys.some((key) => !key.revokedAt));
-  let hasUsedKey = $derived(selected?.keys.some((key) => key.lastUsedAt));
+  let hasUsedKey = $derived(selected?.keys.some((key) => !key.revokedAt && key.lastUsedAt));
+  let lastRequest = $derived(selected?.lastRequest);
+  let lastRequestFailed = $derived(lastRequest && (lastRequest.status === 0 || lastRequest.status >= 400));
   let proxyOrigin = $state('');
   const endpoints = [
     { label: 'OpenAI API', path: '/v1' },
@@ -39,9 +48,11 @@
     { label: 'OpenCode Go', path: '/opencode-go' }
   ];
   let loading = $state(true);
-  let loadError = $state('');
-  let actionError = $state('');
-  let createError = $state('');
+  let loadError = $state<Problem | null>(null);
+  const actionFailures = new SvelteMap<string, Problem>();
+  let actionError = $derived(actionFailures.get(clientId) ?? null);
+  let createError = $state<Problem | null>(null);
+  let clientNameTooLong = $derived([...draft.trim()].length > 100);
   let busy = $state(false);
   let dialogOpen = $state(false);
   let dialogMode = $state<'create' | 'key'>('create');
@@ -67,9 +78,13 @@
     return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
   });
 
-  function message(cause: unknown) {
+  function problem(cause: unknown, title: string, uncertainResult?: string) {
     if (cause instanceof APIError && cause.status === 401) onUnauthorized();
-    return cause instanceof Error ? cause.message : 'Could not complete the request.';
+    const failure = dashboardProblem(cause, title);
+    if (uncertainResult && (!(cause instanceof APIError) || cause.status >= 500)) {
+      return { ...failure, detail: failure.detail + ' ' + uncertainResult };
+    }
+    return failure;
   }
 
   async function load(silent = false) {
@@ -77,17 +92,17 @@
     listRequest?.abort();
     const current = new AbortController();
     listRequest = current;
-    if (!silent) {
-      loading = true;
-      loadError = '';
-    }
+    if (!silent) loading = true;
     try {
-      const result = await api<{ clients: Client[] }>('/clients', { signal: current.signal });
-      if (!current.signal.aborted) clients = result.clients;
+      const signal = AbortSignal.any([current.signal, AbortSignal.timeout(responseTimeout)]);
+      const result = await api<{ clients: Client[] }>('/clients', { signal });
+      if (current.signal.aborted) return;
+      clients = result.clients;
+      loadError = null;
     } catch (cause) {
       if (current.signal.aborted) return;
-      if (!silent) loadError = message(cause);
-      else if (cause instanceof APIError && cause.status === 401) onUnauthorized();
+      const failure = problem(cause, 'Could not load clients');
+      if (!loadError || failure.title !== loadError.title || failure.detail !== loadError.detail) loadError = failure;
     } finally {
       if (listRequest === current) {
         listRequest = null;
@@ -115,17 +130,17 @@
     listRequest?.abort();
     returnFocus = document.activeElement as HTMLElement | null;
     generated = null;
-    createError = '';
+    createError = null;
     dialogMode = 'create';
     dialogOpen = true;
   }
 
   async function createClient(event: SubmitEvent) {
     event.preventDefault();
-    if (!draft.trim() || busy) return;
+    if (!draft.trim() || clientNameTooLong || busy) return;
     listRequest?.abort();
     busy = true;
-    createError = '';
+    createError = null;
     try {
       const result = await api<{ client: Client; key: NewKey }>('/clients', jsonPost({ name: draft.trim() }));
       clients = [result.client, ...clients];
@@ -133,7 +148,7 @@
       navigate(result.client.id);
       await reveal(result.key);
     } catch (cause) {
-      createError = message(cause);
+      createError = problem(cause, 'Could not create the client', 'Cancel and check the client list before trying again. Your client name will be kept.');
     } finally {
       busy = false;
     }
@@ -145,17 +160,19 @@
     const id = selected.id;
     returnFocus = document.activeElement as HTMLElement | null;
     busy = true;
-    actionError = '';
+    actionFailures.delete(id);
     generated = null;
     dialogMode = 'key';
     dialogOpen = true;
     try {
-      const result = await api<{ key: NewKey }>('/clients/' + encodeURIComponent(id) + '/keys', { method: 'POST' });
+      const result = await api<{ key: NewKey }>('/clients/' + encodeURIComponent(id) + '/keys', {
+        method: 'POST'
+      });
       const { token, ...metadata } = result.key;
       clients = clients.map((client) => client.id === id ? { ...client, keys: [metadata, ...client.keys] } : client);
       await reveal({ ...metadata, token });
     } catch (cause) {
-      actionError = message(cause);
+      actionFailures.set(id, problem(cause, 'Could not issue a proxy key', 'Check the key list before issuing another. Revoke any key whose full value was lost.'));
       dialogOpen = false;
     } finally {
       busy = false;
@@ -205,7 +222,7 @@
     listRequest?.abort();
     revoking = key;
     revokeOpen = true;
-    actionError = '';
+    actionFailures.delete(clientId);
   }
 
   function revokeShortcut(event: KeyboardEvent, key: Key) {
@@ -223,7 +240,9 @@
     const keyId = revoking.id;
     busy = true;
     try {
-      await api('/clients/' + encodeURIComponent(id) + '/keys/' + encodeURIComponent(keyId), { method: 'DELETE' });
+      await api('/clients/' + encodeURIComponent(id) + '/keys/' + encodeURIComponent(keyId), {
+        method: 'DELETE'
+      });
       clients = clients.map((client) => client.id === id ? {
         ...client, keys: client.keys.map((key) => key.id === keyId ? { ...key, revokedAt: new Date().toISOString() } : key)
       } : client);
@@ -231,7 +250,7 @@
       await tick();
       document.getElementById('new-key')?.focus();
     } catch (cause) {
-      actionError = message(cause);
+      actionFailures.set(id, problem(cause, 'Could not revoke the key', 'Close this dialog and check the key status before trying again.'));
     } finally {
       busy = false;
     }
@@ -266,7 +285,11 @@
   }
 </script>
 
-<svelte:window onkeydown={physicalShortcut} />
+<svelte:window onkeydown={physicalShortcut} ononline={() => active && load(true)} />
+
+{#if active && loadError}
+  <RecoveryNotice problem={loadError} retry={() => load()} busy={loading} cached={clients.length > 0} retryLabel="Retry clients" />
+{/if}
 
 {#if active && clientId}
   <div class="client-crumb">
@@ -286,31 +309,64 @@
         </Button>
       </div>
     </header>
-    {#if actionError && !revokeOpen}<div class="feedback error-feedback" role="alert">{actionError}</div>{/if}
+    {#if actionError && !revokeOpen}<RecoveryNotice problem={actionError} />{/if}
     <section class="connection" aria-labelledby="connection-title">
       <h2 id="connection-title">Connection settings</h2>
       <div class="connection-columns">
-        <dl class="connection-urls">
-          {#each endpoints as endpoint (endpoint.path)}
-            <div><dt>{endpoint.label}</dt><dd><code>{proxyOrigin}{endpoint.path}</code></dd></div>
-          {/each}
-        </dl>
+        <div>
+          <dl class="connection-urls">
+            {#each endpoints as endpoint (endpoint.path)}
+              <div><dt>{endpoint.label}</dt><dd><code>{proxyOrigin}{endpoint.path}</code></dd></div>
+            {/each}
+          </dl>
+          <p class="connection-header muted">Send your active proxy key in <code>X-LLM-Proxy-Key</code> alongside your provider credentials.</p>
+        </div>
         <div class="connection-instructions">
-          <p>Use the base URL for your provider. Send your proxy key in the <code>X-LLM-Proxy-Key</code> header alongside your usual provider credentials.</p>
-          <p class="connection-status" role="status">
+          <div class="connection-status" role="status">
             {#if !hasActiveKey}
               <strong>No active proxy key</strong>
               <span>Use New key to connect this client.</span>
+            {:else if lastRequest}
+              <strong>Latest recorded request</strong>
+              <span>
+                <b class="request-result" class:failed={lastRequestFailed}>
+                  {requestStatusLabel(lastRequest.status)}{lastRequest.status ? ` (${lastRequest.status})` : ''}
+                </b>
+                <span aria-hidden="true"> · </span>
+                <time datetime={lastRequest.at}>{formatDateTime(lastRequest.at)}</time>
+              </span>
+              {#if lastRequestFailed}
+                <span>{requestStatusGuidance(lastRequest.status)}</span>
+              {:else if lastRequest.usageAvailable}
+                <span>Token usage is available in View usage.</span>
+              {:else}
+                <span>This request has no recorded token usage.</span>
+              {/if}
             {:else if hasUsedKey}
-              <strong>Proxy key used</strong>
-              <span>A request authenticated at the proxy. Open View usage to check recorded requests.</span>
+              <strong>Proxy key accepted</strong>
+              <span>Wait for the request to finish. If no result appears, check the client and proxy logs.</span>
             {:else}
               <strong>Waiting for first request</strong>
-              <span>Send a request from your configured client to check the connection.</span>
+              <span>Send a request from your client. If nothing appears, check the base URL and whether your key is active below.</span>
             {/if}
-          </p>
+          </div>
+          {#if hasActiveKey && lastRequestFailed}
+            <Button class="secondary-button investigate-button" title="View failed requests (Enter)" aria-keyshortcuts="Enter" onclick={() => viewUsage(clientId, 'failed')} onkeydown={guardEnter}>View failed requests</Button>
+          {/if}
         </div>
       </div>
+      <Collapsible class="connection-help">
+        <CollapsibleTrigger class="secondary-button" title="Provider setup instructions (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>
+          Provider setup instructions <ChevronDownIcon size={14} aria-hidden="true" />
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <dl class="provider-instructions">
+            <div><dt>OpenAI API</dt><dd>Set the OpenAI base URL in your client. Keep your provider API key in <code>Authorization</code>.</dd></div>
+            <div><dt>Signed-in Codex</dt><dd>Set <code>base_url</code> for your model provider in <code>config.toml</code>. Keep <code>requires_openai_auth = true</code> and map <code>X-LLM-Proxy-Key</code> to <code>LLM_PROXY_KEY</code> in <code>env_http_headers</code>. Set the variable in the Codex process environment and start a new session.</dd></div>
+            <div><dt>OpenCode Go</dt><dd>Set <code>settings.baseURL</code> for the <code>opencode-go</code> provider in <code>opencode.jsonc</code>. Add <code>X-LLM-Proxy-Key</code> to that provider’s <code>headers</code> and keep your saved provider credentials.</dd></div>
+          </dl>
+        </CollapsiblePanel>
+      </Collapsible>
     </section>
     <section class="client-table" aria-labelledby="keys-title">
       <header class="section-head"><h2 id="keys-title">Proxy keys</h2></header>
@@ -353,13 +409,13 @@
   <header class="page-head">
     <div>
       <h1>Clients</h1>
-      {#if !loading && !loadError}<p>{clients.length} {clients.length === 1 ? 'client' : 'clients'}</p>{/if}
+      {#if clients.length || (!loading && !loadError)}<p>{clients.length} {clients.length === 1 ? 'client' : 'clients'}</p>{/if}
     </div>
     <Button id="new-client" class="primary-button" aria-keyshortcuts="N" disabled={!canCreate()} onclick={openCreate}>
       <PlusIcon size={16} aria-hidden="true" /> New client <kbd aria-hidden="true">N</kbd>
     </Button>
   </header>
-  {#if clients.length && !loadError}
+  {#if clients.length}
     <section class="client-table" aria-label="Client list">
       <div class="table-scroll">
         <table>
@@ -390,9 +446,7 @@
   {/if}
 {/if}
 
-{#if active && loadError}
-  <div class="feedback error-feedback" role="alert"><span>{loadError}</span><Button class="secondary-button" onclick={() => load()}>Retry</Button></div>
-{:else if active && loading}
+{#if active && loading && !loadError}
   <div class="empty-state" role="status">Loading clients…</div>
 {/if}
 
@@ -451,14 +505,15 @@
       <DialogTitle class="dialog-title">New client</DialogTitle>
       <DialogDescription class="muted">Create a client and its first proxy key.</DialogDescription>
       <form class="dialog-form" onsubmit={createClient}>
-        <Field class="form-field" name="name">
+        <Field class="form-field" name="name" invalid={clientNameTooLong ? true : undefined}>
           <FieldLabel>Client name</FieldLabel>
           <Input id="client-name" class="text-input" bind:value={draft} required placeholder="e.g. OpenCode" disabled={busy} onkeydown={guardEnter} />
+          {#if clientNameTooLong}<FieldError class="field-error" match>Shorten the name to 100 characters or fewer.</FieldError>{/if}
         </Field>
-        {#if createError}<p class="field-error" role="alert">{createError}</p>{/if}
+        {#if createError}<RecoveryNotice problem={createError} />{/if}
         <div class="dialog-actions">
           <DialogClose class="secondary-button" disabled={busy}>Cancel</DialogClose>
-          <Button type="submit" class="primary-button" aria-keyshortcuts="Enter" disabled={busy || !draft.trim()} onkeydown={guardEnter}>{busy ? 'Creating…' : 'Create client'} <kbd aria-hidden="true">↵</kbd></Button>
+          <Button type="submit" class="primary-button" aria-keyshortcuts="Enter" disabled={busy || !draft.trim() || clientNameTooLong} onkeydown={guardEnter}>{busy ? 'Creating…' : 'Create client'} <kbd aria-hidden="true">↵</kbd></Button>
         </div>
       </form>
     {/if}
@@ -470,7 +525,7 @@
   <AlertDialogContent class="dialog-content">
     <AlertDialogTitle class="dialog-title">Revoke this key?</AlertDialogTitle>
     <AlertDialogDescription class="muted">New HTTP requests and WebSocket connections using <code>{revoking?.prefix}…</code> will be denied. The client’s usage history stays available.</AlertDialogDescription>
-    {#if actionError}<p class="field-error" role="alert">{actionError}</p>{/if}
+    {#if actionError}<RecoveryNotice problem={actionError} />{/if}
     <div class="dialog-actions">
       <AlertDialogClose class="secondary-button" disabled={busy} onkeydown={guardEnter}>Cancel</AlertDialogClose>
       <Button class="danger-button" disabled={busy} data-agent-confirm="Revokes this client key immediately." onclick={revoke} onkeydown={guardEnter}>{busy ? 'Revoking…' : 'Confirm revocation'}</Button>
@@ -490,10 +545,20 @@
   .connection-urls { display: grid; gap: 7px; margin: 0; }
   .connection-urls div { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 2px 10px; }
   .connection-urls dt, .connection-instructions { color: var(--muted); }
-  .connection-urls dd, .connection-instructions p { margin: 0; }
-  .connection-urls code, .connection-instructions code { color: var(--text); overflow-wrap: anywhere; }
-  .connection-status { display: grid; gap: 2px; padding-block-start: 9px; }
+  .connection-urls dd { margin: 0; }
+  .connection-urls code { color: var(--text); overflow-wrap: anywhere; }
+  .connection-status { display: grid; gap: 3px; }
   .connection-status strong { color: var(--text); }
+  .request-result { color: var(--text); font-weight: 600; }
+  .request-result.failed { color: var(--danger); }
+  .connection-header { margin-block: 8px 0; }
+  .connection-header code { color: var(--text); overflow-wrap: anywhere; }
+  .connection-instructions :global(.investigate-button) { margin-block-start: 8px; }
+  .connection :global(.connection-help) { margin-block-start: 10px; }
+  .connection :global(.connection-help [aria-expanded=true] svg) { transform: rotate(180deg); }
+  .provider-instructions { display: grid; gap: 10px; max-inline-size: 70ch; margin-block: 10px 0; }
+  .provider-instructions dt { font-weight: 600; }
+  .provider-instructions dd { margin: 2px 0 0; color: var(--muted); overflow-wrap: anywhere; }
   .key-status { color: var(--success); }
   .key-status.revoked { color: var(--muted); }
   .key-dates { display: none; }
@@ -503,7 +568,7 @@
   .copy-status { min-height: 1.5em; margin: 4px 0; font-size: 12px; }
   .dialog-actions.key-dialog-actions { flex-wrap: wrap; }
   @media (max-width: 760px) {
-    .connection-columns { grid-template-columns: 1fr; }
+    .connection-columns { grid-template-columns: minmax(0, 1fr); gap: 14px; }
     .keys-table .key-date { display: none; }
     .keys-table td { vertical-align: top; }
     .keys-table .key-identity { width: 100%; white-space: normal; overflow-wrap: anywhere; }

@@ -1,4 +1,5 @@
 export type Source = 'api' | 'codex';
+export type RequestOutcome = '' | 'succeeded' | 'failed';
 
 export interface Key {
   id: string;
@@ -17,6 +18,7 @@ export interface Client {
   name: string;
   createdAt: string;
   keys: Key[];
+  lastRequest?: { at: string; status: number; usageAvailable: boolean };
 }
 
 export interface TokenCounts {
@@ -96,13 +98,37 @@ export class APIError extends Error {
   }
 }
 
+export interface DashboardProblem {
+  title: string;
+  detail: string;
+}
+
+export function dashboardProblem(cause: unknown, title: string): DashboardProblem {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { title: 'You’re offline', detail: 'Reconnect to the network that hosts your proxy, then retry.' };
+  }
+  if ((cause instanceof DOMException || cause instanceof Error) && cause.name === 'TimeoutError') {
+    return { title: 'The proxy took too long to respond', detail: 'Check that the proxy can respond at this address, then retry.' };
+  }
+  if (!(cause instanceof APIError)) {
+    return { title, detail: 'Check that the proxy is running and that this dashboard address is reachable, then retry.' };
+  }
+  if (cause.status === 400) {
+    return { title, detail: cause.message === 'Could not complete the request.' ? 'Check your selection or input, then retry.' : cause.message };
+  }
+  if (cause.status === 403) return { title: 'Access was denied', detail: 'Open the dashboard at the proxy’s own address and unlock it with its dashboard token.' };
+  if (cause.status === 404) return { title, detail: 'Refresh the dashboard to check whether this item or view is still available.' };
+  if (cause.status === 429) return { title: 'The dashboard received too many requests', detail: 'Wait briefly, then retry.' };
+  return { title, detail: 'Check the LLM Proxy service and its logs. If you use an ingress, verify it can reach the proxy, then retry.' };
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api' + path, { cache: 'no-store', ...options });
   if (!response.ok) {
     let message: string | undefined;
     if (response.headers.get('Content-Type')?.includes('json')) {
-      const data = await response.json();
-      if (typeof data.error === 'string') message = data.error;
+      const data = await response.json().catch(() => null);
+      if (typeof data?.error === 'string') message = data.error;
     }
     throw new APIError(response.status, message ?? 'Could not complete the request.');
   }

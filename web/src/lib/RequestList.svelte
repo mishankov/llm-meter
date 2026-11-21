@@ -6,30 +6,61 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '@ui-sdk/svelte/button';
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
-  import type { UsageRequest } from './api';
-  import { count, formatDateTime, formatDay, formatTime, guardEnter, money, tokens } from './format';
+  import type { DashboardProblem, RequestOutcome, UsageRequest } from './api';
+  import Filter from './Filter.svelte';
+  import { count, formatDateTime, formatDay, formatTime, guardEnter, money, requestStatusGuidance, requestStatusLabel, tokens } from './format';
+  import RecoveryNotice from './RecoveryNotice.svelte';
 
   interface Props {
     requests?: UsageRequest[];
     loading: boolean;
     bucketLabel: string;
+    outcome: RequestOutcome;
+    onOutcomeChange: (outcome: RequestOutcome) => void;
+    pageNumber: number;
+    error: DashboardProblem | null;
+    retry: () => void;
     canPrevious: boolean;
     canNext: boolean;
     onPrevious: () => void;
     onNext: () => void;
   }
 
-  let { requests, loading, bucketLabel, canPrevious, canNext, onPrevious, onNext }: Props = $props();
+  let { requests, loading, bucketLabel, outcome, onOutcomeChange, pageNumber, error, retry, canPrevious, canNext, onPrevious, onNext }: Props = $props();
   let selected = $state<UsageRequest | null>(null);
   let open = $state(false);
+  let heading: HTMLHeadingElement;
+  let outcomeFilter: HTMLDivElement;
+
+  const outcomeOptions = [
+    { value: '', label: 'All outcomes' },
+    { value: 'succeeded', label: 'HTTP 2xx responses' },
+    { value: 'failed', label: 'HTTP errors or interrupted' }
+  ];
+
+  const emptyMessage = $derived(outcome === 'failed'
+    ? 'No HTTP errors or interrupted requests in this view.'
+    : outcome === 'succeeded'
+      ? 'No HTTP 2xx responses in this view.'
+      : bucketLabel ? 'No requests in this time window.' : 'No requests in this view.');
+
+  function changeOutcome(value: string) {
+    if (value === '' || value === 'succeeded' || value === 'failed') onOutcomeChange(value);
+  }
+
+  function showAllOutcomes() {
+    outcomeFilter.querySelector<HTMLElement>('[role="combobox"]')?.focus();
+    onOutcomeChange('');
+  }
+
+  function retryRequests() {
+    heading.focus({ preventScroll: true });
+    retry();
+  }
 
   function showDetail(request: UsageRequest) {
     selected = request;
     open = true;
-  }
-
-  function status(request: UsageRequest) {
-    return request.status ? String(request.status) : 'Interrupted';
   }
 
   function amount(request: UsageRequest) {
@@ -72,23 +103,46 @@
   <span class="request-source" class:codex={request.source === 'codex'}>{sourceLabel(request)}</span>
 {/snippet}
 
+{#snippet requestStatus(request: UsageRequest)}
+  {@const label = requestStatusLabel(request.status)}
+  <span class="status-code" class:bad={request.status === 0 || request.status >= 400} title={label}>
+    {#if request.status}
+      <span aria-hidden="true">{request.status}</span><span class="sr-only">HTTP {request.status}, {label}</span>
+    {:else}
+      {label}
+    {/if}
+  </span>
+{/snippet}
+
 <section class="requests-section" id="requests" aria-labelledby="requests-title" aria-busy={loading}>
-  <header class="section-head">
+  <header class="section-head request-heading">
     <div>
-      <h2 id="requests-title" tabindex="-1">Recent requests</h2>
+      <h2 id="requests-title" bind:this={heading} tabindex="-1">Recent requests</h2>
       {#if bucketLabel}<p class="request-window muted">{bucketLabel}</p>{/if}
     </div>
-    {#if canPrevious || canNext}
-      <div class="pagination">
-        <Button class="icon-button" aria-label="Previous requests" disabled={!canPrevious || loading} onclick={onPrevious}>
+    <div class="request-controls">
+      <div class="outcome-filter" bind:this={outcomeFilter}>
+        <Filter label="Request outcome" value={outcome} items={outcomeOptions} onChange={changeOutcome} />
+      </div>
+      <div class="pagination" role="group" aria-label="Request pages">
+        <Button class="icon-button" aria-label="Previous requests" title="Previous requests" disabled={!canPrevious || loading}
+          focusableWhenDisabled={loading || canPrevious || canNext} onclick={onPrevious} onkeydown={guardEnter}>
           <ArrowLeftIcon size={15} aria-hidden="true" />
         </Button>
-        <Button class="icon-button" aria-label="Next requests" disabled={!canNext || loading} onclick={onNext}>
+        <span class="page-number muted" role="status">Page {count(pageNumber)}</span>
+        <Button class="icon-button" aria-label="Next requests" title="Next requests" disabled={!canNext || loading}
+          focusableWhenDisabled={loading || canPrevious || canNext} onclick={onNext} onkeydown={guardEnter}>
           <ArrowRightIcon size={15} aria-hidden="true" />
         </Button>
       </div>
-    {/if}
+    </div>
   </header>
+  {#if error}
+    <div class="request-error">
+      <RecoveryNotice problem={error} retry={retryRequests} busy={loading} cached={Boolean(requests?.length)}
+        cachedMessage="Showing the last loaded requests for this page." retryLabel="Retry requests" />
+    </div>
+  {/if}
   {#if requests?.length}
     <div class="table-scroll">
       <table>
@@ -108,7 +162,7 @@
                   <span class="wide-only">{formatDateTime(request.at)}</span>
                   <span class="compact-only compact-time">{formatDay(request.at)}<br />{formatTime(request.at)}</span>
                 </time>
-                <span class="compact-only compact-status status-code" class:bad={request.status === 0 || request.status >= 400}>{status(request)}</span>
+                <span class="compact-only compact-status">{@render requestStatus(request)}</span>
               </td>
               <td class="wide-only client-cell">{@render attribution(request)}</td>
               <td class="model-cell">
@@ -116,7 +170,7 @@
                 <div class="compact-only">{@render attribution(request)}</div>
               </td>
               <td class="endpoint-cell wide-only" title={request.method + ' ' + request.endpoint}>{request.method} {request.endpoint}</td>
-              <td class="wide-only"><span class="status-code" class:bad={request.status === 0 || request.status >= 400}>{status(request)}</span></td>
+              <td class="wide-only">{@render requestStatus(request)}</td>
               <td class="numeric wide-only">{request.usageAvailable ? count(tokens(request)) : '—'}</td>
               <td class="numeric amount-cell" class:muted={request.cost === null}>
                 {amount(request)}
@@ -134,10 +188,18 @@
         </tbody>
       </table>
     </div>
-  {:else}
+  {:else if !error}
     <div class="empty-state">
       <InboxIcon size={21} aria-hidden="true" />
-      <p>{loading ? 'Loading requests…' : requests ? bucketLabel ? 'No requests in this time window.' : 'No requests in this view.' : 'Request results unavailable.'}</p>
+      {#if loading}
+        <p role="status">Loading requests…</p>
+      {:else}
+        <p>{requests ? emptyMessage : 'Request results unavailable.'}</p>
+        {#if requests && outcome}
+          <Button class="secondary-button" title="Show all outcomes (Enter)" aria-keyshortcuts="Enter"
+            onclick={showAllOutcomes} onkeydown={guardEnter}>Show all outcomes</Button>
+        {/if}
+      {/if}
     </div>
   {/if}
 </section>
@@ -156,7 +218,13 @@
         <div><dt>Source</dt><dd>{sourceLabel(selected)}</dd></div>
         <div><dt>Client</dt><dd>{selected.client || '—'}</dd></div>
         <div><dt>Model</dt><dd>{selected.model || '—'}</dd></div>
-        <div><dt>Status</dt><dd>{status(selected)}</dd></div>
+        <div>
+          <dt>Status</dt>
+          <dd>{selected.status ? `${requestStatusLabel(selected.status)} · HTTP ${selected.status}` : requestStatusLabel(selected.status)}</dd>
+        </div>
+        {#if selected.status === 0 || selected.status >= 400}
+          <div><dt>Next step</dt><dd>{requestStatusGuidance(selected.status)}</dd></div>
+        {/if}
         <div><dt>{costLabel(selected)}</dt><dd>{amount(selected)}</dd></div>
         {#if selected.reportedListCost != null && selected.priceSource !== 'provider-list'}
           <div><dt>Provider list value</dt><dd>{money(selected.reportedListCost)}</dd></div>
@@ -187,8 +255,12 @@
 <style>
   .requests-section { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   #requests-title { scroll-margin-block-start: 75px; }
+  .request-heading, .request-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .request-controls { justify-content: space-between; }
   .request-window { margin: 4px 0 0; }
-  .pagination { display: flex; gap: 5px; }
+  .pagination { display: flex; align-items: center; gap: 5px; }
+  .page-number { min-inline-size: 5ch; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .request-error { margin-block-end: var(--gap); }
   th, td { white-space: nowrap; }
   td { vertical-align: top; }
   .clip, .endpoint-cell, .client-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
@@ -212,6 +284,9 @@
   .detail-rates b { font-weight: 500; color: var(--text); text-align: end; font-variant-numeric: tabular-nums; }
   .compact-only { display: none; }
   @media (max-width: 750px) {
+    .request-controls { inline-size: 100%; }
+    .request-controls :global(.icon-button) { inline-size: 44px; block-size: 44px; }
+    .outcome-filter :global(.filter-trigger) { min-block-size: 44px; }
     table { table-layout: fixed; }
     th, td { white-space: normal; }
     .wide-only { display: none; }
@@ -219,7 +294,7 @@
     th:first-child { inline-size: 25%; }
     .amount-cell, .model-cell { overflow-wrap: anywhere; }
     .compact-time, .compact-status, div.compact-only { display: block; }
-    .compact-status { margin-block-start: 3px; }
+    .compact-status { margin-block-start: 3px; overflow-wrap: anywhere; }
     .details-column { inline-size: 48px; }
     :global(.row-details) { inline-size: 40px; block-size: 40px; }
   }

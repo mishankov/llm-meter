@@ -1,40 +1,52 @@
 <script lang="ts">
   import Clock3Icon from '@lucide/svelte/icons/clock-3';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '@ui-sdk/svelte/button';
   import { Meter, MeterIndicator, MeterTrack } from '@ui-sdk/svelte/meter';
   import { SegmentedControl, SegmentedControlItem } from '@ui-sdk/svelte/segmented-control';
-  import type { Allowance, Usage, UsageGroup } from './api';
+  import type { Allowance, DashboardProblem, RequestOutcome, Usage, UsageGroup } from './api';
   import { compactCount, count, formatDateTime, formatTime, formatTimeWindow, formatUTCDay, guardEnter, money, partialPricing, tokens, unpricedBucket } from './format';
   import Filter from './Filter.svelte';
   import RequestList from './RequestList.svelte';
+  import RecoveryNotice from './RecoveryNotice.svelte';
   import TimeChart from './TimeChart.svelte';
 
   interface Props {
     data: Usage | null;
     filterOptions?: Usage['filters'];
     requestPage: Pick<Usage, 'requests' | 'nextCursor'> | null;
-    loading: boolean;
-    error: string;
+    loadingScope: 'overview' | 'requests' | null;
+    online: boolean;
+    overviewError: DashboardProblem | null;
+    requestError: DashboardProblem | null;
     updatedAt: string;
     range: string;
     source: string;
     client: string;
     model: string;
     bucket: string;
+    outcome: RequestOutcome;
     canPrevious: boolean;
-    update: (name: 'range' | 'source' | 'client' | 'model' | 'bucket', value: string) => void;
+    pageNumber: number;
+    update: (name: 'range' | 'source' | 'client' | 'model' | 'bucket' | 'outcome', value: string) => void;
     clearFilters: () => void;
     refresh: () => void;
+    retryRequests: () => void;
     onPrevious: () => void;
     onNext: () => void;
   }
 
-  let { data, filterOptions, requestPage, loading, error, updatedAt, range, source, client, model, bucket, canPrevious, update, clearFilters, refresh, onPrevious, onNext }: Props = $props();
+  let {
+    data, filterOptions, requestPage, loadingScope, online, overviewError, requestError, updatedAt,
+    range, source, client, model, bucket, outcome, canPrevious, pageNumber, update, clearFilters,
+    refresh, retryRequests, onPrevious, onNext
+  }: Props = $props();
   let ranking = $state('models');
   let unit = $state('dollars');
   let chartMetric = $state('cost');
-  let scoped = $derived(Boolean(source || client || model || bucket));
+  let scoped = $derived(Boolean(source || client || model || bucket || outcome));
+  let loading = $derived(loadingScope !== null);
   let firstRun = $derived(data?.summary.requestCount === 0 && !data.filters.clients.length);
   let showFilters = $derived(!firstRun || scoped || range !== '24h');
   let bucketLabel = $derived(bucket ? range === '24h' ? formatTimeWindow(bucket, 1) : formatUTCDay(bucket) + ' UTC' : '');
@@ -77,6 +89,12 @@
     heading?.focus({ preventScroll: true });
     heading?.scrollIntoView({ block: 'start' });
   }
+
+  function retryOverview() {
+    const target = document.getElementById(data ? 'refresh-usage' : 'usage-title');
+    target?.focus({ preventScroll: true });
+    refresh();
+  }
 </script>
 
 {#snippet allowanceSection(windows: Allowance[])}
@@ -108,8 +126,21 @@
 
 <header class="page-head">
   <div>
-    <h1>Usage overview</h1>
-    {#if updatedAt}<p class="update-line"><span class="live-dot"></span> Updated {formatTime(updatedAt)}</p>{/if}
+    <h1 id="usage-title" tabindex="-1">Usage overview</h1>
+    {#if updatedAt}
+      <div class="update-line">
+        <p>
+          {#if !online}Offline · Last updated {formatTime(updatedAt)}
+          {:else if loadingScope === 'overview'}Refreshing · Last updated {formatTime(updatedAt)}
+          {:else if overviewError}Refresh failed · Last updated {formatTime(updatedAt)}
+          {:else}<span class="live-dot" aria-hidden="true"></span> Updated {formatTime(updatedAt)}
+          {/if}
+        </p>
+        <Button id="refresh-usage" class="icon-button refresh-button" aria-label="Refresh usage" title="Refresh usage (Enter)" aria-keyshortcuts="Enter" disabled={loading || !online} focusableWhenDisabled onclick={refresh} onkeydown={guardEnter}>
+          <RefreshCwIcon size={15} aria-hidden="true" />
+        </Button>
+      </div>
+    {/if}
   </div>
   {#if showFilters}
     <SegmentedControl class="segmented" aria-label="Date range" value={range} onValueChange={(value) => { if (value) update('range', value); }}>
@@ -131,15 +162,12 @@
   </div>
 {/if}
 
-{#if error}
-  <div class="feedback error-feedback" role="alert">
-    <span>{error}</span>
-    <Button class="secondary-button" onclick={refresh} disabled={loading}>Retry</Button>
-  </div>
+{#if overviewError}
+  <RecoveryNotice problem={overviewError} retry={retryOverview} retryLabel="Retry usage" busy={loading || !online} cached={Boolean(data)} cachedMessage="Showing the last loaded data for these filters." />
 {/if}
 
 {#if !data}
-  {#if !error}
+  {#if !overviewError}
     <div class="usage-loading" role="status">
       <span class="muted">Loading usage…</span>
       <div class="loading-metrics" aria-hidden="true"><span></span><span></span></div>
@@ -268,11 +296,17 @@
     {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
   </div>
 
-  <RequestList requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)} {onPrevious} {onNext} />
+  <RequestList
+    requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)}
+    {outcome} onOutcomeChange={(value) => update('outcome', value)} {pageNumber} error={requestError} retry={retryRequests}
+    {onPrevious} {onNext}
+  />
 {/if}
 
 <style>
-  .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+  .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-block-start: 4px; }
+  .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
+  .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
   .metrics, .chart-row, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   .usage-empty { border-block-start: 1px solid var(--line); padding-block: var(--section-space); }
   .usage-empty h2 { margin-block-end: 6px; }

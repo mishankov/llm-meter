@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { Client, Key, Usage } from '../src/lib/api';
+import type { Client, Key, Usage, UsageRequest } from '../src/lib/api';
 
 const initialStart = '2026-11-20T12:00:00Z';
 const rates = { input: 1, cachedInput: .1, output: 2, cacheWrite: null };
@@ -30,10 +30,12 @@ const response: Usage = {
   nextCursor: null
 };
 
-async function mockAPI(page: Page, { empty = false } = {}) {
+async function mockAPI(page: Page, {
+  empty = false, initialClients = [], extraRequests = []
+}: { empty?: boolean; initialClients?: Client[]; extraRequests?: UsageRequest[] } = {}) {
   let authorized = false;
   let keyCount = 0;
-  const clients: Client[] = [];
+  const clients = [...initialClients];
   const usageQueries: URLSearchParams[] = [];
   const usagePaths: string[] = [];
   const createKey = () => {
@@ -67,11 +69,16 @@ async function mockAPI(page: Page, { empty = false } = {}) {
         summary: { estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, requestCount: 0, pricedRequestCount: 0 },
         buckets: [], groups: { models: [], clients: [] }, requests: [], allowance: [],
         filters: { models: [], clients: clients.map(({ id, name }) => ({ id, name })) }
-      } : response;
+      } : {
+        ...response,
+        summary: { ...response.summary, requestCount: response.summary.requestCount + extraRequests.length },
+        requests: [...response.requests, ...extraRequests]
+      };
       const cursor = url.searchParams.get('cursor');
       const bucket = url.searchParams.get('bucket');
       const client = url.searchParams.get('client');
       const source = url.searchParams.get('source');
+      const outcome = url.searchParams.get('outcome');
       const days = url.searchParams.get('range') === '30d' ? 31 : url.searchParams.get('range') === '7d' ? 8 : 0;
       const buckets = days && !empty ? Array.from({ length: days }, (_, index) => ({
         ...data.buckets[0],
@@ -82,9 +89,11 @@ async function mockAPI(page: Page, { empty = false } = {}) {
         (bucketStart === null || (Date.parse(request.at) >= bucketStart && Date.parse(request.at) < bucketStart + (days ? 86_400_000 : 3_600_000))) &&
         (!client || request.clientId === client) &&
         (!source || request.source === source) &&
+        (outcome !== 'failed' || request.status === 0 || request.status >= 400) &&
+        (outcome !== 'succeeded' || (request.status >= 200 && request.status < 300)) &&
         (!cursor || request.source === 'codex')
       );
-      const nextCursor = !empty && !cursor && !bucket && !client ? 'test-cursor' : null;
+      const nextCursor = !empty && !cursor && !bucket && !client && !outcome ? 'test-cursor' : null;
       const result = { requests, nextCursor };
       return route.fulfill({ json: url.pathname === '/api/usage' ? { ...data, buckets, ...result } : result });
     }
@@ -259,14 +268,151 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(page.getByRole('status')).toHaveText('Loading usage…');
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
-  await expect(page.getByRole('alert')).toHaveText('Could not load usage. Retry');
+  await expect(page.getByRole('alert')).toContainText('Could not load usage');
+  await expect(page.getByRole('alert')).toContainText('Check the LLM Proxy service and its logs.');
   await expect(apiRequest).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Estimated usage over time' })).not.toBeVisible();
 
   failFilteredQuery = false;
-  await page.getByRole('button', { name: 'Retry' }).click();
+  await page.getByRole('button', { name: 'Retry usage' }).press('Enter');
   await expect(page.getByRole('button', { name: /Details for gpt-codex/ })).toBeVisible();
   await expect(apiRequest).not.toBeVisible();
+});
+
+test('shows stale data during an outage and refreshes the same scope on reconnect', async ({ context, page }) => {
+  const { usageQueries } = await mockAPI(page);
+  let failRefresh = false;
+  await page.route('**/api/usage?**', (route) => failRefresh ? route.fulfill({ status: 503 }) : route.fallback());
+  await unlock(page);
+  const total = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  await expect(total.getByText('$0.02')).toBeVisible();
+  await page.getByRole('radio', { name: '7 days' }).click();
+  await expect(total.getByText('$0.02')).toBeVisible();
+
+  await context.setOffline(true);
+  await expect(page.getByText(/Offline · Last updated/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Refresh usage' })).toBeDisabled();
+  await expect(total.getByText('$0.02')).toBeVisible();
+
+  failRefresh = true;
+  await context.setOffline(false);
+  await expect(page.getByText(/Refresh failed · Last updated/)).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Showing the last loaded data for these filters.');
+  await expect(total.getByText('$0.02')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Next requests' }).press('Enter');
+  await expect(page.getByRole('button', { name: /Details for gpt-codex/ })).toBeVisible();
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Refresh failed · Last updated/)).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Showing the last loaded data for these filters.');
+
+  await page.getByRole('radio', { name: '30 days' }).click();
+  await expect(page.getByRole('alert')).toContainText('Could not load usage');
+  await expect(total).toHaveCount(0);
+  await page.getByRole('radio', { name: '7 days' }).click();
+  await expect(total.getByText('$0.02')).toBeVisible();
+  await expect(page.getByText(/Refresh failed · Last updated/)).toBeVisible();
+  const next = page.getByRole('button', { name: 'Next requests' });
+  await expect(next).toBeEnabled();
+  await next.press('Enter');
+  await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
+
+  failRefresh = false;
+  const retry = page.getByRole('button', { name: 'Retry usage' });
+  await expect(retry).toBeEnabled();
+  await retry.press('Enter');
+  await expect(page.getByRole('button', { name: 'Refresh usage' })).toBeFocused();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(usageQueries.at(-1)?.get('range')).toBe('7d');
+  expect(usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
+});
+
+test('retries failed request pages in place and links client diagnostics to the same outcome filter', async ({ page }) => {
+  const failed: UsageRequest = {
+    ...response.requests[0], id: 5, model: 'gpt-rate-limited', status: 429, at: '2026-11-20T14:06:00Z',
+    usageAvailable: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, priceSource: undefined
+  };
+  const websocket: UsageRequest = { ...failed, id: 6, model: 'gpt-websocket', status: 101 };
+  const { usagePaths, usageQueries } = await mockAPI(page, {
+    extraRequests: [failed, websocket],
+    initialClients: [{
+      id: 'open-code', name: 'OpenCode', createdAt: initialStart,
+      keys: [{ id: '1', prefix: 'test_key_1', createdAt: initialStart, lastUsedAt: failed.at, revokedAt: null }],
+      lastRequest: { at: failed.at, status: failed.status, usageAvailable: false }
+    }]
+  });
+  let rejectRequests = true;
+  await page.route('**/api/usage/requests?**', (route) => rejectRequests ? route.fulfill({ status: 429 }) : route.fallback());
+  await unlock(page);
+  const requests = page.getByRole('region', { name: 'Recent requests' });
+  const amount = page.getByRole('region', { name: 'Estimated usage', exact: true });
+  await expect(amount.getByText('$0.02')).toBeVisible();
+  const websocketRow = requests.getByRole('button', { name: /Details for gpt-websocket/ });
+  await expect(websocketRow).toBeVisible();
+  await requests.getByRole('combobox', { name: 'Request outcome' }).press('Enter');
+  await page.getByRole('option', { name: 'HTTP errors or interrupted' }).click();
+  await expect(page).toHaveURL(/outcome=failed$/);
+  await expect(requests.getByRole('alert')).toContainText('The dashboard received too many requests');
+  await expect(amount.getByText('$0.02')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Details for gpt-api/ })).toHaveCount(0);
+
+  rejectRequests = false;
+  await requests.getByRole('button', { name: 'Retry requests' }).press('Enter');
+  const failedRow = requests.getByRole('button', { name: /Details for gpt-rate-limited/ });
+  await expect(failedRow).toBeVisible();
+  expect(usagePaths.at(-1)).toBe('/api/usage/requests');
+  expect(usageQueries.at(-1)?.get('outcome')).toBe('failed');
+  await page.reload();
+  await expect(failedRow).toBeVisible();
+  await failedRow.press('Enter');
+  const detail = page.getByRole('dialog', { name: 'Request details' });
+  await expect(detail.getByText(/Rate limited · HTTP 429/)).toBeVisible();
+  await expect(detail.getByText(/Check the provider’s rate limit/)).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await requests.getByRole('combobox', { name: 'Request outcome' }).press('Enter');
+  await page.getByRole('option', { name: 'HTTP 2xx responses' }).click();
+  await expect(requests.getByRole('row', { name: /HTTP 200, Response received/ }).first()).toBeVisible();
+  await expect(websocketRow).toHaveCount(0);
+  await expect(failedRow).toHaveCount(0);
+
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  await expect(page.getByText('Latest recorded request')).toBeVisible();
+  await expect(page.getByText('Rate limited (429)')).toBeVisible();
+  await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
+  await expect(page.getByText('config.toml', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'View failed requests' }).press('Enter');
+  await expect(page).toHaveURL(/range=30d&client=open-code&outcome=failed$/);
+  await expect(failedRow).toBeVisible();
+});
+
+test('keeps an uncertain key issuance notice with the affected client', async ({ page }) => {
+  const key: Key = { id: '1', prefix: 'fixture_key', createdAt: initialStart, lastUsedAt: null, revokedAt: null };
+  await mockAPI(page, {
+    initialClients: [
+      { id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [key] },
+      { id: 'other', name: 'Other client', createdAt: initialStart, keys: [{ ...key, id: '2' }] }
+    ]
+  });
+  await page.route('**/api/clients/open-code/keys', (route) => route.fulfill({ status: 503 }));
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  await page.getByRole('button', { name: 'New key', exact: true }).press('Enter');
+  const error = page.getByRole('alert').filter({ hasText: 'Could not issue a proxy key' });
+  await expect(error).toContainText('Check the key list before issuing another.');
+  await page.getByRole('button', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client Other client' }).click();
+  await expect(page.getByRole('heading', { name: 'Other client' })).toBeVisible();
+  await expect(error).toHaveCount(0);
+  await page.getByRole('button', { name: /Revoke key/ }).press('Delete');
+  const confirm = page.getByRole('alertdialog', { name: 'Revoke this key?' });
+  await confirm.getByRole('button', { name: 'Cancel' }).press('Enter');
+  await expect(confirm).toHaveCount(0);
+  await page.getByRole('button', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  await expect(error).toBeVisible();
 });
 
 test('restores usage filters after reload and navigation and supports clearing them', async ({ page }) => {
