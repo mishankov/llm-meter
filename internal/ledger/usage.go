@@ -51,6 +51,18 @@ type Group struct {
 	PricedRequestCount int64   `json:"pricedRequestCount"`
 }
 
+type GroupedBucket struct {
+	Start         time.Time `json:"start"`
+	ID            string    `json:"id"`
+	EstimatedCost float64   `json:"estimatedCost"`
+	Tokens        int64     `json:"tokens"`
+}
+
+type groupedBucketKey struct {
+	start time.Time
+	id    string
+}
+
 type Request struct {
 	ID                  int64          `json:"id"`
 	At                  time.Time      `json:"at"`
@@ -95,6 +107,10 @@ type Dashboard struct {
 		Models  []Group `json:"models"`
 		Clients []Group `json:"clients"`
 	} `json:"groups"`
+	GroupedBuckets struct {
+		Models  []GroupedBucket `json:"models"`
+		Clients []GroupedBucket `json:"clients"`
+	} `json:"groupedBuckets"`
 	RequestPage
 	Allowance []Allowance `json:"allowance"`
 	Filters   struct {
@@ -164,6 +180,7 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 	}
 	defer rows.Close()
 	models, clients := make(map[string]Group), make(map[string]Group)
+	modelBuckets, clientBuckets := make(map[groupedBucketKey]GroupedBucket), make(map[groupedBucketKey]GroupedBucket)
 	for rows.Next() {
 		var timeBucket int64
 		var client, name, model string
@@ -173,15 +190,22 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 			return err
 		}
 		index := timeBucket - first.UnixMilli()/filter.Interval.Milliseconds()
-		result.Buckets[index].Totals.add(totals)
+		bucket := &result.Buckets[index]
+		bucket.Totals.add(totals)
 		result.Summary.add(totals)
-		if model != "" {
-			addGroup(models, model, model, totals)
+		modelName := model
+		if modelName == "" {
+			modelName = "Unknown model"
 		}
+		addGroup(models, model, modelName, totals)
 		addGroup(clients, client, name, totals)
+		addGroupedBucket(modelBuckets, bucket.Start, model, totals)
+		addGroupedBucket(clientBuckets, bucket.Start, client, totals)
 	}
 	result.Groups.Models = groupList(models)
 	result.Groups.Clients = groupList(clients)
+	result.GroupedBuckets.Models = groupedBucketList(modelBuckets)
+	result.GroupedBuckets.Clients = groupedBucketList(clientBuckets)
 	return rows.Err()
 }
 
@@ -212,6 +236,26 @@ func groupList(groups map[string]Group) []Group {
 	}
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].Name < list[j].Name || (list[i].Name == list[j].Name && list[i].ID < list[j].ID)
+	})
+	return list
+}
+
+func addGroupedBucket(buckets map[groupedBucketKey]GroupedBucket, start time.Time, id string, totals Totals) {
+	key := groupedBucketKey{start: start, id: id}
+	bucket := buckets[key]
+	bucket.Start, bucket.ID = start, id
+	bucket.EstimatedCost += totals.EstimatedCost
+	bucket.Tokens += totals.InputTokens + totals.OutputTokens
+	buckets[key] = bucket
+}
+
+func groupedBucketList(buckets map[groupedBucketKey]GroupedBucket) []GroupedBucket {
+	list := make([]GroupedBucket, 0, len(buckets))
+	for _, bucket := range buckets {
+		list = append(list, bucket)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Start.Before(list[j].Start) || (list[i].Start.Equal(list[j].Start) && list[i].ID < list[j].ID)
 	})
 	return list
 }

@@ -79,7 +79,8 @@ export function dismissShortcut(event: KeyboardEvent) {
 }
 
 export function guardEnter(event: KeyboardEvent) {
-  if (event.key === 'Enter' && (event.repeat || event.isComposing || event.keyCode === 229)) {
+  const activates = event.key === 'Enter' || (event.key === ' ' && event.currentTarget instanceof HTMLButtonElement);
+  if (activates && (event.repeat || event.isComposing || event.keyCode === 229)) {
     event.preventDefault();
   }
 }

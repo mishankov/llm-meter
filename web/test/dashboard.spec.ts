@@ -31,8 +31,8 @@ const response: Usage = {
 };
 
 async function mockAPI(page: Page, {
-  empty = false, initialClients = [], extraRequests = []
-}: { empty?: boolean; initialClients?: Client[]; extraRequests?: UsageRequest[] } = {}) {
+  empty = false, initialClients = [], extraRequests = [], groupedBuckets
+}: { empty?: boolean; initialClients?: Client[]; extraRequests?: UsageRequest[]; groupedBuckets?: Usage['groupedBuckets'] } = {}) {
   let authorized = false;
   let keyCount = 0;
   const clients = [...initialClients];
@@ -71,6 +71,7 @@ async function mockAPI(page: Page, {
         filters: { models: [], clients: clients.map(({ id, name }) => ({ id, name })) }
       } : {
         ...response,
+        groupedBuckets,
         summary: { ...response.summary, requestCount: response.summary.requestCount + extraRequests.length },
         requests: [...response.requests, ...extraRequests]
       };
@@ -134,7 +135,9 @@ test('filters requests from a chart and inspects and pages through them with the
   await expect(metric.getByText('2 of 4 requests priced', { exact: true })).toBeVisible();
   const requests = page.getByRole('region', { name: 'Requests' });
   await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
+  await requests.getByRole('button', { name: 'Show 1 more request' }).press('Enter');
   await expect(requests.getByText('Unpriced', { exact: true })).toHaveCount(2);
+  await page.getByRole('radio', { name: 'Usage value' }).click();
   const chart = page.getByRole('region', { name: 'Usage value over time' });
   const firstBucket = chart.getByRole('button').first();
   const secondBucket = chart.getByRole('button').nth(1);
@@ -204,6 +207,7 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
   }
   await page.setViewportSize({ width: 300, height: 900 });
+  await page.getByRole('button', { name: /Show .* more requests/ }).click();
   const provider = page.getByRole('cell', { name: /model-list-value/ }).getByText('OpenRouter', { exact: true });
   const providerFits = await provider.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
@@ -226,6 +230,7 @@ test('keeps long request names compact while exposing cache writes and full deta
   await expect(chart.getByRole('button').first()).toHaveAccessibleName(
     /Uncached input 140, cached input 60, cache writes 100, output 30$/
   );
+  await page.getByRole('button', { name: /Show .* more requests/ }).click();
   const row = page.getByRole('row').filter({ hasText: model });
   const detailButton = row.getByRole('button', { name: /Details for/ });
   await detailButton.waitFor();
@@ -244,14 +249,15 @@ test('starts with one chart and makes both desktop trends available through Comp
   const metrics = page.getByRole('radiogroup', { name: 'Chart metric' });
   const valueChart = page.getByRole('region', { name: 'Usage value over time' });
   const tokenChart = page.getByRole('region', { name: 'Tokens over time' });
-  await expect(metrics.getByRole('radio', { name: 'Usage value' })).toBeChecked();
-  await expect(valueChart).toBeVisible();
-  await expect(tokenChart).toHaveCount(0);
-  await metrics.getByRole('radio', { name: 'Usage value' }).press('ArrowRight');
+  await expect(metrics.getByRole('radio').first()).toHaveAccessibleName('Tokens');
   await expect(metrics.getByRole('radio', { name: 'Tokens' })).toBeChecked();
   await expect(tokenChart).toBeVisible();
   await expect(valueChart).toHaveCount(0);
   await metrics.getByRole('radio', { name: 'Tokens' }).press('ArrowRight');
+  await expect(metrics.getByRole('radio', { name: 'Usage value' })).toBeChecked();
+  await expect(valueChart).toBeVisible();
+  await expect(tokenChart).toHaveCount(0);
+  await metrics.getByRole('radio', { name: 'Usage value' }).press('ArrowRight');
   await expect(metrics.getByRole('radio', { name: 'Compare' })).toBeChecked();
   await expect(valueChart).toBeVisible();
   await expect(tokenChart).toBeVisible();
@@ -264,42 +270,72 @@ test('starts with one chart and makes both desktop trends available through Comp
   await expect(requests.getByText('4 requests on this page')).toBeVisible();
 });
 
-test('shows one estimated USD bar per model and switches units with the keyboard', async ({ page }) => {
-  await mockAPI(page);
+test('groups the timeline by models or clients and puts both breakdowns before the request preview', async ({ page }) => {
+  await mockAPI(page, { groupedBuckets: {
+    models: [
+      { start: initialStart, id: 'gpt-api', tokens: 320, estimatedCost: 0 },
+      { start: initialStart, id: 'gpt-6-luna', tokens: 10, estimatedCost: 0 }
+    ],
+    clients: [{ start: initialStart, id: 'open-code', tokens: 330, estimatedCost: 0 }]
+  }});
   await unlock(page);
-  const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
-  const highestEstimate = breakdown.getByRole('button', { name: /gpt-codex/ });
-  const fills = highestEstimate.locator('.rank-track > span');
-  const usd = breakdown.getByRole('radio', { name: 'Usage value' });
-  const tokens = breakdown.getByRole('radio', { name: 'Tokens' });
+  const chart = page.getByRole('region', { name: 'Tokens over time' });
+  const grouping = page.getByRole('radiogroup', { name: 'Group timeline by' });
+  const firstBucket = chart.getByRole('button').first();
+  await expect(firstBucket).toHaveAccessibleName(/Tokens 330 · gpt-6-luna 10, gpt-api 320$/);
+  await page.emulateMedia({ forcedColors: 'active' });
+  const backgrounds = (selector: string) => chart.locator(selector).evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).backgroundImage));
+  const fills = await backgrounds('.chart-column:first-child .group-bar');
+  expect(new Set(fills).size).toBe(2);
+  expect(await backgrounds('.group-swatch')).toEqual(fills);
+  await page.emulateMedia({ forcedColors: 'none' });
+  await grouping.getByRole('radio', { name: 'Models' }).press('ArrowRight');
+  await expect(grouping.getByRole('radio', { name: 'Clients' })).toBeChecked();
+  await expect(chart.getByRole('button').first()).toHaveAccessibleName(/Tokens 330 · OpenCode 330$/);
 
-  await expect(breakdown.getByRole('button').first()).toHaveAccessibleName(/gpt-codex/);
-  await expect(highestEstimate.getByText('$0.02', { exact: true })).toBeVisible();
-  await expect(breakdown.getByRole('button', { name: /gpt-unpriced/ }).getByText('Unpriced', { exact: true })).toBeVisible();
-  await expect(fills).toHaveCount(1);
-  await expect(fills).toHaveAttribute('style', /width: 100%/);
-  await usd.press('ArrowRight');
-  await expect(tokens).toBeChecked();
-  await expect(highestEstimate.getByText('70', { exact: true })).toBeVisible();
-  await tokens.press('ArrowLeft');
-  await expect(usd).toBeChecked();
-  await expect(highestEstimate.getByText('$0.02', { exact: true })).toBeVisible();
-  await breakdown.getByRole('radio', { name: 'Client' }).click();
-  const mixed = breakdown.getByRole('button', { name: /OpenCode/ });
+  const breakdown = page.getByRole('region', { name: 'Period totals and shares' });
+  const model = breakdown.getByRole('row', { name: /gpt-codex/ });
+  await expect(model.getByText('$0.02', { exact: true })).toBeVisible();
+  await expect(model.getByText('70', { exact: true })).toBeVisible();
+  await expect(model.getByText('17.5%', { exact: true })).toBeVisible();
+  await expect(breakdown.getByRole('row', { name: /gpt-unpriced/ }).getByText('Unpriced', { exact: true })).toBeVisible();
+  const mixed = breakdown.getByRole('row', { name: /OpenCode/ });
   await expect(mixed.getByText('$0.00', { exact: true })).toBeVisible();
   await expect(mixed.getByText('1 of 3 priced', { exact: true })).toBeVisible();
+
+  const requests = page.getByRole('region', { name: 'Requests', exact: true });
+  expect(await requests.evaluate((node) => {
+    const period = document.getElementById('breakdown-title');
+    return Boolean(period && period.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING);
+  })).toBe(true);
+  const rows = requests.locator('tbody tr');
+  const more = requests.getByRole('button', { name: 'Show 1 more request' });
+  await expect(rows).toHaveCount(3);
+  await expect(requests.getByText('Showing 3 of 4 requests on this page')).toBeVisible();
+  await page.getByRole('button', { name: 'View requests' }).press('Enter');
+  await expect(requests.getByRole('heading', { name: 'Requests' })).toBeFocused();
+  await more.press('Enter');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(3).getByRole('button', { name: /Details/ })).toBeFocused();
+  const fewer = requests.getByRole('button', { name: 'Show fewer requests' });
+  await page.keyboard.press('Tab');
+  await expect(fewer).toBeFocused();
+  await fewer.press('Space');
+  await expect(rows).toHaveCount(3);
+  await expect(more).toBeFocused();
 });
 
-test('aligns usage bars with differently sized amounts and keeps rows keyboard-operable', async ({ page }) => {
+test('aligns breakdown amounts and keeps model filters keyboard-operable', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
-  const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
-  const tracks = breakdown.locator('.rank-track');
-  await expect(tracks).toHaveCount(4);
+  const breakdown = page.getByRole('region', { name: 'By model' });
+  const amounts = breakdown.locator('tbody td:nth-child(2)');
+  await expect(amounts).toHaveCount(4);
 
   for (const width of [1280, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    const columns = await tracks.evaluateAll((elements) => elements.map((element) => {
+    const columns = await amounts.evaluateAll((elements) => elements.map((element) => {
       const { left, right } = element.getBoundingClientRect();
       return { left, right };
     }));
@@ -419,6 +455,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   const requests = page.getByRole('region', { name: 'Requests' });
   const amount = page.getByRole('region', { name: 'Usage value', exact: true });
   await expect(amount.getByText('$0.02')).toBeVisible();
+  await requests.getByRole('button', { name: /Show .* more requests/ }).click();
   const websocketRow = requests.getByRole('button', { name: /Details for gpt-websocket/ });
   await expect(websocketRow).toBeVisible();
   await requests.getByRole('combobox', { name: 'Request outcome' }).press('Enter');
@@ -805,7 +842,7 @@ test.describe('coarse touch input', () => {
     await unlock(page);
     const dateRange = page.getByRole('radio', { name: '30 days' });
     await dateRange.tap();
-    const chart = page.getByRole('region', { name: 'Usage value over time' });
+    const chart = page.getByRole('region', { name: 'Tokens over time' });
     const window = chart.getByRole('button').nth(10);
 
     for (const target of [

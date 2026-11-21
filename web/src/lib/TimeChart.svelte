@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { UsageBucket } from './api';
+  import type { GroupedUsageBucket, UsageBucket, UsageGroup } from './api';
   import { uncachedInput } from './format';
 
   export const tokenSeries = [
@@ -8,6 +8,29 @@
     { label: 'Cache writes', key: 'cache-write', value: (bucket: UsageBucket) => bucket.cacheWriteTokens ?? 0 },
     { label: 'Output', key: 'output', value: (bucket: UsageBucket) => bucket.outputTokens }
   ];
+
+  export type ChartSeries = { label: string; key: string; color: string; byStart: Map<string, number> };
+
+  const colors = ['--usage-chart-1', '--usage-chart-2', '--usage-chart-3', '--usage-chart-4', '--usage-chart-5', '--usage-chart-6'];
+
+  export function groupedSeries(
+    entries: GroupedUsageBucket[], groups: UsageGroup[], unknown: string, metric: 'tokens' | 'estimatedCost'
+  ): ChartSeries[] {
+    const ranked = groups.filter((group) => group.tokens > 0 || group.estimatedCost > 0)
+      .sort((a, b) => b.estimatedCost - a.estimatedCost || b.tokens - a.tokens || a.id.localeCompare(b.id));
+    const top = ranked.slice(0, ranked.length > colors.length ? colors.length - 1 : colors.length);
+    const series = top.map(({ id, name }, index) => ({
+      label: name || id || unknown, key: 'group:' + id, color: colors[index], byStart: new Map<string, number>()
+    }));
+    const byID = new Map(top.map(({ id }, index) => [id, series[index]]));
+    const other = { label: 'Other', key: 'other', color: colors[colors.length - 1], byStart: new Map<string, number>() };
+    for (const entry of entries) {
+      if (entry[metric] <= 0) continue;
+      const group = byID.get(entry.id) ?? other;
+      group.byStart.set(entry.start, (group.byStart.get(entry.start) ?? 0) + entry[metric]);
+    }
+    return [...series, other].filter((group) => group.byStart.size > 0);
+  }
 </script>
 
 <script lang="ts">
@@ -19,9 +42,10 @@
     kind: 'cost' | 'tokens';
     range: string;
     selection: string;
+    series?: ChartSeries[];
     onSelect: (start: string) => void;
   }
-  let { buckets, kind, range, selection, onSelect }: Props = $props();
+  let { buckets, kind, range, selection, series, onSelect }: Props = $props();
   const tooltip = createTooltipController<string>();
   let viewportWidth = $state(0);
   let plotWidth = $state(0);
@@ -75,11 +99,17 @@
   function describe(bucket: UsageBucket, coverage: string) {
     const values = kind === 'cost'
       ? 'Usage value ' + bucketAmount(bucket)
-      : tokenSeries.map((series, index) =>
+      : series ? 'Tokens ' + count(tokens(bucket)) : tokenSeries.map((series, index) =>
         (index ? series.label.toLowerCase() : series.label) + ' ' + count(series.value(bucket))
       ).join(', ');
-    return [bucketTime(bucket), values, coverage].filter(Boolean).join(' · ');
+    const breakdown = series?.flatMap((group) => {
+      const value = group.byStart.get(bucket.start);
+      return value ? [group.label + ' ' + formatAmount(value)] : [];
+    }).join(', ');
+    return [bucketTime(bucket), values, coverage, breakdown].filter(Boolean).join(' · ');
   }
+
+  const formatAmount = (value: number) => kind === 'cost' ? money(value) : count(value);
 </script>
 
 <div class="chart-body">
@@ -118,8 +148,13 @@
                 {@render children?.(state)}
               </button>
             {/snippet}
-            <span class="bars" class:stacked={kind === 'tokens'} aria-hidden="true">
-              {#if kind === 'cost'}
+            <span class="bars" class:stacked={kind === 'tokens' || Boolean(series)} aria-hidden="true">
+              {#if series && !(kind === 'cost' && unpricedBucket(bucket))}
+                {#each series as group (group.key)}
+                  {@const amount = group.byStart.get(bucket.start) ?? 0}
+                  {#if amount > 0}<span class="bar group-bar" style:background={'var(' + group.color + ')'} style:height={height(amount)}></span>{/if}
+                {/each}
+              {:else if kind === 'cost'}
                 <span class="bar usage-color" class:unpriced-bar={unpricedBucket(bucket)} style:height={height(bucket.estimatedCost)}></span>
               {:else}
                 {#each tokenSeries as series (series.key)}
@@ -152,11 +187,17 @@
           {@const coverage = partialPricing(bucket)}
           <span>Usage value <b>{bucketAmount(bucket)}</b></span>
           {#if coverage}<span>{coverage}</span>{/if}
+        {:else if series}
+          <span>Tokens <b>{count(tokens(bucket))}</b></span>
         {:else}
           {#each tokenSeries as series (series.key)}
             <span>{series.label} <b>{count(series.value(bucket))}</b></span>
           {/each}
         {/if}
+        {#each series ?? [] as group (group.key)}
+          {@const value = group.byStart.get(bucket.start)}
+          {#if value}<span><span class="tooltip-group-name">{group.label}</span> <b>{formatAmount(value)}</b></span>{/if}
+        {/each}
       {/if}
     {/snippet}
   </TooltipContent>
@@ -187,7 +228,8 @@
   :global(.chart-tooltip[data-open]) { display: grid; gap: 3px; }
   :global(.chart-tooltip strong) { color: var(--text); font-weight: 600; }
   :global(.chart-tooltip span) { display: flex; justify-content: space-between; gap: 14px; }
-  :global(.chart-tooltip b) { font-weight: 500; color: var(--text); }
+  .tooltip-group-name { display: block; min-inline-size: 0; overflow-wrap: anywhere; }
+  :global(.chart-tooltip b) { font-weight: 500; color: var(--text); flex: none; }
   .chart-scroll-hint { margin: -3px 0 0; font-size: 12px; }
   @media (max-width: 670px) {
     .chart-body { block-size: 170px; grid-template-columns: minmax(40px, max-content) minmax(0, 1fr); gap: 6px; }

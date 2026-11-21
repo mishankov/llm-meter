@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
   import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -29,7 +30,13 @@
   let { requests, loading, bucketLabel, outcome, onOutcomeChange, pageNumber, error, retry, canPrevious, canNext, onPrevious, onNext }: Props = $props();
   let selected = $state<UsageRequest | null>(null);
   let open = $state(false);
+  let expanded = $state(false);
+  const previewSize = 3;
+  let remaining = $derived(Math.max(0, (requests?.length ?? 0) - previewSize));
+  let shownRequests = $derived(expanded ? requests : requests?.slice(0, previewSize));
+  let previewCommand = $derived(expanded ? 'Show fewer requests' : 'Show ' + count(remaining) + ' more ' + (remaining === 1 ? 'request' : 'requests'));
   let heading: HTMLHeadingElement;
+  let requestTable = $state<HTMLDivElement>();
   let outcomeFilter: HTMLDivElement;
   let detailTrigger: HTMLButtonElement | null = null;
 
@@ -63,6 +70,14 @@
     detailTrigger = event.currentTarget as HTMLButtonElement;
     selected = request;
     open = true;
+  }
+
+  async function togglePreview() {
+    expanded = !expanded;
+    if (expanded) {
+      await tick();
+      requestTable?.querySelectorAll<HTMLButtonElement>('.row-details')[previewSize]?.focus();
+    }
   }
 
   function amount(request: UsageRequest) {
@@ -128,7 +143,7 @@
           {#if bucketLabel}<span>{bucketLabel}</span>{/if}
           {#if bucketLabel && requests?.length}<span aria-hidden="true">·</span>{/if}
           {#if requests?.length}
-            <span>{count(requests.length)} {requests.length === 1 ? 'request' : 'requests'} on this page</span>
+            <span>{remaining && !expanded ? 'Showing ' + previewSize + ' of ' : ''}{count(requests.length)} {requests.length === 1 ? 'request' : 'requests'} on this page</span>
           {/if}
         </p>
       {/if}
@@ -157,7 +172,7 @@
     </div>
   {/if}
   {#if requests?.length}
-    <div class="table-scroll">
+    <div class="table-scroll" id="request-table" bind:this={requestTable}>
       <table>
         <thead>
           <tr>
@@ -167,7 +182,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each requests as request (request.id)}
+          {#each shownRequests ?? [] as request (request.id)}
             {@const basis = costLabel(request)}
             <tr>
               <td class="muted numeric">
@@ -202,6 +217,13 @@
         </tbody>
       </table>
     </div>
+    {#if remaining}
+      <div class="request-disclosure">
+        <Button class="secondary-button" title={previewCommand + ' (Enter or Space)'} aria-keyshortcuts="Enter Space"
+          aria-expanded={expanded} aria-controls="request-table" disabled={loading || open} focusableWhenDisabled
+          onkeydown={guardEnter} onclick={togglePreview}>{previewCommand}</Button>
+      </div>
+    {/if}
   {:else if !error}
     <div class="empty-state">
       <InboxIcon size={21} aria-hidden="true" />
@@ -267,6 +289,7 @@
 </Dialog>
 
 <style>
+  .request-disclosure { margin-block-start: 10px; }
   .requests-section { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   #requests-title { scroll-margin-block-start: 8px; }
   .request-heading, .request-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

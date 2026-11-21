@@ -72,6 +72,13 @@ export interface UsageGroup {
   pricedRequestCount?: number;
 }
 
+export interface GroupedUsageBucket {
+  start: string;
+  id: string;
+  tokens: number;
+  estimatedCost: number;
+}
+
 export interface Allowance {
   id: string;
   label: string;
@@ -87,6 +94,7 @@ export interface RequestPage {
 export interface Usage extends RequestPage {
   summary: Omit<UsageBucket, 'start'> & { requestCount: number; pricedRequestCount: number };
   buckets: UsageBucket[];
+  groupedBuckets?: { models: GroupedUsageBucket[]; clients: GroupedUsageBucket[] };
   groups: { models: UsageGroup[]; clients: UsageGroup[] };
   allowance: Allowance[];
   filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[] };

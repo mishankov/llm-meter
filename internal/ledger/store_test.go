@@ -105,7 +105,8 @@ func TestRequestOutcomeFiltersPagesWithoutChangingOverview(t *testing.T) {
 		t.Fatal(err)
 	}
 	if failed.Summary != baseline.Summary || !reflect.DeepEqual(failed.Buckets, baseline.Buckets) ||
-		!reflect.DeepEqual(failed.Groups, baseline.Groups) || !reflect.DeepEqual(failed.Allowance, baseline.Allowance) {
+		!reflect.DeepEqual(failed.Groups, baseline.Groups) || !reflect.DeepEqual(failed.GroupedBuckets, baseline.GroupedBuckets) ||
+		!reflect.DeepEqual(failed.Allowance, baseline.Allowance) {
 		t.Fatal("outcome filter changed the overview")
 	}
 	if failed.NextCursor == nil || len(failed.Requests) != requestPageSize {
@@ -134,6 +135,76 @@ func TestRequestOutcomeFiltersPagesWithoutChangingOverview(t *testing.T) {
 	}
 	if len(page.Requests) != 2 || page.Requests[0].Status != 299 || page.Requests[1].Status != 200 || page.NextCursor != nil {
 		t.Fatalf("unexpected succeeded page: %+v", page)
+	}
+}
+
+func TestDashboardGroupedBuckets(t *testing.T) {
+	ctx := t.Context()
+	store, err := Open(":memory:", pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	start := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	first, _, err := store.CreateClient(ctx, "First", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.CreateClient(ctx, "Second", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := 0.125
+	for _, usage := range []proxy.Usage{
+		{At: start, Source: "api", ClientID: first.ID, Model: "a", HasUsage: true, InputTokens: 12},
+		{At: start.Add(10 * time.Minute), Source: "api", ClientID: first.ID, Model: "b", HasUsage: true, InputTokens: 4, OutputTokens: 6},
+		{At: start.Add(20 * time.Minute), Source: "codex", ClientID: second.ID, Model: "a", HasUsage: true, InputTokens: 8, CachedInputTokens: 3, OutputTokens: 2},
+		{At: start.Add(time.Hour), Source: "api", ClientID: first.ID, HasUsage: true, InputTokens: 20},
+		{At: start.Add(time.Hour + time.Minute), Source: "api", ClientID: first.ID, Model: "a", InputTokens: 100},
+	} {
+		usage.Status = 200
+		if usage.HasUsage {
+			usage.ReportedCost = &cost
+		}
+		if err := store.Record(ctx, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := Filter{Start: start, End: start.Add(2 * time.Hour), Interval: time.Hour}
+	data, err := store.Dashboard(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantModels := []GroupedBucket{
+		{Start: start, ID: "a", Tokens: 22, EstimatedCost: 2 * cost},
+		{Start: start, ID: "b", Tokens: 10, EstimatedCost: cost},
+		{Start: start.Add(time.Hour), ID: "", Tokens: 20, EstimatedCost: cost},
+		{Start: start.Add(time.Hour), ID: "a"},
+	}
+	if !reflect.DeepEqual(data.GroupedBuckets.Models, wantModels) {
+		t.Fatalf("model bucket totals = %+v, want %+v", data.GroupedBuckets.Models, wantModels)
+	}
+	for _, bucket := range data.Buckets {
+		var tokens int64
+		var cost float64
+		for _, clientBucket := range data.GroupedBuckets.Clients {
+			if clientBucket.Start.Equal(bucket.Start) {
+				tokens += clientBucket.Tokens
+				cost += clientBucket.EstimatedCost
+			}
+		}
+		if tokens != bucket.InputTokens+bucket.OutputTokens || cost != bucket.EstimatedCost {
+			t.Fatalf("client totals for %s = %d tokens and %g, aggregate = %+v", bucket.Start, tokens, cost, bucket)
+		}
+	}
+	query.Start, query.Interval, query.Source, query.Client, query.Model = start.Add(time.Minute), 24*time.Hour, "codex", second.ID, "a"
+	filtered, err := store.Dashboard(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []GroupedBucket{{Start: start.Truncate(24 * time.Hour), ID: second.ID, Tokens: 10, EstimatedCost: cost}}
+	if !reflect.DeepEqual(filtered.GroupedBuckets.Clients, want) {
+		t.Fatalf("filtered client buckets = %+v, want %+v", filtered.GroupedBuckets.Clients, want)
 	}
 }
 
