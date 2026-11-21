@@ -12,7 +12,8 @@ const response: Usage = {
   groups: {
     models: [
       { id: 'gpt-api', name: 'gpt-api', apiCost: 0, codexValue: 0, tokens: 330 },
-      { id: 'gpt-codex', name: 'gpt-codex', apiCost: 0, codexValue: .016, tokens: 70 }
+      { id: 'gpt-codex', name: 'gpt-codex', apiCost: 0, codexValue: .016, tokens: 70 },
+      { id: 'gpt-6-luna', name: 'gpt-6-luna', apiCost: 0, codexValue: .001346, tokens: 10 }
     ],
     clients: [{ id: 'open-code', name: 'OpenCode', apiCost: 0, codexValue: 0, tokens: 330 }]
   },
@@ -150,6 +151,31 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
   }
+});
+
+test('aligns usage bars with differently sized amounts and keeps rows keyboard-operable', async ({ page }) => {
+  const { usageQueries } = await mockAPI(page);
+  await unlock(page);
+  const breakdown = page.getByRole('region', { name: 'Usage breakdown' });
+  const tracks = breakdown.locator('.rank-track');
+  await expect(tracks).toHaveCount(3);
+
+  for (const width of [1280, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const columns = await tracks.evaluateAll((elements) => elements.map((element) => {
+      const { left, right } = element.getBoundingClientRect();
+      return { left, right };
+    }));
+    expect(columns).toEqual(columns.map(() => columns[0]));
+  }
+
+  const luna = breakdown.getByRole('button', { name: /gpt-6-luna/ });
+  await luna.press('Enter');
+  await expect(luna).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => usageQueries.at(-1)?.get('model')).toBe('gpt-6-luna');
+  await luna.press('Space');
+  await expect(luna).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => usageQueries.at(-1)?.get('model')).toBeNull();
 });
 
 test('hides previous results when loading the selected source fails', async ({ page }) => {
