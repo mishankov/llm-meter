@@ -322,12 +322,33 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		usage.CompletionWindow = ""
 		usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance = nil, nil, nil
 	}
+	// A replay of an Antigravity stream can report more usage for the same response.
+	// Keep the original request and replace its usage and price together.
 	_, err := s.db.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
 		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
 		reported_cost, reported_list_cost, reported_allowance, service_tier, completion_window)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO UPDATE SET
+            model = COALESCE(NULLIF(excluded.model, ''), requests.model),
+            input_tokens = excluded.input_tokens, cached_input_tokens = excluded.cached_input_tokens,
+            cache_write_tokens = excluded.cache_write_tokens, cache_write_12h_tokens = excluded.cache_write_12h_tokens,
+            output_tokens = excluded.output_tokens, cost = excluded.cost, input_rate = excluded.input_rate,
+            cached_input_rate = excluded.cached_input_rate, cache_write_rate = excluded.cache_write_rate,
+            cache_write_12h_rate = excluded.cache_write_12h_rate, output_rate = excluded.output_rate,
+            price_source = excluded.price_source, reported_cost = excluded.reported_cost,
+            reported_list_cost = excluded.reported_list_cost, reported_allowance = excluded.reported_allowance
+        WHERE requests.provider = 'antigravity' AND excluded.provider = 'antigravity'
+            AND requests.usage_available = 1 AND excluded.usage_available = 1
+            AND excluded.input_tokens >= requests.input_tokens AND excluded.cached_input_tokens >= requests.cached_input_tokens
+            AND excluded.cache_write_tokens >= requests.cache_write_tokens
+            AND excluded.cache_write_12h_tokens >= requests.cache_write_12h_tokens
+            AND excluded.output_tokens >= requests.output_tokens
+            AND (excluded.input_tokens > requests.input_tokens OR excluded.cached_input_tokens > requests.cached_input_tokens
+                OR excluded.cache_write_tokens > requests.cache_write_tokens
+                OR excluded.cache_write_12h_tokens > requests.cache_write_12h_tokens
+                OR excluded.output_tokens > requests.output_tokens)`,
 		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.Endpoint, usage.Method, usage.Status,
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
 		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
