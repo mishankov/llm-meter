@@ -55,6 +55,11 @@
   }
 </script>
 
+{#snippet costLegend()}
+  <span><i class="api-color" aria-hidden="true"></i>API cost</span>
+  <span><i class="codex-color" aria-hidden="true"></i>Codex value</span>
+{/snippet}
+
 <header class="page-head">
   <div>
     <h1>Usage overview</h1>
@@ -106,8 +111,7 @@
     <section class="chart-section" aria-labelledby="cost-chart-title">
       <h2 id="cost-chart-title">Cost over time</h2>
       <div class="legend">
-        <span><i class="api-color"></i>API cost</span>
-        <span><i class="codex-color"></i>Codex value</span>
+        {@render costLegend()}
       </div>
       <TimeChart buckets={data.buckets} kind="cost" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
     </section>
@@ -138,6 +142,11 @@
         </div>
       </header>
       {#if groups.length}
+        {#if unit === 'dollars'}
+          <div class="legend rank-legend">
+            {@render costLegend()}
+          </div>
+        {/if}
         <div class="rank-list">
           {#each groups as group (group.id)}
             <button
@@ -213,6 +222,7 @@
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
   .secondary-row.with-allowance { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--section-space); }
   .rank-controls { display: flex; gap: 6px; align-items: center; }
+  .rank-legend { margin-block: 0 8px; }
   .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
   .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
   .rank-item:is(:hover, [aria-pressed=true]):not(:disabled) { background: var(--hover); }
