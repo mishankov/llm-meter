@@ -49,6 +49,7 @@ func New(store *ledger.Store, token string, secureCookie bool, log *slog.Logger)
 	mux.HandleFunc("POST /api/clients/{client}/keys", s.requireSession(s.createKey))
 	mux.HandleFunc("DELETE /api/clients/{client}/keys/{key}", s.requireSession(s.revokeKey))
 	mux.HandleFunc("GET /api/usage", s.requireSession(s.usage))
+	mux.HandleFunc("GET /api/usage/requests", s.requireSession(s.usageRequests))
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -186,6 +187,20 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 	data, err := s.store.Dashboard(r.Context(), filter)
 	if err != nil {
 		s.failed(w, "read dashboard usage", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (s *server) usageRequests(w http.ResponseWriter, r *http.Request) {
+	filter, err := usageFilter(r, s.now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := s.store.Requests(r.Context(), filter)
+	if err != nil {
+		s.failed(w, "read dashboard requests", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)

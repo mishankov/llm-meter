@@ -8,7 +8,7 @@
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
-  import { AlertDialog, AlertDialogBackdrop, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@ui-sdk/svelte/alert-dialog';
+  import { AlertDialog, AlertDialogBackdrop, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from '@ui-sdk/svelte/alert-dialog';
   import { Button } from '@ui-sdk/svelte/button';
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
@@ -18,16 +18,26 @@
   import { dismissShortcut, formatDateTime, guardEnter } from './format';
 
   interface Props {
+    active: boolean;
     clientId: string;
     draft?: string;
+    keyDialogOpen?: boolean;
     navigate: (clientId?: string) => void;
     viewUsage: (clientId: string) => void;
     onUnauthorized: () => void;
   }
-  let { clientId, draft = $bindable(''), navigate, viewUsage, onUnauthorized }: Props = $props();
+  let { active, clientId, draft = $bindable(''), keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
 
   let clients = $state<Client[]>([]);
   let selected = $derived(clients.find((client) => client.id === clientId));
+  let hasActiveKey = $derived(selected?.keys.some((key) => !key.revokedAt));
+  let hasUsedKey = $derived(selected?.keys.some((key) => key.lastUsedAt));
+  let proxyOrigin = $state('');
+  const endpoints = [
+    { label: 'OpenAI API', path: '/v1' },
+    { label: 'Signed-in Codex', path: '/backend-api/codex' },
+    { label: 'OpenCode Go', path: '/opencode-go' }
+  ];
   let loading = $state(true);
   let loadError = $state('');
   let actionError = $state('');
@@ -39,8 +49,23 @@
   let generated = $state<NewKey | null>(null);
   let revoking = $state<Key | null>(null);
   let copyState = $state<'idle' | 'copied' | 'manual'>('idle');
+  let discardKey = false;
   let listRequest: AbortController | null = null;
   let returnFocus = $state<HTMLElement | null>(null);
+
+  $effect(() => {
+    keyDialogOpen = dialogOpen && (busy || generated !== null);
+  });
+
+  $effect(() => {
+    if (!dialogOpen || (!busy && (!generated || copyState === 'copied'))) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener('beforeunload', warnBeforeLeaving);
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
+  });
 
   function message(cause: unknown) {
     if (cause instanceof APIError && cause.status === 401) onUnauthorized();
@@ -72,6 +97,7 @@
   }
 
   onMount(() => {
+    proxyOrigin = window.location.origin;
     void load();
     const timer = window.setInterval(() => { if (!document.hidden) void load(true); }, 5_000);
     return () => {
@@ -81,7 +107,7 @@
   });
 
   function canCreate() {
-    return !loading && !loadError && !busy && !dialogOpen && !revokeOpen;
+    return active && !loading && !loadError && !busy && !dialogOpen && !revokeOpen;
   }
 
   function openCreate() {
@@ -120,6 +146,7 @@
     returnFocus = document.activeElement as HTMLElement | null;
     busy = true;
     actionError = '';
+    generated = null;
     dialogMode = 'key';
     dialogOpen = true;
     try {
@@ -232,11 +259,16 @@
     navigate(id);
     void load(true);
   }
+
+  function keyDialogReturnFocus() {
+    if (returnFocus?.isConnected) return returnFocus;
+    return document.getElementById('new-key') ?? document.querySelector<HTMLElement>('nav a[aria-current="page"]');
+  }
 </script>
 
 <svelte:window onkeydown={physicalShortcut} />
 
-{#if clientId}
+{#if active && clientId}
   <div class="client-crumb">
     <Button class="secondary-button back-button" onclick={() => navigate()}>
       <ArrowLeftIcon size={15} aria-hidden="true" /> Clients
@@ -255,19 +287,50 @@
       </div>
     </header>
     {#if actionError && !revokeOpen}<div class="feedback error-feedback" role="alert">{actionError}</div>{/if}
+    <section class="connection" aria-labelledby="connection-title">
+      <h2 id="connection-title">Connection settings</h2>
+      <div class="connection-columns">
+        <dl class="connection-urls">
+          {#each endpoints as endpoint (endpoint.path)}
+            <div><dt>{endpoint.label}</dt><dd><code>{proxyOrigin}{endpoint.path}</code></dd></div>
+          {/each}
+        </dl>
+        <div class="connection-instructions">
+          <p>Use the base URL for your provider. Send your proxy key in the <code>X-LLM-Proxy-Key</code> header alongside your usual provider credentials.</p>
+          <p class="connection-status" role="status">
+            {#if !hasActiveKey}
+              <strong>No active proxy key</strong>
+              <span>Use New key to connect this client.</span>
+            {:else if hasUsedKey}
+              <strong>Proxy key used</strong>
+              <span>A request authenticated at the proxy. Open View usage to check recorded requests.</span>
+            {:else}
+              <strong>Waiting for first request</strong>
+              <span>Send a request from your configured client to check the connection.</span>
+            {/if}
+          </p>
+        </div>
+      </div>
+    </section>
     <section class="client-table" aria-labelledby="keys-title">
       <header class="section-head"><h2 id="keys-title">Proxy keys</h2></header>
       <div class="table-scroll">
-        <table>
+        <table class="keys-table">
           <thead>
-            <tr><th scope="col">Key prefix</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+            <tr><th scope="col">Key prefix</th><th scope="col" class="key-date">Created</th><th scope="col" class="key-date">Last used</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             {#each selected.keys as key (key.id)}
               <tr>
-                <td><code>{key.prefix}…</code></td>
-                <td>{formatDateTime(key.createdAt)}</td>
-                <td>{key.lastUsedAt ? formatDateTime(key.lastUsedAt) : 'Never'}</td>
+                <td class="key-identity">
+                  <code>{key.prefix}…</code>
+                  <dl class="key-dates muted">
+                    <div><dt>Created</dt><dd>{formatDateTime(key.createdAt)}</dd></div>
+                    <div><dt>Last used</dt><dd>{key.lastUsedAt ? formatDateTime(key.lastUsedAt) : 'Never'}</dd></div>
+                  </dl>
+                </td>
+                <td class="key-date">{formatDateTime(key.createdAt)}</td>
+                <td class="key-date">{key.lastUsedAt ? formatDateTime(key.lastUsedAt) : 'Never'}</td>
                 <td><span class="key-status" class:revoked={key.revokedAt}>{key.revokedAt ? 'Revoked' : 'Active'}</span></td>
                 <td>
                   {#if !key.revokedAt}
@@ -286,7 +349,7 @@
     <h1>Client unavailable</h1>
     <div class="empty-state">Select a client from the list.</div>
   {/if}
-{:else}
+{:else if active}
   <header class="page-head">
     <div>
       <h1>Clients</h1>
@@ -327,24 +390,24 @@
   {/if}
 {/if}
 
-{#if loadError}
+{#if active && loadError}
   <div class="feedback error-feedback" role="alert"><span>{loadError}</span><Button class="secondary-button" onclick={() => load()}>Retry</Button></div>
-{:else if loading}
+{:else if active && loading}
   <div class="empty-state" role="status">Loading clients…</div>
 {/if}
 
-<Dialog bind:open={dialogOpen} onOpenChange={(open, details) => {
-  if (!open && busy) details.cancel();
+<Dialog bind:open={dialogOpen} closeOnOutsidePress={!generated || copyState === 'copied'} onOpenChange={(open, details) => {
+  if (!open && (busy || (generated && copyState !== 'copied' && details.returnValue !== 'saved'))) details.cancel();
   else if (!open) generated = null;
 }}>
   <DialogBackdrop class="dialog-backdrop" />
-  <DialogContent class="dialog-content" initialFocus={() => document.getElementById(generated ? 'copy-key' : 'client-name')} finalFocus={() => returnFocus?.isConnected ? returnFocus : document.getElementById('new-key')}>
+  <DialogContent class="dialog-content" initialFocus={() => document.getElementById(generated ? 'copy-key' : 'client-name')} finalFocus={keyDialogReturnFocus}>
     {#if generated}
       <DialogTitle class="dialog-title">New proxy key</DialogTitle>
       <DialogDescription class="muted">Copy this key now. The full key is shown only once.</DialogDescription>
       <div class="key-secret" data-agent-hidden>
         <input id="issued-key" aria-label="New proxy key" value={generated.token} readonly />
-        <Button id="copy-key" class="secondary-button" onclick={copyKey}>
+        <Button id="copy-key" class="secondary-button" title="Copy key (Enter)" aria-keyshortcuts="Enter" onclick={copyKey} onkeydown={guardEnter}>
           {#if copyState === 'copied'}<CheckIcon size={15} aria-hidden="true" />{:else}<CopyIcon size={15} aria-hidden="true" />{/if}
           Copy key
         </Button>
@@ -353,7 +416,33 @@
         {#if copyState === 'copied'}Key copied.{:else if copyState === 'manual'}Key selected. Use your system’s copy shortcut.{/if}
       </p>
       <p class="muted">Send it in the <code>X-LLM-Proxy-Key</code> header.</p>
-      <div class="dialog-actions"><DialogClose class="primary-button" disabled={busy}>Done</DialogClose></div>
+      <div class="dialog-actions key-dialog-actions">
+        {#if copyState !== 'copied'}
+          <AlertDialog
+            onOpenChange={(open, details) => { discardKey = !open && details.returnValue === 'discard'; }}
+            onOpenChangeComplete={(open) => {
+              if (!open && discardKey) {
+                dialogOpen = false;
+                generated = null;
+              }
+            }}
+          >
+            <AlertDialogTrigger class="secondary-button" disabled={busy} onkeydown={guardEnter}>Close without saving</AlertDialogTrigger>
+            <AlertDialogBackdrop class="dialog-backdrop" />
+            <AlertDialogContent class="dialog-content">
+              <AlertDialogTitle class="dialog-title">Close without saving the key?</AlertDialogTitle>
+              <AlertDialogDescription class="muted">The key stays active. To see a full key again, issue a new one and revoke this key if you no longer need it.</AlertDialogDescription>
+              <div class="dialog-actions key-dialog-actions">
+                <AlertDialogClose class="secondary-button" onkeydown={guardEnter}>Cancel</AlertDialogClose>
+                <AlertDialogClose class="danger-button" value="discard" aria-keyshortcuts="Enter" onkeydown={guardEnter}>Close without saving <kbd aria-hidden="true">↵</kbd></AlertDialogClose>
+              </div>
+            </AlertDialogContent>
+          </AlertDialog>
+        {/if}
+        <DialogClose class="primary-button" value="saved" disabled={busy} aria-keyshortcuts="Enter" onkeydown={guardEnter}>
+          {copyState === 'copied' ? 'Done' : 'I saved the key'} <kbd aria-hidden="true">↵</kbd>
+        </DialogClose>
+      </div>
     {:else if dialogMode === 'key'}
       <DialogTitle class="dialog-title">Generating proxy key</DialogTitle>
       <DialogDescription class="muted">The key will appear here when it’s ready.</DialogDescription>
@@ -396,10 +485,31 @@
   .client-table td:last-child { width: 1%; }
   .client-name { display: inline-flex; align-items: center; gap: 9px; font-weight: 550; }
   .client-name :global(svg) { color: var(--accent); }
+  .connection { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .connection-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 32px; margin-block-start: 12px; }
+  .connection-urls { display: grid; gap: 7px; margin: 0; }
+  .connection-urls div { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 2px 10px; }
+  .connection-urls dt, .connection-instructions { color: var(--muted); }
+  .connection-urls dd, .connection-instructions p { margin: 0; }
+  .connection-urls code, .connection-instructions code { color: var(--text); overflow-wrap: anywhere; }
+  .connection-status { display: grid; gap: 2px; padding-block-start: 9px; }
+  .connection-status strong { color: var(--text); }
   .key-status { color: var(--success); }
   .key-status.revoked { color: var(--muted); }
+  .key-dates { display: none; }
   .key-secret { display: flex; gap: 6px; margin-top: 16px; }
   .key-secret input { flex: 1; min-width: 0; margin: 0; padding: 0 9px; border: 1px solid var(--strong-line); border-radius: 6px; background: var(--bg); font: 13px var(--mono); }
   .key-secret :global(button) { flex: none; }
-  .copy-status { min-height: 1.5em; margin: 4px 0; font-size: 11px; }
+  .copy-status { min-height: 1.5em; margin: 4px 0; font-size: 12px; }
+  .dialog-actions.key-dialog-actions { flex-wrap: wrap; }
+  @media (max-width: 760px) {
+    .connection-columns { grid-template-columns: 1fr; }
+    .keys-table .key-date { display: none; }
+    .keys-table td { vertical-align: top; }
+    .keys-table .key-identity { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    .key-dates { display: grid; gap: 2px; margin: 4px 0 0; }
+    .key-dates div { display: flex; flex-wrap: wrap; gap: 0 5px; }
+    .key-dates dd { margin: 0; }
+    .keys-table :global(.compact-button) { min-height: 36px; }
+  }
 </style>

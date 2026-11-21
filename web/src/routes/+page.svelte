@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
   import Layers3Icon from '@lucide/svelte/icons/layers-3';
@@ -8,29 +8,34 @@
   import { Button } from '@ui-sdk/svelte/button';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
-  import { APIError, api, jsonPost, type Usage } from '../lib/api';
+  import { APIError, api, jsonPost, type RequestPage, type Usage } from '../lib/api';
   import { guardEnter } from '../lib/format';
   import UsageView from '../lib/UsageView.svelte';
   import ClientsView from '../lib/ClientsView.svelte';
 
-  type Filter = 'range' | 'source' | 'client' | 'model' | 'bucket';
+  const defaultFilters = { range: '24h', source: '', client: '', model: '', bucket: '' };
+  type Filter = keyof typeof defaultFilters;
   type Screen = 'usage' | 'clients';
 
   let session = $state<'checking' | 'locked' | 'ready' | 'unreachable'>('checking');
   let screen = $state<Screen>('usage');
   let clientId = $state('');
   let clientDraft = $state('');
+  let keyDialogOpen = $state(false);
   let token = $state('');
   let loggingIn = $state(false);
   let loggingOut = $state(false);
   let authError = $state('');
 
-  let filters = $state({ range: '24h', source: '', client: '', model: '', bucket: '' });
+  let filters = $state({ ...defaultFilters });
   let cursors = $state<string[]>(['']);
-  let usageResult = $state<{ data: Usage; overviewQuery: string; query: string; updatedAt: string } | null>(null);
+  let overviewResult = $state<{ data: Usage; query: string; updatedAt: string } | null>(null);
+  let requestResult = $state<{ data: RequestPage; query: string } | null>(null);
   let loadingUsage = $state(false);
   let usageError = $state('');
   let request: AbortController | null = null;
+  let refreshOnReturn = true;
+  const usageHref = $derived(usageHash(filters));
   const overviewQuery = $derived(new URLSearchParams(
     Object.entries(filters).filter(([name, value]) => name !== 'bucket' && value)
   ).toString());
@@ -41,15 +46,15 @@
     if (cursor) query.set('cursor', cursor);
     return query.toString();
   });
-  const usageOverview = $derived(usageResult?.overviewQuery === overviewQuery ? usageResult : null);
-  const requestPage = $derived(usageResult?.query === usageQuery ? usageResult.data : null);
+  const usageOverview = $derived(overviewResult?.query === overviewQuery ? overviewResult : null);
+  const requestPage = $derived(requestResult?.query === usageQuery ? requestResult.data : null);
 
   onMount(() => {
     readHash();
     void checkSession();
     const timer = window.setInterval(() => {
-      if (session === 'ready' && screen === 'usage' && !document.hidden && cursors.length === 1 && !loadingUsage) {
-        void fetchUsage();
+      if (session === 'ready' && screen === 'usage' && !keyDialogOpen && !document.hidden && cursors.length === 1 && !loadingUsage) {
+        refreshUsage();
       }
     }, 12_000);
     return () => {
@@ -59,17 +64,54 @@
   });
 
   $effect(() => {
-    if (session === 'ready' && screen === 'usage') {
-      void fetchUsage();
-    } else {
+    if (session !== 'ready' || screen !== 'usage' || keyDialogOpen) {
       request?.abort();
+      refreshOnReturn = true;
+      return;
     }
+    const overview = overviewQuery;
+    const query = usageQuery;
+    untrack(() => void fetchUsage(overview, query, refreshOnReturn));
   });
 
+  function usageHash(values: typeof defaultFilters) {
+    const query = new URLSearchParams();
+    for (const name of Object.keys(defaultFilters) as Filter[]) {
+      if (values[name] !== defaultFilters[name]) query.set(name, values[name]);
+    }
+    return query.size ? '#usage?' + query.toString() : '#usage';
+  }
+
+  function readFilters(query: string) {
+    const params = new URLSearchParams(query);
+    const range = params.get('range');
+    const source = params.get('source');
+    const next = {
+      range: range === '7d' || range === '30d' ? range : defaultFilters.range,
+      source: source === 'api' || source === 'codex' ? source : defaultFilters.source,
+      client: filterText(params.get('client'), 100),
+      model: filterText(params.get('model'), 500),
+      bucket: params.get('bucket') ?? ''
+    };
+    const interval = (next.range === '24h' ? 1 : 24) * 3_600_000;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(next.bucket) ||
+      Date.parse(next.bucket) % interval !== 0) next.bucket = '';
+    if (usageHash(next) !== usageHash(filters)) {
+      filters = next;
+      cursors = [''];
+    }
+  }
+
+  function filterText(value: string | null, maxBytes: number) {
+    return value && new TextEncoder().encode(value).length <= maxBytes ? value : '';
+  }
+
   function readHash() {
-    const [section, selected] = window.location.hash.slice(1).split('/');
+    const [path, query = ''] = window.location.hash.slice(1).split('?');
+    const [section, selected] = path.split('/');
     screen = section === 'clients' ? 'clients' : 'usage';
     clientId = screen === 'clients' && selected ? selected : '';
+    if (screen === 'usage') readFilters(query);
   }
 
   function navigateClient(id?: string) {
@@ -79,24 +121,30 @@
   }
 
   function viewUsage(id: string) {
-    filters = { ...filters, client: id, source: '', model: '', bucket: '' };
-    cursors = [''];
-    window.location.hash = '#usage';
-    readHash();
+    navigateUsage({ ...filters, client: id, source: '', model: '', bucket: '' });
   }
 
   function filtersChanged(name: Filter, value: string) {
     if (filters[name] === value) return;
-    filters = { ...filters, [name]: value, bucket: name === 'bucket' ? value : '' };
+    navigateUsage({ ...filters, [name]: value, bucket: name === 'bucket' ? value : '' });
+  }
+
+  function navigateUsage(values: typeof defaultFilters) {
     cursors = [''];
+    window.location.hash = usageHash(values);
+    readHash();
+  }
+
+  function refreshUsage() {
+    void fetchUsage(overviewQuery, usageQuery, true);
   }
 
   function lockSession() {
     request?.abort();
     session = 'locked';
     token = '';
-    usageResult = null;
-    filters = { range: '24h', source: '', client: '', model: '', bucket: '' };
+    overviewResult = null;
+    requestResult = null;
     cursors = [''];
   }
 
@@ -147,23 +195,29 @@
     lockSession();
   }
 
-  async function fetchUsage() {
-    const query = usageQuery;
-    const overview = overviewQuery;
+  async function fetchUsage(overview: string, query: string, refreshOverview: boolean) {
+    const loadOverview = refreshOverview || overviewResult?.query !== overview;
+    refreshOnReturn = false;
     request?.abort();
     const current = new AbortController();
     request = current;
     loadingUsage = true;
     usageError = '';
     try {
-      const data = await api<Usage>('/usage?' + query, { signal: current.signal });
-      if (!current.signal.aborted) {
-        usageResult = { data, query, overviewQuery: overview, updatedAt: new Date().toISOString() };
+      if (loadOverview) {
+        const data = await api<Usage>('/usage?' + query, { signal: current.signal });
+        if (current.signal.aborted) return;
+        overviewResult = { data, query: overview, updatedAt: new Date().toISOString() };
+        requestResult = { data, query };
+      } else {
+        const data = await api<RequestPage>('/usage/requests?' + query, { signal: current.signal });
+        if (current.signal.aborted) return;
+        requestResult = { data, query };
       }
     } catch (cause) {
       if (current.signal.aborted) return;
       if (cause instanceof APIError && cause.status === 401) lockSession();
-      else usageError = 'Could not load usage.';
+      else usageError = loadOverview ? 'Could not load usage.' : 'Could not load requests.';
     } finally {
       if (request === current) {
         loadingUsage = false;
@@ -209,12 +263,12 @@
 {:else}
   <div class="shell">
     <aside class="sidebar">
-      <a class="brand" href="#usage">
+      <a class="brand" href={usageHref}>
         <span class="app-mark"><Layers3Icon size={19} aria-hidden="true" /></span>
         <span>LLM Proxy</span>
       </a>
       <nav aria-label="Main navigation">
-        <a href="#usage" aria-current={screen === 'usage' ? 'page' : undefined}>
+        <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined}>
           <ChartNoAxesCombinedIcon size={17} aria-hidden="true" /> Usage
         </a>
         <a href="#clients" aria-current={screen === 'clients' ? 'page' : undefined}>
@@ -233,7 +287,7 @@
       {#if screen === 'usage'}
         <UsageView
           data={usageOverview?.data ?? null}
-          filterOptions={usageResult?.data.filters}
+          filterOptions={overviewResult?.data.filters}
           {requestPage}
           loading={loadingUsage}
           error={usageError}
@@ -241,12 +295,14 @@
           {...filters}
           canPrevious={cursors.length > 1}
           update={filtersChanged}
-          refresh={() => void fetchUsage()}
+          clearFilters={() => navigateUsage(defaultFilters)}
+          refresh={refreshUsage}
           onPrevious={() => cursors = cursors.slice(0, -1)}
           onNext={() => { if (requestPage?.nextCursor) cursors = [...cursors, requestPage.nextCursor]; }}
         />
-      {:else}
-        <ClientsView {clientId} bind:draft={clientDraft} navigate={navigateClient} {viewUsage} onUnauthorized={lockSession} />
+      {/if}
+      {#if screen === 'clients' || keyDialogOpen}
+        <ClientsView active={screen === 'clients'} {clientId} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={lockSession} />
       {/if}
     </main>
   </div>

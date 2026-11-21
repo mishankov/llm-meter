@@ -57,6 +57,8 @@ export interface UsageRequest extends TokenCounts {
 export interface UsageBucket extends TokenCounts {
   start: string;
   estimatedCost: number;
+  requestCount?: number;
+  pricedRequestCount?: number;
 }
 
 export interface UsageGroup {
@@ -64,6 +66,8 @@ export interface UsageGroup {
   name: string;
   estimatedCost: number;
   tokens: number;
+  requestCount?: number;
+  pricedRequestCount?: number;
 }
 
 export interface Allowance {
@@ -73,12 +77,15 @@ export interface Allowance {
   resetsAt: string | null;
 }
 
-export interface Usage {
-  summary: Omit<UsageBucket, 'start'> & { requestCount: number };
-  buckets: UsageBucket[];
-  groups: { models: UsageGroup[]; clients: UsageGroup[] };
+export interface RequestPage {
   requests: UsageRequest[];
   nextCursor: string | null;
+}
+
+export interface Usage extends RequestPage {
+  summary: Omit<UsageBucket, 'start'> & { requestCount: number; pricedRequestCount: number };
+  buckets: UsageBucket[];
+  groups: { models: UsageGroup[]; clients: UsageGroup[] };
   allowance: Allowance[];
   filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[] };
 }
