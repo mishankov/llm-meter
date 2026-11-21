@@ -25,13 +25,14 @@
   interface Props {
     active: boolean;
     clientId: string;
+    loggingOut: boolean;
     draft?: string;
     keyDialogOpen?: boolean;
     navigate: (clientId?: string) => void;
     viewUsage: (clientId: string, outcome?: RequestOutcome) => void;
     onUnauthorized: () => void;
   }
-  let { active, clientId, draft = $bindable(''), keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
+  let { active, clientId, loggingOut, draft = $bindable(''), keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
 
   let clients = $state<Client[]>([]);
   let selected = $derived(clients.find((client) => client.id === clientId));
@@ -132,7 +133,7 @@
   });
 
   function canManageClients() {
-    return active && !loading && !loadError && !busy;
+    return active && !loggingOut && !loading && !loadError && !busy;
   }
 
   function canCreate() {
@@ -418,7 +419,7 @@
                 <td><span class="key-status" class:revoked={key.revokedAt}>{key.revokedAt ? 'Revoked' : 'Active'}</span></td>
                 <td>
                   {#if !key.revokedAt}
-                    <Button class="secondary-button compact-button" aria-label={'Revoke key ' + key.prefix} aria-keyshortcuts="Delete" title="Revoke key (Delete)" disabled={!canManageClients()} focusableWhenDisabled onclick={(event) => confirmRevoke(key, event)} onkeydown={revokeShortcut}>Revoke <kbd aria-hidden="true">Del</kbd></Button>
+                    <Button class="secondary-button compact-button" aria-label={'Revoke key ' + key.prefix} aria-keyshortcuts="Delete" title="Revoke key (Delete)" disabled={!canManageClients()} focusableWhenDisabled onclick={(event) => confirmRevoke(key, event)} onkeydown={revokeShortcut}>Revoke</Button>
                   {/if}
                 </td>
               </tr>
@@ -589,7 +590,7 @@
   .key-status.revoked { color: var(--muted); }
   .key-dates { display: none; }
   .key-secret { display: flex; gap: 6px; margin-top: 16px; }
-  .key-secret input { flex: 1; min-width: 0; margin: 0; padding: 0 9px; border: 1px solid var(--strong-line); border-radius: 6px; background: var(--bg); font: 13px var(--mono); }
+  .key-secret input { flex: 1; min-width: 0; margin: 0; padding: 0 9px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--bg); font: 13px var(--mono); }
   .key-secret :global(button) { flex: none; }
   .copy-status { min-height: 1.5em; margin: 4px 0; font-size: 12px; }
   .dialog-actions.key-dialog-actions { flex-wrap: wrap; }
@@ -606,6 +607,6 @@
     .key-dates { display: grid; gap: 2px; margin: 4px 0 0; }
     .key-dates div { display: flex; flex-wrap: wrap; gap: 0 5px; }
     .key-dates dd { margin: 0; }
-    .keys-table :global(.compact-button) { min-height: 36px; }
+    .keys-table :global(.compact-button) { min-height: var(--touch-target); }
   }
 </style>

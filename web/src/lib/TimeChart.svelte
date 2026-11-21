@@ -22,12 +22,10 @@
     onSelect: (start: string) => void;
   }
   let { buckets, kind, range, selection, onSelect }: Props = $props();
-  const touchColumnWidth = 32;
   const tooltip = createTooltipController<string>();
   let viewportWidth = $state(0);
   let plotWidth = $state(0);
   let focusedBucket = $state('');
-  const minTouchWidth = $derived(buckets.length * touchColumnWidth);
   let firstBucket = $derived(buckets[0]?.start ?? '');
   let availableFocus = $derived(buckets.some((bucket) => bucket.start === focusedBucket) ? focusedBucket : firstBucket);
   let maximum = $derived(axisMaximum(Math.max(0, ...buckets.map((bucket) =>
@@ -93,7 +91,7 @@
   {#if range !== '24h'}<span class="axis-zone" aria-hidden="true">UTC</span>{/if}
 
   <div class="chart-content" bind:clientWidth={viewportWidth}>
-    <div class="chart-plot" style:--columns={Math.max(buckets.length, 1)} style:--touch-width={minTouchWidth + 'px'} bind:clientWidth={plotWidth}>
+    <div class="chart-plot" style:--columns={Math.max(buckets.length, 1)} bind:clientWidth={plotWidth}>
       <div class="chart-grid" aria-hidden="true">
         {#each levels as level (level)}
           <span></span>
@@ -177,12 +175,11 @@
   .chart-labels { position: absolute; inset: auto 0 0; color: var(--muted); font-size: 11px; white-space: nowrap; }
   .chart-labels span { text-align: center; }
   :global(.chart-column) { position: relative; appearance: none; background: transparent; border: 0; min-width: 0; padding: 0 2px; cursor: pointer; border-radius: 3px 3px 0 0; }
-  :global(.chart-column:hover), :global(.chart-column[aria-pressed=true]) { background: #ffffff08; }
+  :global(.chart-column:hover), :global(.chart-column[aria-pressed=true]) { background: var(--chart-hover); }
   :global(.chart-column[aria-pressed=true]) { box-shadow: inset 0 0 0 1px var(--accent); }
   :global(.chart-column:focus-visible) { z-index: 1; outline-offset: -2px; }
   .bars { block-size: 100%; display: flex; align-items: end; justify-content: center; pointer-events: none; }
   .bar { display: inline-block; inline-size: 74%; max-inline-size: 44px; border-radius: 2px 2px 0 0; }
-  .bar[data-series=cache-write] { background: var(--cache-write); }
   .unpriced-bar { border-block-end: 2px dotted var(--muted); }
   .bars.stacked { flex-direction: column-reverse; justify-content: flex-start; align-items: center; }
   .stacked .bar { border-radius: 0; }
@@ -198,7 +195,7 @@
   }
   @media (pointer: coarse) {
     .chart-content { overflow-x: auto; }
-    .chart-plot { min-inline-size: var(--touch-width); }
+    .chart-plot { min-inline-size: calc(var(--columns) * var(--touch-target)); }
     .chart-labels span:first-child { text-align: start; }
     .chart-labels span:last-child { text-align: end; }
   }

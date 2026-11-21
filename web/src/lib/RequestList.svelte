@@ -268,7 +268,7 @@
 
 <style>
   .requests-section { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
-  #requests-title { scroll-margin-block-start: 75px; }
+  #requests-title { scroll-margin-block-start: 8px; }
   .request-heading, .request-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .request-controls { justify-content: space-between; }
   .request-summary { display: flex; flex-wrap: wrap; gap: 0 6px; margin: 4px 0 0; }

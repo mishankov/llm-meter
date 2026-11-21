@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -19,6 +19,7 @@
   type Screen = 'usage' | 'clients';
   type UsageScope = 'overview' | 'requests';
   type ScopedProblem = { query: string; problem: DashboardProblem };
+  const responseTimeout = 15_000;
 
   let session = $state<'checking' | 'locked' | 'ready' | 'unreachable'>('checking');
   let screen = $state<Screen>('usage');
@@ -28,6 +29,7 @@
   let token = $state('');
   let loggingIn = $state(false);
   let loggingOut = $state(false);
+  let logoutRequest: AbortController | null = null;
   let authError = $state<DashboardProblem | null>(null);
   let tokenRejected = $state(false);
   let expiredSession = $state(false);
@@ -74,6 +76,7 @@
     return () => {
       window.clearInterval(timer);
       request?.abort();
+      logoutRequest?.abort();
     };
   });
 
@@ -196,6 +199,10 @@
 
   function lockSession(expired = false) {
     request?.abort();
+    logoutRequest?.abort();
+    logoutRequest = null;
+    loggingOut = false;
+    keyDialogOpen = false;
     session = 'locked';
     expiredSession = expired;
     authError = null;
@@ -208,13 +215,14 @@
     overviewFailures.clear();
     requestFailure = null;
     cursors = [''];
+    void tick().then(() => document.getElementById('access-token')?.focus());
   }
 
   async function checkSession() {
     session = 'checking';
     authError = null;
     try {
-      await api('/session', { signal: AbortSignal.timeout(15_000) });
+      await api('/session', { signal: AbortSignal.timeout(responseTimeout) });
       session = 'ready';
     } catch (cause) {
       if (cause instanceof APIError && cause.status === 401) session = 'locked';
@@ -227,15 +235,17 @@
 
   async function login(event: SubmitEvent) {
     event.preventDefault();
-    if (!token || loggingIn) return;
+    if (session !== 'locked' || !token || loggingIn) return;
     loggingIn = true;
     authError = null;
     tokenRejected = false;
     try {
-      await api('/login', jsonPost({ token }));
+      await api('/login', { ...jsonPost({ token }), signal: AbortSignal.timeout(responseTimeout) });
       token = '';
       expiredSession = false;
       session = 'ready';
+      await tick();
+      document.getElementById('content')?.focus();
     } catch (cause) {
       tokenRejected = cause instanceof APIError && cause.status === 401;
       authError = tokenRejected
@@ -247,19 +257,28 @@
   }
 
   async function logout() {
-    if (loggingOut) return;
+    if (session !== 'ready' || loggingOut || keyDialogOpen) return;
+    const current = new AbortController();
+    logoutRequest = current;
     loggingOut = true;
     authError = null;
     try {
-      await api('/logout', { method: 'POST' });
+      const signal = AbortSignal.any([current.signal, AbortSignal.timeout(responseTimeout)]);
+      await api('/logout', { method: 'POST', signal });
     } catch (cause) {
+      if (current.signal.aborted) return;
       if (!(cause instanceof APIError && cause.status === 401)) {
-        authError = dashboardProblem(cause, 'Could not lock the dashboard');
+        const problem = dashboardProblem(cause, 'Could not lock the dashboard');
+        authError = { ...problem, detail: 'The dashboard may still be unlocked. ' + problem.detail };
         return;
       }
     } finally {
-      loggingOut = false;
+      if (logoutRequest === current) {
+        logoutRequest = null;
+        loggingOut = false;
+      }
     }
+    if (current.signal.aborted) return;
     clientDraft = '';
     lockSession();
   }
@@ -272,7 +291,7 @@
     const current = new AbortController();
     request = current;
     loadingScope = scope;
-    const signal = AbortSignal.any([current.signal, AbortSignal.timeout(15_000)]);
+    const signal = AbortSignal.any([current.signal, AbortSignal.timeout(responseTimeout)]);
     try {
       if (loadOverview) {
         const data = await api<Usage>('/usage?' + query, { signal });
@@ -328,14 +347,15 @@
         <form class="dialog-form auth-form" onsubmit={login}>
           <Field class="form-field" name="token">
             <FieldLabel>Access token</FieldLabel>
-            <Input class="text-input" type="password" data-agent-secret required bind:value={token} autocomplete="current-password" placeholder="Enter your dashboard token" disabled={loggingIn} aria-invalid={tokenRejected} onkeydown={guardEnter} />
+            <Input id="access-token" class="text-input" type="password" data-agent-secret required bind:value={token} autocomplete="current-password" placeholder="Enter your dashboard token" readOnly={loggingIn} aria-invalid={tokenRejected} aria-describedby={authError ? 'unlock-error' : undefined} onkeydown={guardEnter} />
           </Field>
-          {#if authError}<RecoveryNotice problem={authError} />{/if}
-          <Button type="submit" class="primary-button unlock-button" aria-keyshortcuts="Enter" disabled={loggingIn || !token} onkeydown={guardEnter}>
+          {#if authError}<div id="unlock-error"><RecoveryNotice problem={authError} /></div>{/if}
+          <Button type="submit" class="primary-button unlock-button" aria-keyshortcuts="Enter" disabled={loggingIn || !token} focusableWhenDisabled={loggingIn} onkeydown={guardEnter}>
             <LockKeyholeIcon size={15} aria-hidden="true" />
             {loggingIn ? 'Unlocking…' : 'Unlock dashboard'}
             <kbd aria-hidden="true" class="unlock-arrow">↵</kbd>
           </Button>
+          <span class="sr-only" role="status">{loggingIn ? 'Unlocking dashboard…' : ''}</span>
         </form>
       {:else if session === 'unreachable'}
         {#if authError}<RecoveryNotice problem={authError} retry={checkSession} />{/if}
@@ -361,9 +381,10 @@
         </a>
       </nav>
       <div class="nav-end">
-        <Button class="lock-button" onclick={logout} disabled={loggingOut} title="Lock dashboard">
+        <Button class="lock-button" title="Lock dashboard (Enter)" aria-keyshortcuts="Enter" disabled={loggingOut || keyDialogOpen} focusableWhenDisabled={loggingOut} onclick={logout} onkeydown={guardEnter}>
           <LogOutIcon size={16} aria-hidden="true" /> <span>{loggingOut ? 'Locking…' : 'Lock dashboard'}</span>
         </Button>
+        <span class="sr-only" role="status">{loggingOut ? 'Locking dashboard…' : ''}</span>
       </div>
     </aside>
 
@@ -405,7 +426,7 @@
         {#await import('../lib/ClientsView.svelte')}
           <p class="muted" role="status">Opening clients…</p>
         {:then { default: ClientsView }}
-          <ClientsView active={screen === 'clients'} {clientId} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
+          <ClientsView active={screen === 'clients'} {clientId} {loggingOut} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
         {:catch}
           {@render screenLoadError('clients')}
         {/await}

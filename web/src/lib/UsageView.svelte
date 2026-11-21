@@ -377,12 +377,11 @@
   .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
   .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
   .metrics, .timeline, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
-  .timeline { --cache-write: #72c9dc; }
   .filters { align-items: flex-end; }
   .filter-field { display: grid; gap: 4px; min-inline-size: 0; }
   .filter-field > span { color: var(--muted); font-size: 12px; }
   .usage-empty { border-block-start: 1px solid var(--line); padding-block: var(--section-space); }
-  .usage-empty h2 { margin-block-end: 6px; scroll-margin-block-start: 75px; }
+  .usage-empty h2 { margin-block-end: 6px; scroll-margin-block-start: 8px; }
   .usage-empty p { max-inline-size: 55ch; color: var(--muted); }
   .usage-empty a { text-decoration: none; }
   .usage-loading { display: grid; gap: var(--gap); border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
@@ -409,7 +408,6 @@
   .chart-section h3 + .legend { margin-block-start: 6px; }
   .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
-  .legend i[data-series=cache-write] { background: var(--cache-write); }
   .legend .unpriced-mark { block-size: 0; inline-size: 14px; border-block-end: 2px dotted var(--muted); }
   .chart-actions, .chart-selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .chart-actions { align-items: flex-end; margin-block-start: 12px; }
@@ -424,6 +422,7 @@
   .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
   .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
   .rank-item:is(:hover, [aria-pressed=true]):not(:disabled) { background: var(--hover); }
+  .rank-item[aria-pressed=true]:not(:disabled) { box-shadow: inset 0 0 0 1px var(--selected-border); }
   .rank-item:disabled { cursor: default; }
   .rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .rank-track { background: var(--line); border-radius: 3px; display: flex; block-size: 10px; overflow: hidden; }
@@ -437,6 +436,9 @@
   .allowance-heading span { color: var(--codex-light); white-space: nowrap; }
   :global(.allowance-track) { background: var(--line); border-radius: 4px; overflow: hidden; block-size: 6px; }
   :global(.allowance-indicator) { display: block; block-size: 100%; background: var(--codex); width: var(--meter-value, 0%); }
+  @media (pointer: coarse) {
+    .rank-item { min-block-size: var(--touch-target); }
+  }
   @media (forced-colors: active) {
     .timeline {
       --input: CanvasText;

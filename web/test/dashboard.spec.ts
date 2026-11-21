@@ -337,7 +337,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(apiRequest).toBeVisible();
   await page.getByRole('combobox', { name: 'Source' }).click();
   await page.getByRole('option', { name: 'Codex subscription' }).click();
-  await expect(page.getByRole('status')).toHaveText('Loading usage…');
+  await expect(page.getByRole('status').filter({ hasText: 'Loading usage…' })).toBeVisible();
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
   await expect(page.getByRole('alert')).toContainText('Could not load usage');
@@ -797,6 +797,35 @@ test.describe('mobile daily ranges west of UTC', () => {
   });
 });
 
+test.describe('coarse touch input', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 320, height: 640 } });
+
+  test('keeps dashboard commands and chart windows large enough to tap', async ({ page }) => {
+    await mockAPI(page);
+    await unlock(page);
+    const dateRange = page.getByRole('radio', { name: '30 days' });
+    await dateRange.tap();
+    const chart = page.getByRole('region', { name: 'Usage value over time' });
+    const window = chart.getByRole('button').nth(10);
+
+    for (const target of [
+      page.getByRole('button', { name: 'Lock dashboard' }),
+      page.getByRole('button', { name: 'Refresh usage' }),
+      dateRange,
+      window
+    ]) {
+      const box = (await target.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await window.tap();
+    await expect(window).toHaveAttribute('aria-pressed', 'true');
+    await expect(page).toHaveURL(/bucket=2026-11-30/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  });
+});
+
 for (const [width, height] of [[1280, 900], [320, 568]]) {
   test(`centers a compact New client dialog at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height });
@@ -901,4 +930,120 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.labels).toContain('Unlock dashboard');
   expect(result.ok, result.error?.message).toBe(true);
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+});
+
+test('bounds stalled unlock and lock requests and keeps keyboard recovery available', async ({ page }) => {
+  await mockAPI(page);
+  let unlocks = 0;
+  let locks = 0;
+  await page.route('**/api/login', (route) => {
+    if (++unlocks > 1) return route.fallback();
+  });
+  await page.route('**/api/logout', (route) => {
+    if (++locks > 1) return route.fallback();
+  });
+  const holdDeadline = () => page.evaluate(() => {
+    const timeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => {
+      AbortSignal.timeout = timeout;
+      const request = new AbortController();
+      window.addEventListener('test-auth-timeout', () => {
+        request.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      }, { once: true });
+      return request.signal;
+    };
+  });
+  const expireDeadline = () => page.evaluate(() => window.dispatchEvent(new Event('test-auth-timeout')));
+
+  await page.goto('/');
+  const token = page.getByLabel('Access token');
+  await token.fill('dashboard-token');
+  await holdDeadline();
+  await token.press('Enter');
+  await expect.poll(() => unlocks).toBe(1);
+  await expect(token).toBeFocused();
+  await expect(token).toHaveJSProperty('readOnly', true);
+  await expect(page.getByRole('button', { name: 'Unlocking…' })).toBeDisabled();
+  await expireDeadline();
+  const error = page.getByRole('alert');
+  await expect(error).toContainText('The proxy took too long to respond');
+  await expect(token).toHaveAccessibleDescription(/The proxy took too long to respond/);
+  await expect(token).toBeFocused();
+  await expect(token).toHaveValue('dashboard-token');
+  await expect(token).toBeEditable();
+  await token.press('Enter');
+  const usage = page.getByRole('heading', { name: 'Usage overview' });
+  await expect(usage).toBeVisible();
+  await expect(page.getByRole('main')).toBeFocused();
+
+  const lock = page.getByRole('button', { name: 'Lock dashboard' });
+  await expect(lock).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await holdDeadline();
+  await lock.press('Enter');
+  await expect.poll(() => locks).toBe(1);
+  const locking = page.getByRole('button', { name: 'Locking…' });
+  await expect(locking).toBeDisabled();
+  await expect(locking).toBeFocused();
+  await expireDeadline();
+  await expect(error).toContainText('The dashboard may still be unlocked');
+  await expect(usage).toBeVisible();
+  await expect(lock).toBeFocused();
+  await lock.press('Enter');
+  await expect(token).toBeFocused();
+  await expect(token).toHaveValue('');
+});
+
+test('cancels a pending lock when the authenticated session expires', async ({ page }) => {
+  const { expireSession } = await mockAPI(page);
+  await unlock(page);
+  const refresh = page.getByRole('button', { name: 'Refresh usage' });
+  await expect(refresh).toBeEnabled();
+  let lockSent = false;
+  await page.route('**/api/logout', () => { lockSent = true; });
+  const lockAborted = page.waitForEvent('requestfailed', {
+    predicate: (request) => new URL(request.url()).pathname === '/api/logout',
+    timeout: 5_000
+  });
+  await page.getByRole('button', { name: 'Lock dashboard' }).press('Enter');
+  await expect.poll(() => lockSent).toBe(true);
+  expireSession();
+  await refresh.press('Enter');
+  await lockAborted;
+  const token = page.getByLabel('Access token');
+  await expect(token).toBeFocused();
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+  await expect(page.getByRole('alert')).toBeHidden();
+});
+
+test('holds client writes while a pending lock could close the dashboard', async ({ page }) => {
+  await mockAPI(page, { initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [] }] });
+  let failLock: (() => Promise<void>) | undefined;
+  await page.route('**/api/logout', route => {
+    failLock = () => route.fulfill({ status: 503 });
+  });
+  let keyWrites = 0;
+  await page.route('**/api/clients/open-code/keys', route => {
+    keyWrites++;
+    return route.fallback();
+  });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).press('Enter');
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).press('Enter');
+  const newKey = page.getByRole('button', { name: 'New key' });
+  await expect(newKey).toBeEnabled();
+  await page.getByRole('button', { name: 'Lock dashboard' }).press('Enter');
+  await expect.poll(() => Boolean(failLock)).toBe(true);
+  await expect(newKey).toBeDisabled();
+  await newKey.press('k');
+  await newKey.press('Enter');
+  expect(keyWrites).toBe(0);
+  await expect(page.getByRole('dialog')).toBeHidden();
+
+  await failLock!();
+  await expect(newKey).toBeEnabled();
+  await newKey.press('k');
+  await expect(page.getByRole('dialog', { name: 'New proxy key' })).toBeVisible();
+  expect(keyWrites).toBe(1);
 });
