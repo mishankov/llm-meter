@@ -36,7 +36,7 @@
   let online = $state(true);
 
   let filters = $state({ ...defaultFilters });
-  let chartMetric = $state<'cost' | 'tokens' | 'compare'>('cost');
+  let chartMetric = $state<'cost' | 'tokens'>('tokens');
   let cursors = $state<string[]>(['']);
   let resetSnapshot = $state<{ filters: Filters; cursors: string[] } | null>(null);
   let requestFocusHash = $state<string | null>(null);

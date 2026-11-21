@@ -10,9 +10,10 @@
   import Filter from './Filter.svelte';
   import RequestList from './RequestList.svelte';
   import RecoveryNotice from './RecoveryNotice.svelte';
-  import TimeChart, { tokenSeries } from './TimeChart.svelte';
+  import TimeChart, { groupedSeries, tokenSeries, type ChartSeries } from './TimeChart.svelte';
 
-  type ChartMetric = 'cost' | 'tokens' | 'compare';
+  type ChartMetric = 'cost' | 'tokens';
+  type Dimension = 'models' | 'clients';
 
   interface Props {
     data: Usage | null;
@@ -46,26 +47,20 @@
 
   let {
     data, filterOptions, requestPage, loadingScope, online, overviewError, requestError, updatedAt,
-    range, source, client, model, bucket, outcome, canPrevious, pageNumber, chartMetric = $bindable('cost'), update,
+    range, source, client, model, bucket, outcome, canPrevious, pageNumber, chartMetric = $bindable('tokens'), update,
     clearFilters, canUndoReset, undoFilters, focusRequests, onRequestFocus, refresh, retryRequests, onPrevious, onNext
   }: Props = $props();
-  let ranking = $state('models');
-  let unit = $state('dollars');
+  let dimension = $state<Dimension>('models');
   let resetStatus = $state('');
-  const chartTitles = { cost: 'Usage value over time', tokens: 'Tokens over time', compare: 'Compare usage over time' };
-  let chartTitle = $derived(chartTitles[chartMetric]);
+  let chartTitle = $derived(chartMetric === 'tokens' ? 'Tokens over time' : 'Usage value over time');
   let scoped = $derived(Boolean(source || client || model || bucket || outcome));
   let loading = $derived(loadingScope !== null);
   let firstRun = $derived(data?.summary.requestCount === 0 && !data.filters.clients.length);
   let showFilters = $derived(!firstRun || scoped || range !== '24h' || canUndoReset);
   let resetCommand = $derived(canUndoReset ? 'Undo reset' : 'Reset filters');
   let bucketLabel = $derived(bucket ? range === '24h' ? formatTimeWindow(bucket, 1) : formatUTCDay(bucket) + ' UTC' : '');
-  let rankedGroups = $derived(
-    (data?.groups[ranking === 'models' ? 'models' : 'clients'] ?? [])
-      .slice().sort((a, b) => groupValue(b) - groupValue(a) || a.name.localeCompare(b.name))
-  );
-  let groups = $derived(rankedGroups.slice(0, 6));
-  let maxRank = $derived(Math.max(0, ...groups.map(groupValue)));
+  const percentage = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 });
+  let chartSeries = $derived(getSeries(chartMetric === 'tokens' ? 'tokens' : 'estimatedCost'));
 
   const sourceOptions = [
     { value: '', label: 'All sources' },
@@ -86,12 +81,16 @@
     return [{ value: '', label: all }, ...options];
   }
 
-  function groupValue(group: UsageGroup) {
-    return unit === 'tokens' ? group.tokens : group.estimatedCost;
+  function getSeries(metric: 'estimatedCost' | 'tokens') {
+    if (!data?.groupedBuckets) return undefined;
+    return groupedSeries(data.groupedBuckets[dimension], data.groups[dimension], dimension === 'models' ? 'Unknown model' : 'Unknown client', metric);
   }
 
-  function selectGroup(group: UsageGroup) {
-    const filter = ranking === 'models' ? 'model' : 'client';
+  function share(value: number, total: number) {
+    return total > 0 ? percentage.format(value / total) : '—';
+  }
+
+  function selectGroup(group: UsageGroup, filter: 'model' | 'client') {
     const control = document.getElementById(filter + '-filter')?.querySelector<HTMLElement>('[role="combobox"]');
     control?.focus({ preventScroll: true });
     control?.scrollIntoView({ block: 'center' });
@@ -128,7 +127,11 @@
   }
 
   function changeChartMetric(value: string | null) {
-    if (value === 'cost' || value === 'tokens' || value === 'compare') chartMetric = value;
+    if (value === 'cost' || value === 'tokens') chartMetric = value;
+  }
+
+  function changeDimension(value: string | null) {
+    if (value === 'models' || value === 'clients') dimension = value;
   }
 
   function retryOverview() {
@@ -137,6 +140,56 @@
     refresh();
   }
 </script>
+
+{#snippet breakdown(groups: UsageGroup[], filter: 'model' | 'client', totalTokens: number, totalCost: number)}
+  {@const heading = filter === 'model' ? 'By model' : 'By client'}
+  {@const ranked = groups.slice().sort((a, b) => b.estimatedCost - a.estimatedCost || b.tokens - a.tokens || a.name.localeCompare(b.name))}
+  <section class="breakdown-panel" aria-labelledby={filter + '-breakdown-title'}>
+    <h3 id={filter + '-breakdown-title'}>{heading}</h3>
+    {#if ranked.length}
+      <table>
+        <thead><tr><th scope="col">{filter === 'model' ? 'Model' : 'Client'}</th><th scope="col">Usage value</th><th scope="col">Tokens</th></tr></thead>
+        <tbody>
+          {#each ranked.slice(0, 6) as group (group.id)}
+            {@const priced = group.pricedRequestCount !== 0}
+            {@const coverage = partialPricing(group)}
+            <tr>
+              <th scope="row">
+                {#if group.id}
+                  <Button class="breakdown-filter" title={group.name + ' (Enter or Space)'}
+                    aria-label={'Filter by ' + filter + ' ' + group.name} aria-keyshortcuts="Enter Space"
+                    aria-pressed={(filter === 'model' ? model : client) === group.id}
+                    onclick={() => selectGroup(group, filter)} onkeydown={guardEnter}>{group.name}</Button>
+                {:else}
+                  {group.name}
+                {/if}
+              </th>
+              <td><strong>{priced ? money(group.estimatedCost) : 'Unpriced'}</strong>
+                {#if priced}<span>{share(group.estimatedCost, totalCost)}</span>{/if}
+                {#if coverage}<span>{coverage}</span>{/if}
+              </td>
+              <td><strong>{compactCount(group.tokens)}</strong><span>{share(group.tokens, totalTokens)}</span></td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if ranked.length > 6}<p class="muted breakdown-note">Showing 6 of {count(ranked.length)} {filter}s.</p>{/if}
+    {:else}
+      <p class="muted breakdown-note">No usage by {filter} in this view.</p>
+    {/if}
+  </section>
+{/snippet}
+
+{#snippet groupLegend(series: ChartSeries[] | undefined, markUnpriced = false)}
+  {#if series?.length || markUnpriced}
+    <div class="legend">
+      {#each series ?? [] as group (group.key)}
+        <span><i class="group-swatch" aria-hidden="true" style:background={'var(' + group.color + ')'}></i>{group.label}</span>
+      {/each}
+      {#if markUnpriced}<span><i class="unpriced-mark" aria-hidden="true"></i>Unpriced window</span>{/if}
+    </div>
+  {/if}
+{/snippet}
 
 {#snippet allowanceSection(windows: Allowance[])}
   <section class="allowance-section" aria-labelledby="allowance-title">
@@ -209,6 +262,9 @@
     {#if scoped || range !== '24h' || canUndoReset}
       <Button class="secondary-button" title={resetCommand + ' (Enter)'} aria-keyshortcuts="Enter" onclick={resetOrUndoFilters} onkeydown={guardEnter}>{resetCommand}</Button>
     {/if}
+    {#if data?.summary.requestCount}
+      <Button class="secondary-button requests-jump" title="View requests (Enter)" aria-keyshortcuts="Enter" onclick={viewRequests} onkeydown={guardEnter}>View requests</Button>
+    {/if}
   </div>
 {/if}
 <span class="sr-only" aria-live="polite" aria-atomic="true">{resetStatus}</span>
@@ -267,44 +323,50 @@
   <div class="timeline">
     <header class="section-head chart-heading">
       <h2 id="chart-heading">{chartTitle}</h2>
-      <SegmentedControl class="segmented" aria-label="Chart metric" value={chartMetric} onValueChange={changeChartMetric}>
-        <SegmentedControlItem value="cost">Usage value</SegmentedControlItem>
-        <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
-        <SegmentedControlItem value="compare">Compare</SegmentedControlItem>
-      </SegmentedControl>
+      <div class="chart-controls">
+        {#if data.groupedBuckets}
+          <SegmentedControl class="segmented" aria-label="Group timeline by" value={dimension} onValueChange={changeDimension}>
+            <SegmentedControlItem value="models">Models</SegmentedControlItem>
+            <SegmentedControlItem value="clients">Clients</SegmentedControlItem>
+          </SegmentedControl>
+        {/if}
+        <SegmentedControl class="segmented" aria-label="Chart metric" value={chartMetric} onValueChange={changeChartMetric}>
+          <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
+          <SegmentedControlItem value="cost">Usage value</SegmentedControlItem>
+        </SegmentedControl>
+      </div>
     </header>
-    <div class="chart-row" class:compare={chartMetric === 'compare'}>
-      {#if chartMetric !== 'tokens'}
-        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'cost-chart-title' : 'chart-heading'}>
-          <header>
-            {#if chartMetric === 'compare'}<h3 id="cost-chart-title">{chartTitles.cost}</h3>{/if}
-            {#if data.buckets.some(unpricedBucket)}
-              <div class="legend"><span><i class="unpriced-mark"></i>Unpriced window</span></div>
-            {/if}
-          </header>
-          <TimeChart buckets={data.buckets} kind="cost" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-        </section>
-      {/if}
-      {#if chartMetric !== 'cost'}
-        <section class="chart-section" aria-labelledby={chartMetric === 'compare' ? 'token-chart-title' : 'chart-heading'}>
-          <header>
-            {#if chartMetric === 'compare'}<h3 id="token-chart-title">{chartTitles.tokens}</h3>{/if}
-            <div class="legend">
-              {#each tokenSeries as series (series.key)}
-                <span><i class={series.key + '-color'} data-series={series.key} aria-hidden="true"></i>{series.label}</span>
-              {/each}
-            </div>
-          </header>
-          <TimeChart buckets={data.buckets} kind="tokens" {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
-        </section>
-      {/if}
-    </div>
+    <section class="chart-section" aria-labelledby="chart-heading">
+      <header>
+        {#if chartMetric === 'tokens' && !chartSeries}
+          <div class="legend">
+            {#each tokenSeries as series (series.key)}
+              <span><i class={series.key + '-color'} data-series={series.key} aria-hidden="true"></i>{series.label}</span>
+            {/each}
+          </div>
+        {:else}
+          {@render groupLegend(chartSeries, chartMetric === 'cost' && data.buckets.some(unpricedBucket))}
+        {/if}
+      </header>
+      {#key chartMetric}
+        <TimeChart buckets={data.buckets} kind={chartMetric} series={chartSeries} {range} selection={bucket} onSelect={(value) => update('bucket', bucket === value ? '' : value)} />
+      {/key}
+    </section>
     <div class="chart-actions">
       {@render overviewFilter('request-window-filter', 'Request time window', bucket, windowOptions, (value) => update('bucket', value))}
-      <Button class="secondary-button" title="View requests (Enter)" aria-keyshortcuts="Enter" onclick={viewRequests} onkeydown={guardEnter}>View requests</Button>
       {@render chartSelection()}
     </div>
   </div>
+
+  <section class="breakdown" aria-labelledby="breakdown-title">
+    <header class="section-head"><h2 id="breakdown-title">Period totals and shares</h2></header>
+    <div class="breakdown-grid">
+      {@render breakdown(data.groups.clients, 'client', tokens(data.summary), data.summary.estimatedCost)}
+      {@render breakdown(data.groups.models, 'model', tokens(data.summary), data.summary.estimatedCost)}
+    </div>
+  </section>
+
+  {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
 
   <RequestList
     requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)}
@@ -312,72 +374,15 @@
     {onPrevious} {onNext}
   />
 
-  <div class="secondary-row" class:with-allowance={data.allowance.length > 0}>
-    <section aria-labelledby="ranking-title">
-      <header class="section-head rank-heading">
-        <h2 id="ranking-title">Usage breakdown</h2>
-        <div class="rank-controls">
-          <SegmentedControl class="segmented" aria-label="Group usage by" value={ranking} onValueChange={(value) => { if (value) ranking = value; }}>
-            <SegmentedControlItem value="models">Model</SegmentedControlItem>
-            <SegmentedControlItem value="clients">Client</SegmentedControlItem>
-          </SegmentedControl>
-          <SegmentedControl class="segmented" aria-label="Breakdown unit" value={unit} onValueChange={(value) => { if (value) unit = value; }}>
-            <SegmentedControlItem value="dollars">Usage value</SegmentedControlItem>
-            <SegmentedControlItem value="tokens">Tokens</SegmentedControlItem>
-          </SegmentedControl>
-        </div>
-      </header>
-      {#if groups.length}
-        <p class="rank-hint muted">
-          {#if rankedGroups.length > groups.length}
-            Showing the top {groups.length} of {rankedGroups.length} {ranking}.
-          {/if}
-          Select a row to filter usage.
-        </p>
-        <div class="rank-list">
-          {#each groups as group (group.id)}
-            {@const value = groupValue(group)}
-            {@const coverage = unit === 'dollars' ? partialPricing(group) : ''}
-            <button
-              type="button"
-              class="rank-item"
-              aria-pressed={ranking === 'models' ? model === group.id : client === group.id}
-              aria-keyshortcuts={group.id ? 'Enter Space' : undefined}
-              disabled={!group.id}
-              onclick={() => selectGroup(group)}
-              onkeydown={guardEnter}
-            >
-              <span class="rank-name" title={group.name}>
-                {#if group.id}<span class="sr-only">Filter by {ranking === 'models' ? 'model' : 'client'} </span>{/if}
-                {group.name}
-              </span>
-              <span class="rank-track" aria-hidden="true">
-                {#if maxRank > 0}
-                  <span class="usage-color" style:width={(100 * value / maxRank) + '%'}></span>
-                {/if}
-              </span>
-              <span class="rank-amount">
-                <strong>{unit === 'tokens' ? compactCount(value) : group.pricedRequestCount === 0 ? 'Unpriced' : money(value)}</strong>
-                {#if coverage}<span class="muted">{coverage}</span>{/if}
-              </span>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <div class="empty-state compact-empty">No usage to rank in this view.</div>
-      {/if}
-    </section>
-
-    {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
-  </div>
 {/if}
 
 <style>
   .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-block-start: 4px; }
   .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
   .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
-  .metrics, .timeline, .secondary-row { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .metrics, .timeline, .breakdown, .allowance-section { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   .filters { align-items: flex-end; }
+  .filters :global(.requests-jump) { margin-inline-start: auto; }
   .filter-field { display: grid; gap: 4px; min-inline-size: 0; }
   .filter-field > span { color: var(--muted); font-size: 12px; }
   .usage-empty { border-block-start: 1px solid var(--line); padding-block: var(--section-space); }
@@ -392,22 +397,26 @@
   .loading-table { min-block-size: 190px; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-block-end: 6px; }
   .metric { display: flex; flex-direction: column; align-items: flex-start; padding-inline-end: var(--section-space); }
-  .metric + .metric, .compare .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
+  .metric + .metric { border-inline-start: 1px solid var(--line); padding-inline-start: var(--section-space); }
   .metric-label { color: var(--muted); font-size: 12px; }
   .metric strong { display: block; margin: 4px 0 2px; font-size: clamp(22px, 3.2vw, 36px); font-weight: 620; letter-spacing: -.035em; line-height: 1.2; font-variant-numeric: tabular-nums; }
   .metric-caption { color: var(--muted); font-size: 12px; }
   .cost-explanation { margin-block-start: 4px; }
+  .timeline {
+    --usage-chart-1: var(--api-light);
+    --usage-chart-2: var(--codex-light);
+    --usage-chart-3: var(--output);
+    --usage-chart-4: var(--cache);
+    --usage-chart-5: var(--cache-write);
+    --usage-chart-6: var(--input);
+  }
   .chart-heading { flex-wrap: wrap; }
-  .chart-row { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .chart-row.compare { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--section-space); }
-  .chart-section { display: grid; gap: 10px; min-inline-size: 0; }
+  .chart-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chart-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-inline-size: 0; }
   .chart-section header:empty { display: none; }
-  .compare .chart-section { grid-template-rows: 1fr auto; }
-  .chart-section h3 { font-size: 14px; margin-block-end: 0; }
   .legend { display: flex; gap: 13px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-  .chart-section h3 + .legend { margin-block-start: 6px; }
-  .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
-  .legend i { width: 8px; height: 8px; border-radius: 2px; }
+  .legend span { display: inline-flex; gap: 5px; align-items: center; overflow-wrap: anywhere; }
+  .legend i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
   .legend .unpriced-mark { block-size: 0; inline-size: 14px; border-block-end: 2px dotted var(--muted); }
   .chart-actions, .chart-selection { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .chart-actions { align-items: flex-end; margin-block-start: 12px; }
@@ -415,20 +424,20 @@
   .chart-selection { color: var(--muted); font-size: 12px; min-block-size: 30px; }
   .chart-selection:not(.has-selection) { position: absolute; inline-size: 1px; block-size: 1px; min-block-size: 0; overflow: hidden; clip-path: inset(50%); }
   .chart-selection :global(.icon-button) { border-color: transparent; background: transparent; }
-  .secondary-row.with-allowance { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--section-space); }
-  .rank-heading { flex-wrap: wrap; }
-  .rank-hint { margin: 0 0 6px; font-size: 12px; }
-  .rank-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .rank-list { display: grid; grid-template-columns: minmax(92px, 1fr) minmax(50px, 3.2fr) minmax(48px, auto); gap: 4px 11px; }
-  .rank-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; text-align: start; padding: 6px 0; background: none; border: 0; cursor: pointer; border-radius: 5px; }
-  .rank-item:is(:hover, [aria-pressed=true]):not(:disabled) { background: var(--hover); }
-  .rank-item[aria-pressed=true]:not(:disabled) { box-shadow: inset 0 0 0 1px var(--selected-border); }
-  .rank-item:disabled { cursor: default; }
-  .rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-  .rank-track { background: var(--line); border-radius: 3px; display: flex; block-size: 10px; overflow: hidden; }
-  .rank-amount { display: grid; text-align: end; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .rank-amount strong { font-weight: 540; }
-  .compact-empty { min-height: 73px; padding: 12px; }
+  .breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--section-space); }
+  .breakdown-panel { min-inline-size: 0; }
+  .breakdown-panel h3 { font-size: 13px; margin: 0 0 5px; }
+  .breakdown-panel table { inline-size: 100%; border-collapse: collapse; table-layout: fixed; }
+  .breakdown-panel :is(th, td) { padding: 6px 0 6px 6px; border-block-end: 1px solid var(--line); text-align: end; }
+  .breakdown-panel th:first-child { inline-size: 44%; padding-inline-start: 0; text-align: start; }
+  .breakdown-panel thead th, .breakdown-panel td span { font-size: 11px; color: var(--muted); }
+  .breakdown-panel td { font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .breakdown-panel :is(td strong, tbody th) { font-weight: 550; }
+  .breakdown-panel td span { display: block; }
+  .breakdown-panel :global(.breakdown-filter) { text-align: start; font: inherit; color: inherit; background: none; border: 0; padding: 4px 3px; border-radius: 4px; cursor: pointer; overflow-wrap: anywhere; max-inline-size: 100%; }
+  .breakdown-panel :global(.breakdown-filter:hover) { background: var(--hover); }
+  .breakdown-panel :global(.breakdown-filter[aria-pressed=true]) { box-shadow: inset 0 0 0 1px var(--selected-border); }
+  .breakdown-note { margin: 7px 0 0; font-size: 12px; }
   .allowance-section .section-head :global(svg) { color: var(--muted); }
   .allowance-row { margin-block-end: 14px; display: grid; gap: 5px; font-size: 12px; }
   .allowance-heading { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; gap: 8px; }
@@ -437,34 +446,35 @@
   :global(.allowance-track) { background: var(--line); border-radius: 4px; overflow: hidden; block-size: 6px; }
   :global(.allowance-indicator) { display: block; block-size: 100%; background: var(--codex); width: var(--meter-value, 0%); }
   @media (pointer: coarse) {
-    .rank-item { min-block-size: var(--touch-target); }
+    .breakdown-panel :global(.breakdown-filter) { min-block-size: var(--touch-target); }
   }
   @media (forced-colors: active) {
     .timeline {
+      --usage-chart-1: CanvasText;
+      --usage-chart-2: repeating-linear-gradient(135deg, CanvasText 0 2px, Canvas 2px 4px);
+      --usage-chart-3: repeating-linear-gradient(90deg, CanvasText 0 2px, Canvas 2px 4px);
+      --usage-chart-4: repeating-linear-gradient(45deg, CanvasText 0 2px, Canvas 2px 4px);
+      --usage-chart-5: repeating-linear-gradient(0deg, CanvasText 0 2px, Canvas 2px 4px);
+      --usage-chart-6: radial-gradient(CanvasText 1px, Canvas 1.5px) 0 0 / 4px 4px;
       --input: CanvasText;
       --cache: repeating-linear-gradient(135deg, CanvasText 0 1px, Canvas 1px 3px);
       --cache-write: repeating-linear-gradient(0deg, CanvasText 0 1px, Canvas 1px 3px);
       --output: repeating-linear-gradient(90deg, CanvasText 0 1px, Canvas 1px 3px);
     }
-    .legend i[data-series] { forced-color-adjust: none; }
-    .rank-track, :global(.allowance-track) { border: 1px solid CanvasText; }
-    .rank-track .usage-color, :global(.allowance-indicator) { forced-color-adjust: none; background: CanvasText; }
-    .rank-item[aria-pressed=true]:not(:disabled) { position: relative; }
-    .rank-item[aria-pressed=true]:not(:disabled)::after { content: ''; position: absolute; inset: 0; border: 1px solid Highlight; border-radius: inherit; pointer-events: none; }
-  }
-  @media (max-width: 900px) {
-    .chart-row.compare, .secondary-row.with-allowance { grid-template-columns: minmax(0, 1fr); gap: var(--section-space); }
-    .compare .chart-section + .chart-section, .with-allowance > .allowance-section { border-inline-start: 0; border-block-start: 1px solid var(--line); padding: var(--section-space) 0 0; }
+    .legend :is(i[data-series], .group-swatch) { forced-color-adjust: none; }
+    .legend .group-swatch { border: 1px solid CanvasText; }
+    :global(.allowance-track) { border: 1px solid CanvasText; }
+    :global(.allowance-indicator) { forced-color-adjust: none; background: CanvasText; }
+    .breakdown-panel :global(.breakdown-filter[aria-pressed=true]) { outline: 1px solid Highlight; }
   }
   @media (max-width: 670px) {
-    .chart-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
     .chart-actions :global(.filter-trigger) { min-inline-size: 0; max-inline-size: none; }
     .chart-actions :global(.filter-trigger), .chart-actions :global(.secondary-button), .filters :global(button) { min-block-size: 44px; }
-    .chart-selection { grid-column: 1 / -1; }
     .chart-selection :global(.icon-button) { inline-size: 36px; block-size: 36px; }
     .loading-chart { min-block-size: 240px; }
   }
   @media (max-width: 600px) {
+    .breakdown-grid { grid-template-columns: minmax(0, 1fr); }
     .metrics { grid-template-columns: 1fr; padding-block: 0; }
     .metric { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 10px 0; align-items: baseline; }
     .metric + .metric { border-inline-start: 0; border-block-start: 1px solid var(--line); padding-inline-start: 0; }
