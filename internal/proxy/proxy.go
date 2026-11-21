@@ -110,13 +110,22 @@ func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Us
 
 // NewAntigravity creates a Cloud Code Assist reverse proxy for authenticated clients.
 func NewAntigravity(baseURL url.URL, record func(Usage)) http.Handler {
+	if record == nil {
+		record = func(Usage) {}
+	}
 	route := newUpstream(AntigravityPrefix, "api", baseURL, func(usage Usage) {
 		if usage.ResponseID != "" {
 			usage.ResponseID = antigravityProvider + ":" + usage.ResponseID
 		}
 		record(usage)
 	})
-	return http.HandlerFunc(route.serve)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hasPrefix(r.URL.Path, AntigravityPrefix) {
+			http.NotFound(w, r)
+			return
+		}
+		route.serve(w, r)
+	})
 }
 
 type upstream struct {
@@ -177,12 +186,15 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
-	usage.UsageUpdate = r.Method == http.MethodGet && isResponse && responsePath != "" && !strings.Contains(responsePath, "/")
-	meter := &httpMeter{usage: usage, captureUsage: r.Method == http.MethodPost || usage.UsageUpdate}
+	captureUsage := r.Method == http.MethodPost
 	if u.provider == antigravityProvider {
-		meter.captureUsage = r.Method == http.MethodPost && (suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent")
+		captureUsage = captureUsage && (suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent")
+	} else {
+		responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
+		usage.UsageUpdate = r.Method == http.MethodGet && isResponse && responsePath != "" && !strings.Contains(responsePath, "/")
+		captureUsage = captureUsage || usage.UsageUpdate
 	}
+	meter := &httpMeter{usage: usage, captureUsage: captureUsage}
 	request := r.WithContext(context.WithValue(r.Context(), meterContextKey{}, meter))
 	if request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) &&
 		request.Header.Get("Content-Encoding") == "" {
