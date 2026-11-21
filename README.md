@@ -59,7 +59,41 @@ The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route 
 
 Create an Antigravity client in the dashboard and use `https://proxy.example.com/antigravity` as the Cloud Code Assist base URL. The proxy appends the native request path, such as `/v1internal:loadCodeAssist` or `/v1internal:streamGenerateContent`, to `ANTIGRAVITY_UPSTREAM` (default `https://daily-cloudcode-pa.googleapis.com`).
 
-Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Proxy-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs. If your CLI only accepts an endpoint override, point it at a trusted loopback relay that adds the proxy-key header and forwards to the `/antigravity` base URL. For the CLI's ACP mode, set the relay URL with `--cloud_code_endpoint`.
+Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Proxy-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs.
+
+#### Loopback relay for personal Google sign-in
+
+If your Antigravity client only accepts an endpoint override, run `llm-proxy-relay` on the same machine as the ACP process. It adds the proxy key and forwards the original Google authorization and streaming responses. Build it with Go from the repository root on macOS or Linux:
+
+```sh
+mkdir -p "$HOME/.local/bin" "$HOME/.config/llm-proxy"
+go build -o "$HOME/.local/bin/llm-proxy-relay" ./cmd/llm-proxy-relay
+(umask 077; touch "$HOME/.config/llm-proxy/antigravity.key")
+chmod 600 "$HOME/.config/llm-proxy/antigravity.key"
+```
+
+Save the Antigravity client's proxy key as the only line in `antigravity.key`, then start the relay:
+
+```sh
+"$HOME/.local/bin/llm-proxy-relay" \
+  --target https://proxy.example.com/antigravity \
+  --key-file "$HOME/.config/llm-proxy/antigravity.key"
+```
+
+The default listener is `http://127.0.0.1:8765`. If you change `--listen`, use the matching loopback URL in the ACP arguments. Run the relay on a machine where you trust the other local processes.
+
+For T3 Code, set **Settings → Providers → Antigravity → Binary path** to an executable launcher named `antigravity` or `agy` on the environment that runs Antigravity. The launcher adds the endpoint flag to ACP invocations and passes through T3's profile arguments and other commands:
+
+```sh
+#!/bin/sh
+if [ "$1" = acp ]; then
+  shift
+  set -- acp --cloud_code_endpoint http://127.0.0.1:8765 "$@"
+fi
+exec "/absolute/path/to/antigravity" "$@"
+```
+
+Set the last line to your installed Antigravity executable, make the launcher executable with `chmod +x`, and start a fresh Antigravity session in T3 using your existing Google sign-in. You can confirm flag support on your runtime with `antigravity acp --help`.
 
 The dashboard shows requests as **Antigravity** under the client that owns the proxy key. Generation responses contribute token counts when Google reports them.
 
