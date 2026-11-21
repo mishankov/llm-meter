@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -22,6 +23,84 @@ import (
 	"github.com/mishankov/llm-proxy/internal/ledger"
 	"github.com/mishankov/llm-proxy/internal/pricing"
 )
+
+func TestDashboardServesPrecompressedAssets(t *testing.T) {
+	const asset = "/_app/immutable/chunks/dashboard.js"
+	const legacyAsset = "/_app/immutable/chunks/legacy.js"
+	source := []byte(strings.Repeat("export const active = true;\n", 100))
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	handler := serveDashboard(fstest.MapFS{
+		asset[1:]:         {Data: source},
+		asset[1:] + ".gz": {Data: compressed.Bytes()},
+		legacyAsset[1:]:   {Data: source},
+	})
+
+	for _, test := range []struct {
+		name, method, path, accept, byteRange string
+		status                                int
+		zipped                                bool
+	}{
+		{"gzip GET", "GET", asset, "gzip, br", "", http.StatusOK, true},
+		{"gzip HEAD", "HEAD", asset, "gzip", "", http.StatusOK, true},
+		{"gzip quality", "GET", asset, "gzip;q=0.5, identity;q=0.1", "", http.StatusOK, true},
+		{"wildcard", "GET", asset, "*;q=0.5", "", http.StatusOK, true},
+		{"identity preferred", "GET", asset, "gzip;q=0.5, identity;q=1", "", http.StatusOK, false},
+		{"gzip excluded", "GET", asset, "gzip;q=0, *;q=1", "", http.StatusOK, false},
+		{"no accept encoding", "GET", asset, "", "", http.StatusOK, false},
+		{"legacy build", "GET", legacyAsset, "gzip", "", http.StatusOK, false},
+		{"gzip byte range", "GET", asset, "gzip", "bytes=0-5", http.StatusPartialContent, true},
+		{"gzip multiple ranges return the full representation", "GET", asset, "gzip", "bytes=0-5,10-15", http.StatusOK, true},
+		{"identity byte range", "GET", asset, "identity", "bytes=0-5", http.StatusPartialContent, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			if test.accept != "" {
+				request.Header.Set("Accept-Encoding", test.accept)
+			}
+			if test.byteRange != "" {
+				request.Header.Set("Range", test.byteRange)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || (response.Header().Get("Content-Encoding") == "gzip") != test.zipped {
+				t.Fatalf("status = %d, encoding = %q", response.Code, response.Header().Get("Content-Encoding"))
+			}
+			if response.Header().Get("Vary") != "Accept-Encoding" || !strings.Contains(response.Header().Get("Cache-Control"), "immutable") {
+				t.Errorf("unexpected cache headers: %v", response.Header())
+			}
+			if !strings.HasPrefix(response.Header().Get("Content-Type"), "text/javascript") {
+				t.Errorf("content type = %q", response.Header().Get("Content-Type"))
+			}
+			want := source
+			if test.zipped {
+				want = compressed.Bytes()
+			}
+			if test.status == http.StatusPartialContent {
+				expectedRange := "bytes 0-5/" + strconv.Itoa(len(want))
+				if response.Header().Get("Content-Range") != expectedRange {
+					t.Errorf("content range = %q, want %q", response.Header().Get("Content-Range"), expectedRange)
+				}
+				want = want[:6]
+			}
+			if response.Header().Get("Content-Length") != strconv.Itoa(len(want)) {
+				t.Errorf("incorrect content length: %q", response.Header().Get("Content-Length"))
+			}
+			if test.method == "HEAD" {
+				want = nil
+			}
+			if !bytes.Equal(response.Body.Bytes(), want) {
+				t.Errorf("response byte length = %d, want %d", response.Body.Len(), len(want))
+			}
+		})
+	}
+}
 
 func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -4,9 +4,9 @@ import type { Client, Key, Usage, UsageRequest } from '../src/lib/api';
 const initialStart = '2026-11-20T12:00:00Z';
 const rates = { input: 1, cachedInput: .1, output: 2, cacheWrite: null };
 const response: Usage = {
-  summary: { estimatedCost: .016, inputTokens: 360, cachedInputTokens: 60, outputTokens: 40, requestCount: 4, pricedRequestCount: 2 },
+  summary: { estimatedCost: .016, inputTokens: 360, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 40, requestCount: 4, pricedRequestCount: 2 },
   buckets: [
-    { start: initialStart, estimatedCost: 0, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30, requestCount: 2, pricedRequestCount: 1 },
+    { start: initialStart, estimatedCost: 0, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, requestCount: 2, pricedRequestCount: 1 },
     { start: '2026-11-20T13:00:00Z', estimatedCost: .016, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, requestCount: 1, pricedRequestCount: 1 },
     { start: '2026-11-20T14:00:00Z', estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, requestCount: 1, pricedRequestCount: 0 }
   ],
@@ -20,7 +20,7 @@ const response: Usage = {
     clients: [{ id: 'open-code', name: 'OpenCode', estimatedCost: 0, tokens: 330, requestCount: 3, pricedRequestCount: 1 }]
   },
   requests: [
-    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
+    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
     { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/backend-api/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
     { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
@@ -146,7 +146,15 @@ test('filters requests from a chart and inspects and pages through them with the
   expect(tickLabels).toHaveLength(5);
   expect(new Set(tickLabels).size).toBe(tickLabels.length);
   await firstBucket.focus();
-  await expect(firstBucket.locator('.chart-tooltip')).toContainText('1 of 2 priced');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  const tooltip = chart.locator('.chart-tooltip');
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText('1 of 2 priced');
+  await expect(firstBucket).toHaveAccessibleName(/Usage value \$0\.00 · 1 of 2 priced$/);
+  await page.keyboard.press('Escape');
+  await expect(tooltip).toBeHidden();
+  await expect(firstBucket).toBeFocused();
   await page.keyboard.press('ArrowRight');
   await expect(secondBucket).toBeFocused();
   await page.keyboard.press('ArrowLeft');
@@ -185,7 +193,8 @@ test('filters requests from a chart and inspects and pages through them with the
 });
 
 test('keeps horizontal table scrolling inside the dashboard at narrow widths', async ({ page }) => {
-  await mockAPI(page);
+  const listValue = { ...response.requests[0], id: 43, model: 'model-list-value', provider: 'openrouter', priceSource: 'provider-list' };
+  await mockAPI(page, { extraRequests: [listValue] });
   await unlock(page);
   await page.getByRole('button', { name: /Details for gpt-api/ }).waitFor();
 
@@ -194,6 +203,38 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
   }
+  await page.setViewportSize({ width: 300, height: 900 });
+  const provider = page.getByRole('cell', { name: /model-list-value/ }).getByText('OpenRouter', { exact: true });
+  const providerFits = await provider.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const text = document.createRange();
+    text.selectNodeContents(element);
+    return Array.from(text.getClientRects()).every((line) => line.right <= bounds.right + 1);
+  });
+  expect(providerFits).toBe(true);
+});
+
+test('keeps long request names compact while exposing cache writes and full details', async ({ page }) => {
+  const model = 'org/' + 'model-name-'.repeat(17);
+  const client = 'a'.repeat(100);
+  const extra = { ...response.requests[0], id: 42, model, client };
+  await mockAPI(page, { extraRequests: [extra] });
+  await page.setViewportSize({ width: 320, height: 844 });
+  await unlock(page);
+  await page.getByRole('radiogroup', { name: 'Chart metric' }).getByRole('radio', { name: 'Tokens' }).click();
+  const chart = page.getByRole('region', { name: 'Tokens over time' });
+  await expect(chart.getByRole('button').first()).toHaveAccessibleName(
+    /Uncached input 140, cached input 60, cache writes 100, output 30$/
+  );
+  const row = page.getByRole('row').filter({ hasText: model });
+  const detailButton = row.getByRole('button', { name: /Details for/ });
+  await detailButton.waitFor();
+  expect((await row.boundingBox())?.height).toBeLessThan(150);
+  await detailButton.press('Enter');
+  const detail = page.getByRole('dialog', { name: 'Request details' });
+  await expect(detail.getByText(model, { exact: true })).toBeVisible();
+  await expect(detail.getByText(client, { exact: true })).toBeVisible();
+  await expect(detail.getByText('30-minute cache writes', { exact: true })).toBeVisible();
 });
 
 test('starts with one chart and makes both desktop trends available through Compare', async ({ page }) => {
@@ -296,7 +337,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(apiRequest).toBeVisible();
   await page.getByRole('combobox', { name: 'Source' }).click();
   await page.getByRole('option', { name: 'Codex subscription' }).click();
-  await expect(page.getByRole('status')).toHaveText('Loading usage…');
+  await expect(page.getByRole('status').filter({ hasText: 'Loading usage…' })).toBeVisible();
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
   await expect(page.getByRole('alert')).toContainText('Could not load usage');
@@ -514,6 +555,117 @@ test('keeps an uncertain key issuance notice with the affected client', async ({
   await expect(error).toBeVisible();
 });
 
+test('leaves a stalled key dialog and reloads the keys before another write', async ({ page }) => {
+  const client: Client = { id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [] };
+  await mockAPI(page, { initialClients: [client] });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  const newKey = page.getByRole('button', { name: 'New key', exact: true });
+  await expect(newKey).toBeEnabled();
+
+  const refresh = Promise.withResolvers<void>();
+  const refreshedKey: Key = { id: '1', prefix: 'possibly_issued', createdAt: initialStart, lastUsedAt: null, revokedAt: null };
+  let writes = 0;
+  await page.route('**/api/clients', async (route) => {
+    if (!writes) return route.fallback();
+    await refresh.promise;
+    return route.fulfill({ json: { clients: [{ ...client, keys: [refreshedKey] }] } });
+  });
+  await page.route('**/api/clients/open-code/keys', () => { writes++; });
+  await page.evaluate(() => {
+    const timeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => {
+      AbortSignal.timeout = timeout;
+      const request = new AbortController();
+      window.addEventListener('test-request-timeout', () => {
+        request.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      }, { once: true });
+      return request.signal;
+    };
+  });
+
+  await newKey.press('k');
+  const pending = page.getByRole('dialog', { name: 'Generating proxy key' });
+  await expect(pending).toBeVisible();
+  await expect.poll(() => writes).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('test-request-timeout')));
+  await expect(pending).toBeHidden();
+  await expect(newKey).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('The proxy took too long to respond');
+  await newKey.press('k');
+  expect(writes).toBe(1);
+  refresh.resolve();
+  await expect(page.getByRole('button', { name: 'Revoke key possibly_issued' })).toBeVisible();
+  await expect(newKey).toBeEnabled();
+});
+
+test('reconciles uncertain client creation and revocation and retains the draft', async ({ page }) => {
+  const key: Key = { id: '1', prefix: 'fixture_key', createdAt: initialStart, lastUsedAt: null, revokedAt: null };
+  const client: Client = { id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [key] };
+  let created = false;
+  await mockAPI(page, { empty: true });
+  await page.route('**/api/clients', async (route) => {
+    if (route.request().method() === 'POST') {
+      created = true;
+      return route.fulfill({ status: 503 });
+    }
+    if (created) return route.fulfill({ json: { clients: [client] } });
+    return route.fallback();
+  });
+  await page.route('**/api/clients/open-code/keys/1', (route) => {
+    key.revokedAt = initialStart;
+    return route.fulfill({ status: 503 });
+  });
+
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).press('Enter');
+  const create = page.getByRole('button', { name: 'New client' });
+  await expect(create).toBeEnabled();
+  await create.press('n');
+  const draft = page.getByRole('textbox', { name: 'Client name' });
+  await draft.fill(client.name);
+  await draft.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Check the refreshed client list');
+  await expect(page.getByRole('button', { name: 'Create client' })).toBeHidden();
+  const back = page.getByRole('button', { name: 'Back to clients' });
+  await expect(back).toBeFocused();
+  await back.press('Enter');
+  await expect(create).toBeEnabled();
+  await create.press('n');
+  await expect(draft).toHaveValue(client.name);
+  await draft.press('Escape');
+
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).press('Enter');
+  await page.getByRole('button', { name: 'Revoke key fixture_key' }).press('Delete');
+  const confirm = page.getByRole('alertdialog', { name: 'Revoke this key?' });
+  await confirm.getByRole('button', { name: 'Confirm revocation' }).press('Enter');
+  await expect(confirm).toBeHidden();
+  await expect(page.getByRole('alert')).toContainText('Check the refreshed key status');
+  await expect(page.getByText('Revoked', { exact: true })).toBeVisible();
+});
+
+test('keeps client actions in view and restores focus after keyboard navigation', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  const name = 'x'.repeat(100);
+  await mockAPI(page, { initialClients: [
+    { id: 'first-client', name: 'Another client', createdAt: initialStart, keys: [] },
+    { id: 'open-code', name, createdAt: initialStart, keys: [] }
+  ] });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).press('Enter');
+  const manage = page.getByRole('button', { name: 'Manage client ' + name });
+  await expect(manage).toBeInViewport({ ratio: 1 });
+  await manage.press('Enter');
+  await expect(page.getByRole('heading', { name })).toBeFocused();
+  await page.getByRole('button', { name: 'Clients', exact: true }).press('Enter');
+  await expect(manage).toBeFocused();
+  await manage.press('Enter');
+  await expect(page.getByRole('heading', { name })).toBeFocused();
+  await page.goBack();
+  await expect(manage).toBeFocused();
+});
+
 test('restores filter scope and pagination after undo and supports keyboard navigation', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
@@ -557,7 +709,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.getByRole('link', { name: 'Connect a client' }).press('Enter');
   const create = page.getByRole('button', { name: 'New client' });
   await expect(create).toBeEnabled();
-  await page.keyboard.press('n');
+  await create.press('n');
   const name = page.getByRole('textbox', { name: 'Client name' });
   await name.fill('OpenCode');
   await name.press('Enter');
@@ -593,8 +745,9 @@ test('keeps a client draft through session expiry and clears it on lock', async 
   const { expireSession } = await mockAPI(page);
   await unlock(page);
   await page.getByRole('link', { name: 'Clients' }).click();
-  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
-  await page.keyboard.press('n');
+  const create = page.getByRole('button', { name: 'New client' });
+  await expect(create).toBeEnabled();
+  await create.press('n');
   const name = page.getByRole('textbox', { name: 'Client name' });
   await name.fill('Unsaved client');
 
@@ -603,16 +756,16 @@ test('keeps a client draft through session expiry and clears it on lock', async 
   const token = page.getByLabel('Access token');
   await token.fill('dashboard-token');
   await token.press('Enter');
-  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
-  await page.keyboard.press('n');
+  await expect(create).toBeEnabled();
+  await create.press('n');
   await expect(name).toHaveValue('Unsaved client');
 
   await name.press('Escape');
   await page.getByRole('button', { name: 'Lock dashboard' }).click();
   await token.fill('dashboard-token');
   await token.press('Enter');
-  await expect(page.getByRole('button', { name: 'New client' })).toBeEnabled();
-  await page.keyboard.press('n');
+  await expect(create).toBeEnabled();
+  await create.press('n');
   await expect(name).toHaveValue('');
 });
 
@@ -644,6 +797,35 @@ test.describe('mobile daily ranges west of UTC', () => {
   });
 });
 
+test.describe('coarse touch input', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 320, height: 640 } });
+
+  test('keeps dashboard commands and chart windows large enough to tap', async ({ page }) => {
+    await mockAPI(page);
+    await unlock(page);
+    const dateRange = page.getByRole('radio', { name: '30 days' });
+    await dateRange.tap();
+    const chart = page.getByRole('region', { name: 'Usage value over time' });
+    const window = chart.getByRole('button').nth(10);
+
+    for (const target of [
+      page.getByRole('button', { name: 'Lock dashboard' }),
+      page.getByRole('button', { name: 'Refresh usage' }),
+      dateRange,
+      window
+    ]) {
+      const box = (await target.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await window.tap();
+    await expect(window).toHaveAttribute('aria-pressed', 'true');
+    await expect(page).toHaveURL(/bucket=2026-11-30/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  });
+});
+
 for (const [width, height] of [[1280, 900], [320, 568]]) {
   test(`centers a compact New client dialog at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height });
@@ -669,15 +851,20 @@ test('creates a client and rotates its key using the dashboard', async ({ contex
   const add = page.getByRole('button', { name: 'New client' });
   await expect(add).toBeEnabled();
   await expect(add).toHaveAttribute('aria-keyshortcuts', 'N');
-  await page.keyboard.press('n');
   const name = page.getByRole('textbox', { name: 'Client name' });
+  await page.getByRole('link', { name: 'Clients', exact: true }).press('n');
+  await expect(name).toBeHidden();
+  await add.press('n');
   await expect(name).toBeFocused();
   await name.fill('OpenCode');
   await page.keyboard.press('Escape');
   await expect(name).not.toBeVisible();
-  await page.locator('body').dispatchEvent('keydown', { key: 'т', code: 'KeyN', isComposing: true, bubbles: true });
+  await expect(add).toBeFocused();
+  await add.dispatchEvent('keydown', { key: 'т', code: 'KeyN', isComposing: true });
   await expect(name).not.toBeVisible();
-  await page.locator('body').dispatchEvent('keydown', { key: 'т', code: 'KeyN', bubbles: true });
+  await add.dispatchEvent('keydown', { key: 'т', code: 'KeyN', repeat: true });
+  await expect(name).not.toBeVisible();
+  await add.dispatchEvent('keydown', { key: 'т', code: 'KeyN' });
   await expect(name).toHaveValue('OpenCode');
   await name.press('Enter');
   const issuedKey = page.getByRole('textbox', { name: 'New proxy key', exact: true });
@@ -691,7 +878,9 @@ test('creates a client and rotates its key using the dashboard', async ({ contex
   await expect(issuedKey).not.toBeVisible();
   const newKey = page.getByRole('button', { name: 'New key', exact: true });
   await expect(newKey).toHaveAttribute('aria-keyshortcuts', 'K');
-  await page.keyboard.press('k');
+  await page.getByRole('button', { name: 'Clients', exact: true }).press('k');
+  await expect(issuedKey).toBeHidden();
+  await newKey.press('k');
   await expect(issuedKey).toHaveValue('test_key_2_secret');
   await page.evaluate(() => {
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
@@ -741,4 +930,120 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.labels).toContain('Unlock dashboard');
   expect(result.ok, result.error?.message).toBe(true);
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+});
+
+test('bounds stalled unlock and lock requests and keeps keyboard recovery available', async ({ page }) => {
+  await mockAPI(page);
+  let unlocks = 0;
+  let locks = 0;
+  await page.route('**/api/login', (route) => {
+    if (++unlocks > 1) return route.fallback();
+  });
+  await page.route('**/api/logout', (route) => {
+    if (++locks > 1) return route.fallback();
+  });
+  const holdDeadline = () => page.evaluate(() => {
+    const timeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => {
+      AbortSignal.timeout = timeout;
+      const request = new AbortController();
+      window.addEventListener('test-auth-timeout', () => {
+        request.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      }, { once: true });
+      return request.signal;
+    };
+  });
+  const expireDeadline = () => page.evaluate(() => window.dispatchEvent(new Event('test-auth-timeout')));
+
+  await page.goto('/');
+  const token = page.getByLabel('Access token');
+  await token.fill('dashboard-token');
+  await holdDeadline();
+  await token.press('Enter');
+  await expect.poll(() => unlocks).toBe(1);
+  await expect(token).toBeFocused();
+  await expect(token).toHaveJSProperty('readOnly', true);
+  await expect(page.getByRole('button', { name: 'Unlocking…' })).toBeDisabled();
+  await expireDeadline();
+  const error = page.getByRole('alert');
+  await expect(error).toContainText('The proxy took too long to respond');
+  await expect(token).toHaveAccessibleDescription(/The proxy took too long to respond/);
+  await expect(token).toBeFocused();
+  await expect(token).toHaveValue('dashboard-token');
+  await expect(token).toBeEditable();
+  await token.press('Enter');
+  const usage = page.getByRole('heading', { name: 'Usage overview' });
+  await expect(usage).toBeVisible();
+  await expect(page.getByRole('main')).toBeFocused();
+
+  const lock = page.getByRole('button', { name: 'Lock dashboard' });
+  await expect(lock).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await holdDeadline();
+  await lock.press('Enter');
+  await expect.poll(() => locks).toBe(1);
+  const locking = page.getByRole('button', { name: 'Locking…' });
+  await expect(locking).toBeDisabled();
+  await expect(locking).toBeFocused();
+  await expireDeadline();
+  await expect(error).toContainText('The dashboard may still be unlocked');
+  await expect(usage).toBeVisible();
+  await expect(lock).toBeFocused();
+  await lock.press('Enter');
+  await expect(token).toBeFocused();
+  await expect(token).toHaveValue('');
+});
+
+test('cancels a pending lock when the authenticated session expires', async ({ page }) => {
+  const { expireSession } = await mockAPI(page);
+  await unlock(page);
+  const refresh = page.getByRole('button', { name: 'Refresh usage' });
+  await expect(refresh).toBeEnabled();
+  let lockSent = false;
+  await page.route('**/api/logout', () => { lockSent = true; });
+  const lockAborted = page.waitForEvent('requestfailed', {
+    predicate: (request) => new URL(request.url()).pathname === '/api/logout',
+    timeout: 5_000
+  });
+  await page.getByRole('button', { name: 'Lock dashboard' }).press('Enter');
+  await expect.poll(() => lockSent).toBe(true);
+  expireSession();
+  await refresh.press('Enter');
+  await lockAborted;
+  const token = page.getByLabel('Access token');
+  await expect(token).toBeFocused();
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+  await expect(page.getByRole('alert')).toBeHidden();
+});
+
+test('holds client writes while a pending lock could close the dashboard', async ({ page }) => {
+  await mockAPI(page, { initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [] }] });
+  let failLock: (() => Promise<void>) | undefined;
+  await page.route('**/api/logout', route => {
+    failLock = () => route.fulfill({ status: 503 });
+  });
+  let keyWrites = 0;
+  await page.route('**/api/clients/open-code/keys', route => {
+    keyWrites++;
+    return route.fallback();
+  });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients', exact: true }).press('Enter');
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).press('Enter');
+  const newKey = page.getByRole('button', { name: 'New key' });
+  await expect(newKey).toBeEnabled();
+  await page.getByRole('button', { name: 'Lock dashboard' }).press('Enter');
+  await expect.poll(() => Boolean(failLock)).toBe(true);
+  await expect(newKey).toBeDisabled();
+  await newKey.press('k');
+  await newKey.press('Enter');
+  expect(keyWrites).toBe(0);
+  await expect(page.getByRole('dialog')).toBeHidden();
+
+  await failLock!();
+  await expect(newKey).toBeEnabled();
+  await newKey.press('k');
+  await expect(page.getByRole('dialog', { name: 'New proxy key' })).toBeVisible();
+  expect(keyWrites).toBe(1);
 });

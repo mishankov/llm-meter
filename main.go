@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -174,9 +176,77 @@ func serveDashboard(ui fs.FS) http.Handler {
 		}
 		if strings.HasPrefix(name, "_app/immutable/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			if serveCompressedDashboardAsset(w, r, ui, name, file.ModTime()) {
+				return
+			}
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+func serveCompressedDashboardAsset(w http.ResponseWriter, r *http.Request, ui fs.FS, name string, modified time.Time) bool {
+	var contentType string
+	switch path.Ext(name) {
+	case ".css":
+		contentType = "text/css; charset=utf-8"
+	case ".js":
+		contentType = "text/javascript; charset=utf-8"
+	default:
+		return false
+	}
+	w.Header().Add("Vary", "Accept-Encoding")
+	if !acceptsDashboardGzip(r.Header.Values("Accept-Encoding")) {
+		return false
+	}
+	file, err := ui.Open(name + ".gz")
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	body, seekable := file.(io.ReadSeeker)
+	if err != nil || info.IsDir() || !seekable {
+		return false
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	if strings.Contains(r.Header.Get("Range"), ",") {
+		// A multipart response is not itself gzip-encoded.
+		r = r.Clone(r.Context())
+		r.Header.Del("Range")
+	}
+	http.ServeContent(w, r, name, modified, body)
+	return true
+}
+
+func acceptsDashboardGzip(values []string) bool {
+	gzip, wildcard, identity := -1.0, 0.0, 0.0
+	for _, value := range values {
+		for coding := range strings.SplitSeq(value, ",") {
+			name, parameters, exists := strings.Cut(coding, ";")
+			quality := 1.0
+			if exists {
+				key, weight, ok := strings.Cut(strings.TrimSpace(parameters), "=")
+				quality = 0
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(weight), 64); ok && strings.EqualFold(strings.TrimSpace(key), "q") && err == nil && parsed > 0 && parsed <= 1 {
+					quality = parsed
+				}
+			}
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "gzip":
+				gzip = quality
+			case "*":
+				wildcard = quality
+			case "identity":
+				identity = quality
+			}
+		}
+	}
+	if gzip < 0 {
+		gzip = wildcard
+	}
+	return gzip > 0 && gzip >= identity
 }
 
 func upstream(name, fallback string) (*url.URL, error) {
