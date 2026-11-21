@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -10,6 +11,68 @@ import (
 	"github.com/mishankov/llm-proxy/internal/pricing"
 	"github.com/mishankov/llm-proxy/internal/proxy"
 )
+
+func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
+	const model = "gemini-replay-fixture"
+	priceFile := filepath.Join(t.TempDir(), "prices.json")
+	if err := os.WriteFile(priceFile, []byte(`{"antigravity/`+model+`":{"input":2,"cachedInput":1,"output":4}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := pricing.Load(priceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name                      string
+		firstOutput, replayOutput int64
+	}{
+		{name: "partial then complete", firstOutput: 0, replayOutput: 7},
+		{name: "complete then partial", firstOutput: 7, replayOutput: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			store, err := Open(":memory:", catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+			origin, _, err := store.CreateClient(ctx, "Original client", at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayer, _, err := store.CreateClient(ctx, "Replaying client", at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			usage := proxy.Usage{At: at, Source: "api", Provider: "antigravity", Model: model, Status: 200, Method: "POST",
+				ResponseID: "antigravity:fixture", ClientID: origin.ID, HasUsage: true, InputTokens: 100, CachedInputTokens: 20, OutputTokens: test.firstOutput}
+			if err := store.Record(ctx, usage); err != nil {
+				t.Fatal(err)
+			}
+			usage.At, usage.ClientID, usage.OutputTokens = at.Add(time.Minute), replayer.ID, test.replayOutput
+			usage.Model = ""
+			if err := store.Record(ctx, usage); err != nil {
+				t.Fatal(err)
+			}
+			page, err := store.Requests(ctx, Filter{Start: at, End: at.Add(time.Hour)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Requests) != 1 {
+				t.Fatalf("got %d request rows, want 1", len(page.Requests))
+			}
+			request := page.Requests[0]
+			if request.ClientID != origin.ID || !request.At.Equal(at) || request.InputTokens != 100 || request.CachedInputTokens != 20 || request.OutputTokens != 7 {
+				t.Fatalf("incorrect replayed request: %+v", request)
+			}
+			if request.Model != model || request.PriceSource != "override" || request.Rates == nil || request.Rates.Output != 4 ||
+				request.Cost == nil || math.Abs(*request.Cost-0.000208) > 1e-12 {
+				t.Fatalf("incorrect pricing for replayed request: %+v", request)
+			}
+		})
+	}
+}
 
 func TestClientsReportLatestRecordedRequest(t *testing.T) {
 	ctx := t.Context()

@@ -50,7 +50,8 @@ func (m *httpMeter) observeEvent(message wireMessage) {
 	if m.usage.Source == "codex" {
 		m.usage.mergeRateLimits(message.limits())
 	}
-	m.usage.applyMessage(message, m.captureUsage && message.reportsUsage())
+	// Antigravity can report a response ID before it reports token usage.
+	m.usage.applyMessage(message, m.captureUsage && (m.usage.Provider == antigravityProvider || message.reportsUsage()))
 	if message.Response != nil && message.Response.ID != "" {
 		m.usage.ResponseID = message.Response.ID
 	}
@@ -261,7 +262,7 @@ func (u *Usage) applyMessagesUsage(tokens *wireUsage) {
 
 func (u *Usage) geminiUsageAvailable() bool {
 	switch u.Provider {
-	case "google", "opencode", "opencode-go":
+	case "google", "opencode", "opencode-go", antigravityProvider:
 		return true
 	default:
 		return false

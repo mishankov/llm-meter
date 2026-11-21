@@ -1,6 +1,6 @@
 # LLM Proxy
 
-A Go reverse proxy with a SvelteKit dashboard for tracking token usage across OpenAI-compatible clients and signed-in Codex sessions. The dashboard shows estimated usage in USD and attributes requests to clients by their proxy keys.
+A Go reverse proxy with a SvelteKit dashboard for tracking token usage across OpenAI-compatible clients and signed-in Codex and Antigravity sessions. The dashboard shows estimated usage in USD and attributes requests to clients by their proxy keys.
 
 ## Run with Docker
 
@@ -55,6 +55,14 @@ env_http_headers = { "X-LLM-Proxy-Key" = "LLM_PROXY_KEY" }
 
 The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route forwards to the OpenAI API. The dashboard shows remaining Codex allowance when the upstream reports a recent reading.
 
+### Signed-in Antigravity
+
+Create an Antigravity client in the dashboard and use `https://proxy.example.com/antigravity` as the Cloud Code Assist base URL. The proxy appends the native request path, such as `/v1internal:loadCodeAssist` or `/v1internal:streamGenerateContent`, to `ANTIGRAVITY_UPSTREAM` (default `https://daily-cloudcode-pa.googleapis.com`).
+
+Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Proxy-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs. If your CLI only accepts an endpoint override, point it at a trusted loopback relay that adds the proxy-key header and forwards to the `/antigravity` base URL. For the CLI's ACP mode, set the relay URL with `--cloud_code_endpoint`.
+
+The dashboard shows requests as **Antigravity** under the client that owns the proxy key. Generation responses contribute token counts when Google reports them.
+
 ## Usage and rates
 
 The ledger saves provider-reported amounts, including zero, and uses local rates when the provider omits the amount. OpenCode Go list value and allowance use are recorded separately from the reported charge. Request details show both when available.
@@ -71,7 +79,7 @@ Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million t
 }
 ```
 
-Other server settings are `DATA_DIR` (default `./data`, or `/data` in Docker), `LISTEN_ADDR` (default `:8080`), and the optional `OPENAI_UPSTREAM`, `CODEX_UPSTREAM`, and `OPENCODE_GO_UPSTREAM` base URLs.
+Other server settings are `DATA_DIR` (default `./data`, or `/data` in Docker), `LISTEN_ADDR` (default `:8080`), and the optional `OPENAI_UPSTREAM`, `CODEX_UPSTREAM`, `OPENCODE_GO_UPSTREAM`, and `ANTIGRAVITY_UPSTREAM` base URLs.
 
 ## Develop
 

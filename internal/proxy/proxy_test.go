@@ -16,6 +16,31 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestAntigravityHandlerChecksPrefixAndSupportsNilRecorder(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/%62ase/v1internal:loadCodeAssist" {
+			t.Errorf("unexpected forwarded path %q", r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	base, err := url.Parse(upstream.URL + "/%62ase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewAntigravity(*base, nil)
+	for path, want := range map[string]int{
+		"/x":                                     http.StatusNotFound,
+		"/antigravity/v1internal:loadCodeAssist": http.StatusNoContent,
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+		if response.Code != want {
+			t.Errorf("%s: status %d, want %d", path, response.Code, want)
+		}
+	}
+}
+
 func TestHTTPForwardsTheOriginalCredentialsAndMetersNewUsage(t *testing.T) {
 	const response = `{"id":"resp_1","model":"gpt-example","service_tier":"priority","usage":{"input_tokens":13,"output_tokens":5,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":2}}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

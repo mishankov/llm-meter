@@ -53,6 +53,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	antigravity, err := upstream("ANTIGRAVITY_UPSTREAM", "https://daily-cloudcode-pa.googleapis.com")
+	if err != nil {
+		return err
+	}
 	ui, err := dashboardAssets()
 	if err != nil {
 		return err
@@ -73,7 +77,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              valueOrDefault("LISTEN_ADDR", ":8080"),
-		Handler:           routes(store, ui, api, codex, opencodeGo, dashboardToken, secureCookie, slog.Default()),
+		Handler:           routes(store, ui, api, codex, opencodeGo, antigravity, dashboardToken, secureCookie, slog.Default()),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -100,21 +104,26 @@ func run() error {
 	}
 }
 
-func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
+func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", dashboard.New(store, dashboardToken, secureCookie, log))
-	forward := proxy.New(api, codex, opencodeGo, func(usage proxy.Usage) {
+	record := func(usage proxy.Usage) {
 		// Persist completed requests even if the downstream client has gone away.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := store.Record(ctx, usage); err != nil {
 			log.Error("record request usage", "error", err)
 		}
-	})
-	proxyAccess := withProxyKey(store, forward, log)
+	}
+	proxyAccess := withProxyKey(store, proxy.New(api, codex, opencodeGo, record), log)
 	for _, prefix := range []string{"/v1", "/backend-api/codex", proxy.OpenCodeGoPrefix} {
 		mux.Handle(prefix, proxyAccess)
 		mux.Handle(prefix+"/", proxyAccess)
+	}
+	if antigravity != nil {
+		antigravityAccess := withProxyKey(store, proxy.NewAntigravity(*antigravity, record), log)
+		mux.Handle(proxy.AntigravityPrefix, antigravityAccess)
+		mux.Handle(proxy.AntigravityPrefix+"/", antigravityAccess)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

@@ -22,7 +22,7 @@ const response: Usage = {
   requests: [
     { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
     { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/backend-api/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
-    { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
+    { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', provider: 'antigravity', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/antigravity/v1internal:streamGenerateContent', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
   ],
   allowance: [{ id: 'open-code-window', label: '5-hour window', remainingPercent: 77, resetsAt: '2026-11-20T16:00:00Z' }],
@@ -136,6 +136,7 @@ test('filters requests from a chart and inspects and pages through them with the
   const requests = page.getByRole('region', { name: 'Requests' });
   await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
   await requests.getByRole('button', { name: 'Show 1 more request' }).press('Enter');
+  await expect(requests.getByText('Antigravity', { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(requests.getByText('Unpriced', { exact: true })).toHaveCount(2);
   await page.getByRole('radio', { name: 'Usage value' }).click();
   const chart = page.getByRole('region', { name: 'Usage value over time' });

@@ -150,7 +150,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	defer store.Close()
 	const dashboardToken = "fixture-dashboard-token-5e9ebc83"
 	ui := fstest.MapFS{"index.html": {Data: []byte("dashboard shell")}}
-	app := httptest.NewServer(routes(store, ui, api, codex, nil, dashboardToken, false, slog.New(slog.DiscardHandler)))
+	app := httptest.NewServer(routes(store, ui, api, codex, nil, nil, dashboardToken, false, slog.New(slog.DiscardHandler)))
 	defer app.Close()
 	client := app.Client()
 	client.Jar, _ = cookiejar.New(nil)
