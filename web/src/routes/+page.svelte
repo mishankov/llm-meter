@@ -3,13 +3,14 @@
   import { SvelteMap } from 'svelte/reactivity';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-  import Layers3Icon from '@lucide/svelte/icons/layers-3';
   import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
   import LogOutIcon from '@lucide/svelte/icons/log-out';
   import { Button } from '@ui-sdk/svelte/button';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
   import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../lib/api';
+  import favicon from '../lib/assets/favicon.png?no-inline';
+  import meterMark from '../lib/assets/llm-meter.png';
   import { guardEnter } from '../lib/format';
   import RecoveryNotice from '../lib/RecoveryNotice.svelte';
 
@@ -331,8 +332,9 @@
 {/snippet}
 
 <svelte:head>
-  <title>LLM Proxy</title>
-  <meta name="description" content="OpenAI API and Codex usage dashboard." />
+  <title>LLM Meter</title>
+  <meta name="description" content="Dashboard for LLM usage, costs, and provider allowances." />
+  <link rel="icon" type="image/png" sizes="32x32" href={favicon} />
 </svelte:head>
 
 <svelte:window onhashchange={readHash} ononline={connectionChanged} onoffline={connectionChanged} />
@@ -340,8 +342,8 @@
 {#if session !== 'ready'}
   <main class="auth-page">
     <section class="auth-form-shell" aria-labelledby="auth-title">
-      <div class="app-mark auth-mark"><Layers3Icon size={24} aria-hidden="true" /></div>
-      <h1 id="auth-title">LLM Proxy</h1>
+      <img class="app-mark auth-mark" src={meterMark} alt="" />
+      <h1 id="auth-title">LLM Meter</h1>
       {#if session === 'locked'}
         {#if expiredSession}<p class="muted" role="status">Your session expired. Unlock the dashboard to continue where you left off.</p>{/if}
         <form class="dialog-form auth-form" onsubmit={login}>
@@ -369,8 +371,8 @@
     <a class="skip-link" href="#content" onclick={skipToContent} onkeydown={guardEnter}>Skip to main content</a>
     <aside class="sidebar">
       <a class="brand" href={usageHref}>
-        <span class="app-mark"><Layers3Icon size={19} aria-hidden="true" /></span>
-        <span>LLM Proxy</span>
+        <img class="app-mark" src={meterMark} alt="" />
+        <span>LLM Meter</span>
       </a>
       <nav aria-label="Main navigation">
         <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined}>

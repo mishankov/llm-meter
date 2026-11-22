@@ -17,8 +17,9 @@ import (
 
 const (
 	apiPrefix           = "/v1"
-	codexPrefix         = "/backend-api/codex"
-	accessKey           = "X-LLM-Proxy-Key"
+	CodexPrefix         = "/codex"
+	codexUpstreamPath   = "/backend-api/codex"
+	accessKey           = "X-LLM-Meter-Key"
 	OpenCodeGoPrefix    = "/opencode-go"
 	AntigravityPrefix   = "/antigravity"
 	antigravityProvider = "antigravity"
@@ -81,13 +82,13 @@ func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Us
 		apiUpstream = &url.URL{Scheme: "https", Host: "api.openai.com", Path: apiPrefix}
 	}
 	if codexUpstream == nil {
-		codexUpstream = &url.URL{Scheme: "https", Host: "chatgpt.com", Path: codexPrefix}
+		codexUpstream = &url.URL{Scheme: "https", Host: "chatgpt.com", Path: codexUpstreamPath}
 	}
 	if opencodeGoUpstream == nil {
 		opencodeGoUpstream = &url.URL{Scheme: "https", Host: "opencode.ai", Path: "/inference/go"}
 	}
 	api := newUpstream(apiPrefix, "api", *apiUpstream, record)
-	codex := newUpstream(codexPrefix, "codex", *codexUpstream, record)
+	codex := newUpstream(CodexPrefix, "codex", *codexUpstream, record)
 	opencodeGo := newUpstream(OpenCodeGoPrefix, "api", *opencodeGoUpstream, func(usage Usage) {
 		if usage.ResponseID != "" {
 			usage.ResponseID = "opencode-go:" + usage.ResponseID
@@ -98,7 +99,7 @@ func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Us
 		switch {
 		case hasPrefix(r.URL.Path, apiPrefix):
 			api.serve(w, r)
-		case hasPrefix(r.URL.Path, codexPrefix):
+		case hasPrefix(r.URL.Path, CodexPrefix):
 			codex.serve(w, r)
 		case hasPrefix(r.URL.Path, OpenCodeGoPrefix):
 			opencodeGo.serve(w, r)
@@ -210,7 +211,7 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 
 func upstreamProvider(prefix string, baseURL url.URL) string {
 	switch prefix {
-	case codexPrefix:
+	case CodexPrefix:
 		return "codex"
 	case OpenCodeGoPrefix:
 		return "opencode-go"
@@ -332,7 +333,7 @@ func isJSON(contentType string) bool {
 func removeLocalHeaders(header http.Header) {
 	header.Del(accessKey)
 	for _, cookie := range (&http.Request{Header: header}).Cookies() {
-		if cookie.Name != "llm_proxy_session" {
+		if cookie.Name != "llm_meter_session" {
 			continue
 		}
 		cookies := (&http.Request{Header: header}).Cookies()

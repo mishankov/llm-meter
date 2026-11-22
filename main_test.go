@@ -20,8 +20,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
 )
 
 func TestDashboardServesPrecompressedAssets(t *testing.T) {
@@ -104,7 +104,7 @@ func TestDashboardServesPrecompressedAssets(t *testing.T) {
 
 func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-LLM-Proxy-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
+		if r.Header.Get("X-LLM-Meter-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
 			t.Errorf("incorrect authorization handling for %s", r.URL.Path)
 		}
 		id, outputTokens := "resp_api", 30
@@ -162,7 +162,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 			t.Fatal(err)
 		}
 		if key != "" {
-			r.Header.Set("X-LLM-Proxy-Key", key)
+			r.Header.Set("X-LLM-Meter-Key", key)
 			r.Header.Set("Authorization", "Bearer fixture-upstream-token")
 		}
 		if body != "" {
@@ -204,7 +204,8 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 		t.Fatal("client listing must expose only the key prefix and omit unavailable request metadata")
 	}
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
-	request("POST", "/backend-api/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
+	request("GET", "/backend-api/codex/models", "", created.Key.Token, http.StatusNotFound)
+	request("POST", "/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
 
 	var dashboard ledger.Dashboard
 	body = request("GET", "/api/usage?client="+created.Client.ID, "", "", 200)

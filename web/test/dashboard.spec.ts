@@ -21,7 +21,7 @@ const response: Usage = {
   },
   requests: [
     { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
-    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/backend-api/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
+    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
     { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', provider: 'antigravity', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/antigravity/v1internal:streamGenerateContent', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
   ],
@@ -388,7 +388,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
   await expect(page.getByRole('alert')).toContainText('Could not load usage');
-  await expect(page.getByRole('alert')).toContainText('Check the LLM Proxy service and its logs.');
+  await expect(page.getByRole('alert')).toContainText('Check the LLM Meter service and its logs.');
   await expect(apiRequest).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Usage value over time' })).not.toBeVisible();
 
@@ -504,7 +504,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/v1$/);
   await clientType.press('Enter');
   await page.getByRole('option', { name: 'Codex (ChatGPT sign-in)' }).click();
-  const baseURL = new URL('/backend-api/codex', page.url()).href;
+  const baseURL = new URL('/codex', page.url()).href;
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
@@ -513,6 +513,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(baseURL);
   await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
   await expect(page.getByText('config.toml', { exact: true })).toBeVisible();
+  await expect(page.getByText('LLM_METER_KEY', { exact: true })).toBeVisible();
   await clientType.press('Enter');
   await page.getByRole('option', { name: 'OpenCode (ChatGPT sign-in)' }).click();
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
@@ -766,6 +767,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.keyboard.press('Escape');
   await expect(secret).toHaveValue('test_key_1_secret');
   const reveal = page.getByRole('dialog', { name: 'New proxy key' });
+  await expect(reveal.getByText('X-LLM-Meter-Key', { exact: true })).toBeVisible();
   await reveal.getByRole('button', { name: 'Close without saving' }).click();
   const discard = page.getByRole('alertdialog', { name: 'Close without saving the key?' });
   await expect(discard).toBeVisible();
@@ -786,7 +788,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
   await expect(page.getByText('Waiting for first request', { exact: true })).toBeVisible();
-  await expect(page.getByText('X-LLM-Proxy-Key', { exact: true })).toBeVisible();
+  await expect(page.getByText('X-LLM-Meter-Key', { exact: true })).toBeVisible();
 });
 
 test('keeps a client draft through session expiry and clears it on lock', async ({ page }) => {
@@ -961,6 +963,8 @@ test('creates a client and rotates its key using the dashboard', async ({ contex
 test('the UI SDK exposes and unlocks the dashboard by accessible names', async ({ page }) => {
   await mockAPI(page);
   await page.goto('/');
+  await expect(page).toHaveTitle('LLM Meter');
+  await expect(page.getByRole('heading', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByLabel('Access token')).toBeVisible();
   const result = await page.evaluate(async (path) => {
     const { agent } = await import(path);
@@ -977,6 +981,7 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.labels).toContain('Access token');
   expect(result.labels).toContain('Unlock dashboard');
   expect(result.ok, result.error?.message).toBe(true);
+  await expect(page.getByRole('link', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
 });
 

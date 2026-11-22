@@ -19,15 +19,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/dashboard"
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/dashboard"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("LLM Proxy stopped", "error", err)
+		slog.Error("LLM Meter stopped", "error", err)
 		os.Exit(1)
 	}
 }
@@ -69,7 +70,7 @@ func run() error {
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	store, err := ledger.Open(filepath.Join(dataDir, "llm-proxy.db"), catalog)
+	store, err := ledger.Open(filepath.Join(dataDir, "llm-meter.db"), catalog)
 	if err != nil {
 		return err
 	}
@@ -93,7 +94,7 @@ func run() error {
 	}()
 	stopped := make(chan error, 1)
 	go func() { stopped <- server.ListenAndServe() }()
-	slog.Info("LLM Proxy serving", "address", server.Addr)
+	slog.Info("LLM Meter serving", "address", server.Addr)
 	select {
 	case err := <-stopped:
 		return err
@@ -107,6 +108,19 @@ func run() error {
 func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", dashboard.New(store, dashboardToken, secureCookie, log))
+	mux.Handle("POST "+usagereport.Path, withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
+		event, err := usagereport.Decode(http.MaxBytesReader(w, r.Body, usagereport.MaxBodyBytes))
+		if err != nil {
+			proxyError(w, http.StatusBadRequest, "Invalid usage event")
+			return
+		}
+		if err := store.RecordRelay(r.Context(), clientID, event.ID, event.Usage()); err != nil {
+			log.Error("record relay usage", "error", err)
+			proxyError(w, http.StatusServiceUnavailable, "Could not record usage event")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}, log))
 	record := func(usage proxy.Usage) {
 		// Persist completed requests even if the downstream client has gone away.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -116,7 +130,7 @@ func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *
 		}
 	}
 	proxyAccess := withProxyKey(store, proxy.New(api, codex, opencodeGo, record), log)
-	for _, prefix := range []string{"/v1", "/backend-api/codex", proxy.OpenCodeGoPrefix} {
+	for _, prefix := range []string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix} {
 		mux.Handle(prefix, proxyAccess)
 		mux.Handle(prefix+"/", proxyAccess)
 	}
@@ -133,15 +147,21 @@ func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *
 }
 
 func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http.Handler {
+	return withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
+		next.ServeHTTP(w, r.WithContext(proxy.WithClient(r.Context(), clientID)))
+	}, log)
+}
+
+func withClientKey(store *ledger.Store, next func(http.ResponseWriter, *http.Request, string), log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		keys := r.Header.Values("X-LLM-Proxy-Key")
+		keys := r.Header.Values("X-LLM-Meter-Key")
 		if len(keys) != 1 {
-			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Proxy-Key is required")
+			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Meter-Key is required")
 			return
 		}
 		clientID, err := store.AuthenticateKey(r.Context(), keys[0], time.Now().UTC())
 		if ledger.NotFound(err) {
-			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Proxy-Key is required")
+			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Meter-Key is required")
 			return
 		}
 		if err != nil {
@@ -149,8 +169,8 @@ func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http
 			proxyError(w, http.StatusServiceUnavailable, "Proxy authentication unavailable")
 			return
 		}
-		r.Header.Del("X-LLM-Proxy-Key")
-		next.ServeHTTP(w, r.WithContext(proxy.WithClient(r.Context(), clientID)))
+		r.Header.Del("X-LLM-Meter-Key")
+		next(w, r, clientID)
 	})
 }
 

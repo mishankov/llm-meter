@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/pricing"
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 const refreshInterval = 24 * time.Hour
@@ -49,6 +49,7 @@ func preparePricing(db *sql.DB) error {
 		{"reported_allowance", "REAL"},
 		{"completion_window", "TEXT NOT NULL DEFAULT ''"},
 		{"service_tier", "TEXT NOT NULL DEFAULT ''"},
+		{"measurement_source", "TEXT NOT NULL DEFAULT 'proxy'"},
 	} {
 		if columns[column.name] {
 			continue

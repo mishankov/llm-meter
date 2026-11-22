@@ -12,8 +12,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
 )
 
 func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
@@ -26,7 +26,7 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	const unaryResponse = `{"traceId":"shared-trace","response":{"responseId":"generation-2","usageMetadata":{"promptTokenCount":25,"cachedContentTokenCount":5,"toolUsePromptTokenCount":5,"candidatesTokenCount":3}}}`
 	finishStream := make(chan struct{}, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-LLM-Proxy-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-google-token" {
+		if r.Header.Get("X-LLM-Meter-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-google-token" {
 			t.Error("incorrect credential forwarding")
 		}
 		body, err := io.ReadAll(r.Body)
@@ -82,7 +82,7 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Authorization", "Bearer fixture-google-token")
 		if token != "" {
-			r.Header.Set("X-LLM-Proxy-Key", token)
+			r.Header.Set("X-LLM-Meter-Key", token)
 		}
 		response, err := httpClient.Do(r)
 		if err != nil {

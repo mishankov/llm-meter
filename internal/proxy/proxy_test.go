@@ -81,7 +81,7 @@ func TestHTTPForwardsTheOriginalCredentialsAndMetersNewUsage(t *testing.T) {
 		req := httptest.NewRequest(method, "/v1/responses/resp%2F1?expand=a%2Fb", body)
 		req.Header.Set("Authorization", "Bearer upstream-secret")
 		req.Header.Set("OpenAI-Project", "project-1")
-		req.Header.Set("Cookie", "upstream=keep; llm_proxy_session=do-not-forward")
+		req.Header.Set("Cookie", "upstream=keep; llm_meter_session=do-not-forward")
 		req.Header.Set(accessKey, "proxy-secret")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept-Encoding", "gzip")
@@ -135,10 +135,10 @@ func TestSSEStreamsAndReadsReportedUsageAfterAnOversizedEvent(t *testing.T) {
 	defer upstream.Close()
 
 	records := make(chan Usage, 1)
-	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexPrefix), records))
+	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexUpstreamPath), records))
 	defer server.Close()
 	defer resume()
-	request, err := http.NewRequest(http.MethodPost, server.URL+codexPrefix+"/responses", nil)
+	request, err := http.NewRequest(http.MethodPost, server.URL+CodexPrefix+"/responses", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,6 +315,9 @@ func TestResponsesFallbackPreservesOtherResponses(t *testing.T) {
 func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 	const limitEvent = `{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":27,"window_minutes":300,"reset_at":1790000000}}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/codex/responses" {
+			t.Errorf("unexpected Codex WebSocket path: %s", r.URL.Path)
+		}
 		if r.Header.Get("Authorization") != "Bearer upstream" || r.Header.Get(accessKey) != "" {
 			t.Error("proxy and upstream WebSocket credentials were not separated")
 		}
@@ -351,12 +354,12 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 	}))
 	defer upstream.Close()
 	records := make(chan Usage, 4)
-	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexPrefix), records))
+	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexUpstreamPath), records))
 	defer server.Close()
 
 	dialer := websocket.Dialer{Subprotocols: []string{"responses"}, HandshakeTimeout: 4 * time.Second}
 	client, response, err := dialer.Dial(
-		"ws"+strings.TrimPrefix(server.URL, "http")+codexPrefix+"/responses",
+		"ws"+strings.TrimPrefix(server.URL, "http")+CodexPrefix+"/responses",
 		http.Header{"Authorization": {"Bearer upstream"}, accessKey: {"proxy-secret"}},
 	)
 	if err != nil {
@@ -388,7 +391,7 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 		}
 		record := nextRecord(t, records)
 		if record.Status != http.StatusSwitchingProtocols || record.Model != "gpt-ws" ||
-			record.ResponseID != id || record.ClientID != "client-1" {
+			record.ResponseID != id || record.ClientID != "client-1" || record.Endpoint != "/codex/responses" {
 			t.Fatalf("unexpected WebSocket usage metadata: %+v", record)
 		}
 		if i == 1 && (!record.HasUsage || record.InputTokens != 12 || record.CachedInputTokens != 2 || record.OutputTokens != 3) {

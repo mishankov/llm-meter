@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/ledger"
 )
 
 const (
-	cookieName      = "llm_proxy_session"
+	cookieName      = "llm_meter_session"
 	sessionDuration = 24 * time.Hour
 )
 
@@ -35,7 +35,7 @@ type server struct {
 func New(store *ledger.Store, token string, secureCookie bool, log *slog.Logger) http.Handler {
 	s := &server{
 		store: store, digest: sha256.Sum256([]byte(token)),
-		signKey: sha256.Sum256([]byte("llm-proxy dashboard session\x00" + token)),
+		signKey: sha256.Sum256([]byte("llm-meter dashboard session\x00" + token)),
 		secure:  secureCookie, now: func() time.Time { return time.Now().UTC() }, log: log,
 	}
 	mux := http.NewServeMux()
