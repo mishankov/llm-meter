@@ -42,9 +42,9 @@ func main() {
 	flag.StringVar(&opts.listen, "listen", "127.0.0.1:8765", "client-facing loopback IP and port")
 	flag.StringVar(&opts.bind, "bind", "", "container socket address, e.g. 0.0.0.0:8765 with a loopback-only Docker port mapping")
 	flag.StringVar(&opts.mode, "mode", remoteProxyMode, "remote-proxy or usage-only")
-	flag.StringVar(&opts.provider, "provider", "antigravity", "antigravity, openai, codex, or opencode-go")
-	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Proxy route in remote-proxy mode or origin in usage-only mode")
-	flag.StringVar(&opts.upstream, "upstream", "", "optional direct HTTPS provider base URL in usage-only mode")
+	flag.StringVar(&opts.provider, "provider", "", "restrict to antigravity, openai, codex, or opencode-go (default all)")
+	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Proxy origin (remote-proxy also accepts a legacy provider route)")
+	flag.StringVar(&opts.upstream, "upstream", "", "direct HTTPS provider base URL override in usage-only mode (scopes to Antigravity if --provider is omitted)")
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to the private proxy key file")
 	flag.StringVar(&opts.dataDir, "data-dir", "./data/relay", "persistent directory for this connection's pending usage in usage-only mode")
 	flag.Parse()
@@ -61,11 +61,7 @@ func run(opts options) error {
 	if err != nil {
 		return err
 	}
-	provider, ok := providers[opts.provider]
-	if !ok {
-		return errors.New("unknown --provider")
-	}
-	target, upstream, err := connectionURLs(opts, provider)
+	config, err := configureRelay(opts)
 	if err != nil {
 		return err
 	}
@@ -85,9 +81,9 @@ func run(opts options) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var handler http.Handler
-	if opts.mode == usageOnlyMode {
-		queue, err := relayoutbox.Open(opts.dataDir, target, key)
+	var record func(proxy.Usage)
+	if config.usageTarget != nil {
+		queue, err := relayoutbox.Open(opts.dataDir, config.usageTarget, key)
 		if err != nil {
 			return fmt.Errorf("open usage queue: %w", err)
 		}
@@ -101,13 +97,11 @@ func run(opts options) error {
 			stop()
 			<-done
 		}()
-		handler = directProxy(provider, *upstream, usageRecorder(queue))
-	} else {
-		handler = remoteProxy(provider, target, key, nil)
+		record = usageRecorder(queue)
 	}
 
 	log.Printf("Listening on http://%s (%s)", host, opts.mode)
-	return serve(ctx, listener, guard(host, provider, handler))
+	return serve(ctx, listener, config.handler(host, key, record, nil))
 }
 
 func serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
@@ -181,46 +175,82 @@ func isLoopback(listen string) bool {
 	return err == nil && addr.IsLoopback()
 }
 
-func connectionURLs(opts options, provider connectionProvider) (target, upstream *url.URL, err error) {
+func configureRelay(opts options) (relayConfig, error) {
+	selected := opts.provider
+	if _, ok := providers[selected]; selected != "" && !ok {
+		return relayConfig{}, errors.New("unknown --provider")
+	}
+	origin, err := parseHTTPS(opts.target)
+	if err != nil {
+		return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy URL without user info, query, or fragment")
+	}
+	path := strings.TrimSuffix(origin.EscapedPath(), "/")
+	var config relayConfig
 	switch opts.mode {
 	case remoteProxyMode:
 		if opts.upstream != "" {
-			return nil, nil, errors.New("--upstream requires --mode usage-only")
+			return relayConfig{}, errors.New("--upstream requires --mode usage-only")
 		}
-		target, err := parseTarget(opts.target, provider.prefix)
-		return target, nil, err
+		if path != "" {
+			// A target from the single-provider relay keeps its previous scope.
+			if selected == "" {
+				for name, provider := range providers {
+					if provider.prefix == path {
+						selected = name
+						break
+					}
+				}
+			}
+			if selected == "" || providers[selected].prefix != path {
+				return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy origin or a matching provider route")
+			}
+		}
 	case usageOnlyMode:
-		target, err := parseTarget(opts.target, "")
-		if err != nil {
-			return nil, nil, err
+		if path != "" {
+			return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy origin in usage-only mode")
 		}
-		target.Path = usagereport.Path
-		rawUpstream := opts.upstream
-		if rawUpstream == "" {
-			rawUpstream = provider.defaultUpstream
+		if opts.upstream != "" && selected == "" {
+			// Before multi-provider routing, an upstream override defaulted to Antigravity.
+			selected = "antigravity"
 		}
-		upstream, err := parseHTTPS(rawUpstream)
-		if err != nil {
-			return nil, nil, errors.New("--upstream must be an HTTPS provider base URL without user info, query, or fragment")
-		}
-		if strings.EqualFold(strings.TrimSuffix(target.Hostname(), "."), strings.TrimSuffix(upstream.Hostname(), ".")) {
-			return nil, nil, errors.New("the provider and LLM Proxy must use different hosts in usage-only mode")
-		}
-		return target, upstream, nil
+		usageTarget := *origin
+		usageTarget.Path, usageTarget.RawPath = usagereport.Path, ""
+		config.usageTarget = &usageTarget
 	default:
-		return nil, nil, errors.New("--mode must be remote-proxy or usage-only")
+		return relayConfig{}, errors.New("--mode must be remote-proxy or usage-only")
 	}
+
+	for name, provider := range providers {
+		if selected != "" && name != selected {
+			continue
+		}
+		if config.usageTarget == nil {
+			target := *origin
+			target.Path, target.RawPath = provider.prefix, ""
+			config.routes = append(config.routes, relayRoute{provider, target})
+			continue
+		}
+		upstream, err := directTarget(origin, provider, opts.upstream)
+		if err != nil {
+			return relayConfig{}, err
+		}
+		config.routes = append(config.routes, relayRoute{provider, *upstream})
+	}
+	return config, nil
 }
 
-func parseTarget(raw, route string) (*url.URL, error) {
-	target, err := parseHTTPS(raw)
-	if err == nil && strings.TrimSuffix(target.EscapedPath(), "/") == route {
-		return target, nil
+func directTarget(origin *url.URL, provider connectionProvider, raw string) (*url.URL, error) {
+	if raw == "" {
+		raw = provider.defaultUpstream
 	}
-	if route == "" {
-		return nil, errors.New("--target must be an HTTPS LLM Proxy origin without credentials, path, query, or fragment")
+	upstream, err := parseHTTPS(raw)
+	if err != nil {
+		return nil, errors.New("--upstream must be an HTTPS provider base URL without user info, query, or fragment")
 	}
-	return nil, fmt.Errorf("--target must be an HTTPS LLM Proxy %s URL without user info, query, or fragment", route)
+	if strings.EqualFold(strings.TrimSuffix(origin.Hostname(), "."), strings.TrimSuffix(upstream.Hostname(), ".")) {
+		return nil, errors.New("the provider and LLM Proxy must use different hosts in usage-only mode")
+	}
+	return upstream, nil
 }
 
 func parseHTTPS(raw string) (*url.URL, error) {

@@ -26,7 +26,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func antigravityRelay(host string, target *url.URL, key string, transport http.RoundTripper) http.Handler {
 	provider := providers["antigravity"]
-	return guard(host, provider, remoteProxy(provider, target, key, transport))
+	return guard(host, providerHandler{provider, remoteProxy(provider, target, key, transport)})
 }
 
 func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
@@ -63,7 +63,7 @@ func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	target, err := parseTarget(upstream.URL+"/antigravity/", proxy.AntigravityPrefix)
+	target, err := parseHTTPS(upstream.URL + "/antigravity/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 	const host = "127.0.0.1:8765"
 	const rpc = "/v1internal:loadCodeAssist"
-	target, err := parseTarget("https://proxy.test/antigravity", proxy.AntigravityPrefix)
+	target, err := parseHTTPS("https://proxy.test/antigravity")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 
 func TestRelayHidesUpstreamErrors(t *testing.T) {
 	const host = "127.0.0.1:8765"
-	target, err := parseTarget("https://proxy.test/antigravity", proxy.AntigravityPrefix)
+	target, err := parseHTTPS("https://proxy.test/antigravity")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestRelayConfiguration(t *testing.T) {
 		"http://proxy.test/antigravity", "https://proxy.test/api", "https://user@proxy.test/antigravity",
 		"https://proxy.test/antigravity?x=1", "https://proxy.test/antigravity#fragment",
 	} {
-		if _, err := parseTarget(target, proxy.AntigravityPrefix); err == nil {
+		if _, err := configureRelay(options{mode: remoteProxyMode, provider: "antigravity", target: target}); err == nil {
 			t.Errorf("accepted invalid target %s", target)
 		}
 	}
@@ -200,32 +200,41 @@ func TestRelayConfiguration(t *testing.T) {
 	}
 }
 
-func TestConnectionURLs(t *testing.T) {
-	provider := providers["codex"]
+func TestRelayDestinations(t *testing.T) {
 	for _, test := range []struct {
-		name, mode, target, upstream, wantTarget, wantUpstream string
+		name, mode, provider, target, upstream, wantRoute string
 	}{
-		{"remote route", remoteProxyMode, "https://proxy.test/backend-api/codex", "", "https://proxy.test/backend-api/codex", ""},
-		{"usage only", usageOnlyMode, "https://proxy.test/", "", "https://proxy.test/api/usage/events", provider.defaultUpstream},
-		{"custom upstream", usageOnlyMode, "https://proxy.test", "https://upstream.test/codex", "https://proxy.test/api/usage/events", "https://upstream.test/codex"},
-		{"remote with override", remoteProxyMode, "https://proxy.test/backend-api/codex", "https://upstream.test/codex", "", ""},
-		{"usage with proxy route", usageOnlyMode, "https://proxy.test/backend-api/codex", "", "", ""},
-		{"usage with same upstream host", usageOnlyMode, "https://proxy.test", "https://PROXY.test.:8443/v1", "", ""},
-		{"unknown mode", "auto", "https://proxy.test", "", "", ""},
+		{"legacy Antigravity command", remoteProxyMode, "", "https://proxy.test/antigravity", "", "https://proxy.test/antigravity"},
+		{"legacy Codex route", remoteProxyMode, "", "https://proxy.test/backend-api/codex/", "", "https://proxy.test/backend-api/codex"},
+		{"remote with explicit provider", remoteProxyMode, "codex", "https://proxy.test", "", "https://proxy.test/backend-api/codex"},
+		{"remote with explicit matching route", remoteProxyMode, "codex", "https://proxy.test/backend-api/codex", "", "https://proxy.test/backend-api/codex"},
+		{"usage with explicit provider", usageOnlyMode, "codex", "https://proxy.test/", "", providers["codex"].defaultUpstream},
+		{"custom upstream", usageOnlyMode, "codex", "https://proxy.test", "https://upstream.test/codex", "https://upstream.test/codex"},
+		{"remote with mismatched route", remoteProxyMode, "codex", "https://proxy.test/v1", "", ""},
+		{"remote with override", remoteProxyMode, "codex", "https://proxy.test", "https://upstream.test/codex", ""},
+		{"legacy Antigravity upstream override", usageOnlyMode, "", "https://proxy.test", "https://upstream.test", "https://upstream.test"},
+		{"usage with proxy route", usageOnlyMode, "codex", "https://proxy.test/backend-api/codex", "", ""},
+		{"usage with same upstream host", usageOnlyMode, "codex", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
+		{"usage with a default upstream on the proxy host", usageOnlyMode, "", "https://chatgpt.com", "", ""},
+		{"unknown mode", "auto", "codex", "https://proxy.test", "", ""},
+		{"unknown provider", remoteProxyMode, "unknown", "https://proxy.test", "", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			target, upstream, err := connectionURLs(options{mode: test.mode, target: test.target, upstream: test.upstream}, provider)
-			if test.wantTarget == "" {
+			config, err := configureRelay(options{mode: test.mode, provider: test.provider, target: test.target, upstream: test.upstream})
+			if test.wantRoute == "" {
 				if err == nil {
 					t.Fatal("accepted an incompatible connection configuration")
 				}
 				return
 			}
-			if err != nil || target.String() != test.wantTarget {
-				t.Fatalf("target %v, error %v", target, err)
+			if err != nil || len(config.routes) != 1 || config.routes[0].target.String() != test.wantRoute {
+				t.Fatalf("expected one route to %s, got %+v (%v)", test.wantRoute, config.routes, err)
 			}
-			if upstream == nil && test.wantUpstream != "" || upstream != nil && upstream.String() != test.wantUpstream {
-				t.Fatalf("upstream %v, want %s", upstream, test.wantUpstream)
+			if test.mode == usageOnlyMode && (config.usageTarget == nil || config.usageTarget.String() != "https://proxy.test/api/usage/events") {
+				t.Fatalf("unexpected usage target %v", config.usageTarget)
+			}
+			if test.mode == usageOnlyMode && test.provider == "" && config.routes[0].provider != providers["antigravity"] {
+				t.Fatal("the legacy upstream override must scope to Antigravity")
 			}
 		})
 	}
@@ -276,12 +285,12 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 				checkRequest(r, test.proxyPath, key)
 				return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody}, nil
 			})
-			target, err := parseTarget("https://proxy.test"+provider.prefix, provider.prefix)
+			target, err := parseHTTPS("https://proxy.test" + provider.prefix)
 			if err != nil {
 				t.Fatal(err)
 			}
 			remote := httptest.NewRecorder()
-			guard(host, provider, remoteProxy(provider, target, key, transport)).ServeHTTP(remote, request())
+			guard(host, providerHandler{provider, remoteProxy(provider, target, key, transport)}).ServeHTTP(remote, request())
 			if remote.Code != http.StatusNoContent {
 				t.Fatalf("remote proxy returned %d", remote.Code)
 			}
@@ -298,14 +307,110 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 			}
 			var observed []proxy.Usage
 			local := httptest.NewRecorder()
-			guard(host, provider, directProxy(provider, *base, func(usage proxy.Usage) {
+			forward := directProxy(provider, *base, func(usage proxy.Usage) {
 				observed = append(observed, usage)
-			})).ServeHTTP(local, request())
+			})
+			guard(host, providerHandler{provider, forward}).ServeHTTP(local, request())
 			if local.Code != http.StatusOK || local.Body.String() != test.response {
 				t.Errorf("local relay changed provider response, status %d", local.Code)
 			}
 			if len(observed) != 1 || !observed[0].HasUsage || observed[0].InputTokens != 12 || observed[0].OutputTokens != 2 || observed[0].Endpoint != test.proxyPath {
 				t.Errorf("unexpected local usage: %+v", observed)
+			}
+		})
+	}
+}
+
+func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
+	const host = "127.0.0.1:8765"
+	const key = "llmp_fixture"
+	const authorization = "Bearer provider-fixture"
+	requests := []struct {
+		provider, method, localPath, remotePath, directPath string
+	}{
+		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
+		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
+		{"codex", http.MethodGet, "/backend-api/codex/models", "/backend-api/codex/models", "/backend-api/codex/models"},
+		{"opencode-go", http.MethodGet, "/opencode-go/models", "/opencode-go/models", "/inference/go/v1/models"},
+	}
+	for _, mode := range []string{remoteProxyMode, usageOnlyMode} {
+		t.Run(mode, func(t *testing.T) {
+			config, err := configureRelay(options{mode: mode, target: "https://proxy.test/"})
+			if err != nil || len(config.routes) != len(requests) {
+				t.Fatalf("expected all provider routes, got %+v (%v)", config.routes, err)
+			}
+			check := func(r *http.Request) string {
+				t.Helper()
+				for _, request := range requests {
+					path, wantKey := request.remotePath, key
+					if mode == usageOnlyMode {
+						path, wantKey = request.directPath, ""
+					}
+					if r.URL.Path == path && r.Method == request.method {
+						if r.Header.Get("Authorization") != authorization || r.Header.Get(keyHeader) != wantKey || r.URL.RawQuery != "fixture=1" {
+							t.Errorf("authorization, proxy key, or query changed for %s", request.provider)
+						}
+						return request.provider
+					}
+				}
+				t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+				return ""
+			}
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(check(r)))}, nil
+			})
+			if mode == usageOnlyMode {
+				if config.usageTarget == nil || config.usageTarget.String() != "https://proxy.test/api/usage/events" {
+					t.Fatalf("incorrect usage target: %v", config.usageTarget)
+				}
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.WriteString(w, check(r))
+				}))
+				defer upstream.Close()
+				fixture, err := url.Parse(upstream.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i, route := range config.routes {
+					if route.target.String() != route.provider.defaultUpstream {
+						t.Fatalf("incorrect default upstream: %s", &route.target)
+					}
+					config.routes[i].target.Scheme = fixture.Scheme
+					config.routes[i].target.Host = fixture.Host
+				}
+			}
+			var observed []proxy.Usage
+			handler := config.handler(host, key, func(usage proxy.Usage) { observed = append(observed, usage) }, transport)
+			for _, request := range requests {
+				r := httptest.NewRequest(request.method, "http://"+host+request.localPath+"?fixture=1", nil)
+				r.Header.Set("Authorization", authorization)
+				r.Header.Set(keyHeader, "untrusted-inbound-key")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, r)
+				if response.Code != http.StatusOK || response.Body.String() != request.provider {
+					t.Fatalf("incorrect route for %s: HTTP %d", request.provider, response.Code)
+				}
+			}
+			if mode == usageOnlyMode {
+				if len(observed) != len(requests) {
+					t.Fatalf("got %d local observations, want %d", len(observed), len(requests))
+				}
+				for i, usage := range observed {
+					if usage.Endpoint != requests[i].remotePath || usage.Status != http.StatusOK {
+						t.Errorf("unexpected observation for %s: %+v", requests[i].provider, usage)
+					}
+				}
+			} else if len(observed) != 0 {
+				t.Fatal("remote-proxy mode metered usage locally")
+			}
+			for _, path := range []string{"/api/usage/events", "/v1/../opencode-go/models", "/v1suffix"} {
+				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
+				r.Header.Set("Authorization", authorization)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, r)
+				if response.Code != http.StatusNotFound {
+					t.Errorf("unexpected status for %s: %d", path, response.Code)
+				}
 			}
 		})
 	}

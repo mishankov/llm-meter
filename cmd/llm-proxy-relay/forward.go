@@ -32,28 +32,64 @@ var providers = map[string]connectionProvider{
 
 var cloudCodeRPC = regexp.MustCompile(`^/v1internal:[a-zA-Z][a-zA-Z0-9]*$`)
 
-func guard(host string, provider connectionProvider, next http.Handler) http.Handler {
+type relayRoute struct {
+	provider connectionProvider
+	target   url.URL
+}
+
+type relayConfig struct {
+	routes      []relayRoute
+	usageTarget *url.URL
+}
+
+type providerHandler struct {
+	provider connectionProvider
+	forward  http.Handler
+}
+
+func (config relayConfig) handler(host, key string, record func(proxy.Usage), transport http.RoundTripper) http.Handler {
+	handlers := make([]providerHandler, 0, len(config.routes))
+	for _, route := range config.routes {
+		var forward http.Handler
+		if config.usageTarget != nil {
+			forward = directProxy(route.provider, route.target, record)
+		} else {
+			forward = remoteProxy(route.provider, &route.target, key, transport)
+		}
+		handlers = append(handlers, providerHandler{route.provider, forward})
+	}
+	return guard(host, handlers...)
+}
+
+func guard(host string, handlers ...providerHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (r.Host != host && r.Host+":80" != host) ||
 			len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		if !provider.allowsPath(r.URL.Path) || r.Method == http.MethodConnect {
+		if r.Method == http.MethodConnect {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") == "" {
-			if provider.prefix == proxy.AntigravityPrefix {
-				http.Error(w, "Google authorization is required", http.StatusUnauthorized)
-				return
+		for _, handler := range handlers {
+			if !handler.provider.allowsPath(r.URL.Path) {
+				continue
 			}
-			if r.Header.Get("X-API-Key") == "" && r.Header.Get("Api-Key") == "" && r.Header.Get("X-Goog-Api-Key") == "" {
-				http.Error(w, "Provider authorization is required", http.StatusUnauthorized)
-				return
+			if r.Header.Get("Authorization") == "" {
+				if handler.provider.prefix == proxy.AntigravityPrefix {
+					http.Error(w, "Google authorization is required", http.StatusUnauthorized)
+					return
+				}
+				if r.Header.Get("X-API-Key") == "" && r.Header.Get("Api-Key") == "" && r.Header.Get("X-Goog-Api-Key") == "" {
+					http.Error(w, "Provider authorization is required", http.StatusUnauthorized)
+					return
+				}
 			}
+			handler.forward.ServeHTTP(w, r)
+			return
 		}
-		next.ServeHTTP(w, r)
+		http.NotFound(w, r)
 	})
 }
 
