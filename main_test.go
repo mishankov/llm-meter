@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -185,6 +186,8 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	}
 	request("GET", "/api/usage", "", "", 401)
 	request("GET", "/api/usage/requests", "", "", 401)
+	request("PATCH", "/api/clients/client", `{"name":"Renamed"}`, "", 401)
+	request("DELETE", "/api/clients/client", "", "", 401)
 	request("POST", "/api/login", `{"token":"wrong"}`, "", 401)
 	request("POST", "/api/login", `{"token":"`+dashboardToken+`"}`, "", 204)
 	request("GET", "/api/session", "", "", 204)
@@ -301,8 +304,47 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	if r := dashboard.Requests[0]; r.CacheWriteTokens != 7000 || r.CacheWrite12hTokens != 4000 || r.Rates == nil || r.Rates.CacheWrite12h != 5 {
 		t.Fatalf("missing cache-write details: %+v", r)
 	}
-	request("DELETE", "/api/clients/"+created.Client.ID+"/keys/"+created.Key.ID, "", "", 204)
+	clientPath := "/api/clients/" + created.Client.ID
+	request("PATCH", clientPath, `{"name":"  "}`, "", 400)
+	request("PATCH", clientPath, `{"name":"`+strings.Repeat("界", 101)+`"}`, "", 400)
+	request("PATCH", "/api/clients/missing", `{"name":"Renamed"}`, "", 404)
+	request("DELETE", "/api/clients/missing", "", "", 404)
+	request("PATCH", clientPath, `{"name":"  Renamed Client  "}`, "", 204)
+	body = request("GET", "/api/clients", "", "", 200)
+	if err := json.Unmarshal(body, &listed); err != nil || !slices.ContainsFunc(listed.Clients, func(client ledger.Client) bool {
+		return client.ID == created.Client.ID && client.Name == "Renamed Client"
+	}) {
+		t.Fatalf("incorrect clients after rename: %s, decode error %v", body, err)
+	}
+	request("GET", "/v1/responses/resp_background", "", created.Key.Token, 200)
+	request("DELETE", clientPath+"/keys/"+created.Key.ID, "", "", 204)
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 401)
+
+	var replacement struct{ Key ledger.Key }
+	body = request("POST", clientPath+"/keys", "", "", 201)
+	if err := json.Unmarshal(body, &replacement); err != nil || replacement.Key.Token == "" {
+		t.Fatalf("invalid replacement key: %v", err)
+	}
+	body = request("GET", "/api/usage?client="+created.Client.ID, "", "", 200)
+	if err := json.Unmarshal(body, &dashboard); err != nil || len(dashboard.Requests) == 0 ||
+		dashboard.Requests[0].Client != "Renamed Client" {
+		t.Fatalf("incorrect attribution after rename: %+v, decode error %v", dashboard.Requests, err)
+	}
+	summaryBeforeArchive := dashboard.Summary
+	request("DELETE", clientPath, "", "", 204)
+	request("DELETE", clientPath, "", "", 204)
+	request("PATCH", clientPath, `{"name":"Renamed again"}`, "", 404)
+	request("POST", clientPath+"/keys", "", "", 404)
+	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, replacement.Key.Token, 401)
+	body = request("GET", "/api/clients", "", "", 200)
+	if err := json.Unmarshal(body, &listed); err != nil || len(listed.Clients) != 1 || listed.Clients[0].Name != "Poller" {
+		t.Fatalf("incorrect clients after archive: %s, decode error %v", body, err)
+	}
+	body = request("GET", "/api/usage?client="+created.Client.ID, "", "", 200)
+	if err := json.Unmarshal(body, &dashboard); err != nil || dashboard.Summary != summaryBeforeArchive ||
+		len(dashboard.Requests) == 0 || dashboard.Requests[0].Client != "Renamed Client" {
+		t.Fatalf("incorrect usage after archive: %+v, decode error %v", dashboard.Summary, err)
+	}
 	request("POST", "/api/logout", "", "", 204)
 	request("GET", "/api/clients", "", "", 401)
 }

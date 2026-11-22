@@ -27,12 +27,13 @@
     clientId: string;
     loggingOut: boolean;
     draft?: string;
+    renameDrafts: Map<string, string>;
     keyDialogOpen?: boolean;
     navigate: (clientId?: string) => void;
     viewUsage: (clientId: string, outcome?: RequestOutcome) => void;
     onUnauthorized: () => void;
   }
-  let { active, clientId, loggingOut, draft = $bindable(''), keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
+  let { active, clientId, loggingOut, draft = $bindable(''), renameDrafts, keyDialogOpen = $bindable(false), navigate, viewUsage, onUnauthorized }: Props = $props();
 
   let clients = $state<Client[]>([]);
   let selected = $derived(clients.find((client) => client.id === clientId));
@@ -46,14 +47,17 @@
   const actionFailures = new SvelteMap<string, Problem>();
   let actionError = $derived(actionFailures.get(clientId) ?? null);
   let createError = $state<{ problem: Problem; uncertain: boolean } | null>(null);
-  let clientNameTooLong = $derived([...draft.trim()].length > 100);
+  let renameError = $state<Problem | null>(null);
+  let renaming = $state<{ id: string; name: string } | null>(null);
+  let formName = $derived(renaming ? renameDrafts.get(renaming.id) ?? renaming.name : draft);
+  let clientNameTooLong = $derived([...formName.trim()].length > 100);
   let busy = $state(false);
   let dialogOpen = $state(false);
-  let dialogMode = $state<'create' | 'key'>('create');
-  let revokeOpen = $state(false);
+  let dialogMode = $state<'name' | 'key'>('name');
+  let confirmOpen = $state(false);
   let generated = $state<NewKey | null>(null);
-  let revoking = $state<{ clientId: string; key: Key; trigger: HTMLElement } | null>(null);
-  let revokeError = $derived(actionFailures.get(revoking?.clientId ?? '') ?? null);
+  let removal = $state<{ clientId: string; name: string; key?: Key; trigger: HTMLElement } | null>(null);
+  let removalError = $derived(actionFailures.get(removal?.clientId ?? '') ?? null);
   let copyState = $state<'idle' | 'copied' | 'manual'>('idle');
   let discardKey = false;
   let listRequest: AbortController | null = null;
@@ -61,17 +65,19 @@
   let previousClientId = '';
 
   $effect(() => {
-    keyDialogOpen = (dialogOpen && (busy || generated !== null)) || (revokeOpen && busy);
+    keyDialogOpen = (dialogOpen && (busy || generated !== null)) || (confirmOpen && busy);
   });
 
   $effect(() => {
-    if (revokeOpen && !busy && (!active || revoking?.clientId !== clientId)) revokeOpen = false;
+    if (busy) return;
+    if (confirmOpen && (!active || removal?.clientId !== clientId)) confirmOpen = false;
+    if (dialogOpen && renaming && (!active || renaming.id !== clientId)) dialogOpen = false;
   });
 
   $effect(() => {
     const origin = previousClientId;
     previousClientId = clientId;
-    if (active && !clientId && origin && !dialogOpen && !revokeOpen && document.activeElement === document.body) {
+    if (active && !clientId && origin && !dialogOpen && !confirmOpen && document.activeElement === document.body) {
       const target = document.getElementById('manage-client-' + origin) ?? document.getElementById('clients-title');
       target?.focus();
     }
@@ -99,7 +105,7 @@
   }
 
   async function load(silent = false) {
-    if (silent && (loading || busy || dialogOpen || revokeOpen || listRequest)) return;
+    if (silent && (loading || busy || dialogOpen || confirmOpen || listRequest)) return;
     listRequest?.abort();
     const current = new AbortController();
     listRequest = current;
@@ -137,11 +143,17 @@
   }
 
   function canCreate() {
-    return canManageClients() && !dialogOpen && !revokeOpen;
+    return canManageClients() && !dialogOpen && !confirmOpen;
   }
 
   function canSubmitClient() {
-    return canManageClients() && !!draft.trim() && !clientNameTooLong && !createError?.uncertain;
+    return canManageClients() && !!formName.trim() && !clientNameTooLong &&
+      (renaming ? renaming.id === clientId : !createError?.uncertain);
+  }
+
+  function setFormName(value: string) {
+    if (renaming) renameDrafts.set(renaming.id, value);
+    else draft = value;
   }
 
   function openCreate(event: MouseEvent) {
@@ -150,19 +162,59 @@
     returnFocus = event.currentTarget as HTMLElement;
     generated = null;
     createError = null;
-    dialogMode = 'create';
+    renaming = null;
+    dialogMode = 'name';
     dialogOpen = true;
   }
 
-  async function createClient(event: SubmitEvent) {
+  function openRename(event: MouseEvent) {
+    if (!selected || !canCreate()) return;
+    listRequest?.abort();
+    returnFocus = event.currentTarget as HTMLElement;
+    renaming = { id: selected.id, name: selected.name };
+    createError = null;
+    renameError = null;
+    dialogMode = 'name';
+    dialogOpen = true;
+  }
+
+  function saveClientName(event: SubmitEvent) {
     event.preventDefault();
     if (!canSubmitClient()) return;
+    const name = formName.trim();
+    if (renaming) return renameClient(renaming.id, name);
+    return createClient(name);
+  }
+
+  async function renameClient(id: string, name: string) {
+    listRequest?.abort();
+    busy = true;
+    renameError = null;
+    try {
+      await api('/clients/' + encodeURIComponent(id), {
+        ...jsonPost({ name }), method: 'PATCH', signal: AbortSignal.timeout(responseTimeout)
+      });
+      clients = clients.map((client) => client.id === id ? { ...client, name } : client);
+      renameDrafts.delete(id);
+      dialogOpen = false;
+    } catch (cause) {
+      renameError = problem(cause, 'Could not rename the client');
+    } finally {
+      busy = false;
+    }
+    if (renameError) {
+      await tick();
+      document.getElementById('client-name')?.focus();
+    }
+  }
+
+  async function createClient(name: string) {
     listRequest?.abort();
     busy = true;
     createError = null;
     try {
       const result = await api<{ client: Client; key: NewKey }>('/clients', {
-        ...jsonPost({ name: draft.trim() }),
+        ...jsonPost({ name }),
         signal: AbortSignal.timeout(responseTimeout)
       });
       clients = [result.client, ...clients];
@@ -189,6 +241,7 @@
     busy = true;
     actionFailures.delete(id);
     generated = null;
+    renaming = null;
     dialogMode = 'key';
     dialogOpen = true;
     try {
@@ -247,58 +300,60 @@
     copyState = 'manual';
   }
 
-  function confirmRevoke(key: Key, event: MouseEvent) {
-    if (!canCreate()) return;
+  function confirmRemoval(event: MouseEvent, key?: Key) {
+    if (!selected || !canCreate()) return;
     listRequest?.abort();
-    revoking = { clientId, key, trigger: event.currentTarget as HTMLElement };
-    revokeOpen = true;
+    removal = { clientId, name: selected.name, key, trigger: event.currentTarget as HTMLElement };
+    confirmOpen = true;
     actionFailures.delete(clientId);
   }
 
-  function revokeShortcut(event: KeyboardEvent) {
-    guardEnter(event);
-    if (event.key === 'Delete' && !dismissShortcut(event)) {
-      event.preventDefault();
-      (event.currentTarget as HTMLButtonElement).click();
-    }
-  }
-
-  async function revoke() {
-    if (!revoking || revoking.clientId !== clientId || !canManageClients()) return;
+  async function remove() {
+    if (!removal || removal.clientId !== clientId || !canManageClients()) return;
     listRequest?.abort();
-    const id = revoking.clientId;
-    const keyId = revoking.key.id;
+    const { clientId: id, key } = removal;
+    const clientPath = '/clients/' + encodeURIComponent(id);
     actionFailures.delete(id);
     busy = true;
     try {
-      await api('/clients/' + encodeURIComponent(id) + '/keys/' + encodeURIComponent(keyId), {
+      await api(key ? clientPath + '/keys/' + encodeURIComponent(key.id) : clientPath, {
         method: 'DELETE',
         signal: AbortSignal.timeout(responseTimeout)
       });
-      clients = clients.map((client) => client.id === id ? {
-        ...client, keys: client.keys.map((key) => key.id === keyId ? { ...key, revokedAt: new Date().toISOString() } : key)
-      } : client);
-      revokeOpen = false;
+      if (key) {
+        clients = clients.map((client) => client.id === id ? {
+          ...client, keys: client.keys.map((item) => item.id === key.id ? { ...item, revokedAt: new Date().toISOString() } : item)
+        } : client);
+      } else {
+        clients = clients.filter((client) => client.id !== id);
+        renameDrafts.delete(id);
+        if (active && clientId === id) navigate();
+      }
+      confirmOpen = false;
       await tick();
-      document.getElementById('new-key')?.focus();
+      if (active && key && clientId === id) document.getElementById('new-key')?.focus();
     } catch (cause) {
-      const failure = mutationFailure(cause, 'Could not revoke the key', 'Check the refreshed key status before trying again.');
-      actionFailures.set(id, failure.problem);
-      if (failure.uncertain) {
-        void load();
-        revokeOpen = false;
+      if (key) {
+        const failure = mutationFailure(cause, 'Could not revoke the key', 'Check the refreshed key status before trying again.');
+        actionFailures.set(id, failure.problem);
+        if (failure.uncertain) {
+          void load();
+          confirmOpen = false;
+        }
+      } else {
+        actionFailures.set(id, problem(cause, 'Could not archive the client'));
       }
     } finally {
       busy = false;
     }
   }
 
-  function clientShortcut(event: KeyboardEvent, key: 'N' | 'K') {
+  function clientShortcut(event: KeyboardEvent, key: 'N' | 'K' | 'F2' | 'Delete') {
     guardEnter(event);
     const button = event.currentTarget;
     if (!(button instanceof HTMLButtonElement) || button !== document.activeElement ||
       event.defaultPrevented || dismissShortcut(event) || !canCreate()) return;
-    const matchesKey = event.key.toUpperCase() === key;
+    const matchesKey = event.key.toUpperCase() === key.toUpperCase();
     const matchesLayout = /^\p{L}$/u.test(event.key) && !/^[a-z]$/i.test(event.key) && event.code === 'Key' + key;
     if (!matchesKey && !matchesLayout) return;
     event.preventDefault();
@@ -314,7 +369,7 @@
     void load(true);
     if (event.detail !== 0) return;
     await tick();
-    if (active && clientId === id && !dialogOpen && !revokeOpen) {
+    if (active && clientId === id && !dialogOpen && !confirmOpen) {
       document.getElementById('client-title')?.focus();
     }
   }
@@ -324,8 +379,8 @@
     return document.getElementById('new-key') ?? document.querySelector<HTMLElement>('nav a[aria-current="page"]');
   }
 
-  function revokeDialogReturnFocus() {
-    if (!loading && revoking?.trigger.isConnected) return revoking.trigger;
+  function removalDialogReturnFocus() {
+    if (!loading && removal?.trigger.isConnected) return removal.trigger;
     return document.getElementById('keys-title') ?? document.getElementById('clients-title');
   }
 </script>
@@ -349,18 +404,26 @@
         <Button class="secondary-button" onclick={() => viewUsage(selected?.id ?? '')}>
           <ChartNoAxesCombinedIcon size={15} aria-hidden="true" /> View usage
         </Button>
+        <Button class="secondary-button" aria-keyshortcuts="F2" title="Rename client (F2 when focused)"
+          disabled={!canCreate()} focusableWhenDisabled onclick={openRename} onkeydown={(event) => clientShortcut(event, 'F2')}>
+          Rename <kbd aria-hidden="true">F2</kbd>
+        </Button>
+        <Button class="secondary-button" aria-keyshortcuts="Delete" title="Archive client (Delete when focused)"
+          disabled={!canCreate()} focusableWhenDisabled onclick={(event) => confirmRemoval(event)} onkeydown={(event) => clientShortcut(event, 'Delete')}>
+          Archive <kbd aria-hidden="true">Del</kbd>
+        </Button>
         <Button id="new-key" class="primary-button" aria-keyshortcuts="K" title="New key (K when focused)"
           disabled={!canCreate()} focusableWhenDisabled onclick={makeKey} onkeydown={(event) => clientShortcut(event, 'K')}>
           <PlusIcon size={16} aria-hidden="true" /> New key <kbd aria-hidden="true">K</kbd>
         </Button>
       </div>
     </header>
-    {#if actionError && !revokeOpen}<RecoveryNotice problem={actionError} />{/if}
+    {#if actionError && !confirmOpen}<RecoveryNotice problem={actionError} />{/if}
     <section class="connection" aria-labelledby="connection-title">
       <h2 id="connection-title">Connect this client</h2>
       <div class="connection-columns">
         {#key clientId}
-          <ClientSetup origin={proxyOrigin} disabled={busy || dialogOpen || revokeOpen} />
+          <ClientSetup origin={proxyOrigin} disabled={busy || dialogOpen || confirmOpen} />
         {/key}
         <div class="connection-instructions">
           <div class="connection-status" role="status">
@@ -419,7 +482,7 @@
                 <td><span class="key-status" class:revoked={key.revokedAt}>{key.revokedAt ? 'Revoked' : 'Active'}</span></td>
                 <td>
                   {#if !key.revokedAt}
-                    <Button class="secondary-button compact-button" aria-label={'Revoke key ' + key.prefix} aria-keyshortcuts="Delete" title="Revoke key (Delete)" disabled={!canManageClients()} focusableWhenDisabled onclick={(event) => confirmRevoke(key, event)} onkeydown={revokeShortcut}>Revoke</Button>
+                    <Button class="secondary-button compact-button" aria-label={'Revoke key ' + key.prefix} aria-keyshortcuts="Delete" title="Revoke key (Delete)" disabled={!canManageClients()} focusableWhenDisabled onclick={(event) => confirmRemoval(event, key)} onkeydown={(event) => clientShortcut(event, 'Delete')}>Revoke</Button>
                   {/if}
                 </td>
               </tr>
@@ -532,23 +595,27 @@
       <DialogTitle class="dialog-title">Generating proxy key</DialogTitle>
       <DialogDescription class="muted">The key will appear here when it’s ready.</DialogDescription>
     {:else}
-      <DialogClose class="icon-button dialog-x" aria-label="Close new client form" disabled={busy}><XIcon size={19} aria-hidden="true" /></DialogClose>
-      <DialogTitle class="dialog-title">New client</DialogTitle>
-      <DialogDescription class="muted">Create a client and its first proxy key.</DialogDescription>
-      <form class="dialog-form" onsubmit={createClient}>
+      <DialogClose class="icon-button dialog-x" aria-label={renaming ? 'Close rename client form' : 'Close new client form'} disabled={busy}><XIcon size={19} aria-hidden="true" /></DialogClose>
+      <DialogTitle class="dialog-title">{renaming ? 'Rename client' : 'New client'}</DialogTitle>
+      <DialogDescription class="muted">{renaming ? 'The new name will appear on existing usage records.' : 'Create a client and its first proxy key.'}</DialogDescription>
+      <form class="dialog-form" onsubmit={saveClientName}>
         <Field class="form-field" name="name" invalid={clientNameTooLong ? true : undefined}>
           <FieldLabel>Client name</FieldLabel>
-          <Input id="client-name" class="text-input" bind:value={draft} required placeholder="e.g. OpenCode" disabled={busy} onkeydown={guardEnter} />
+          <Input id="client-name" class="text-input" bind:value={() => formName, setFormName} required placeholder="e.g. OpenCode" disabled={busy && !renaming} readonly={busy && !!renaming} onkeydown={guardEnter} />
           {#if clientNameTooLong}<FieldError class="field-error" match>Shorten the name to 100 characters or fewer.</FieldError>{/if}
         </Field>
         {#if createError}<RecoveryNotice problem={createError.problem} />{/if}
+        {#if renameError && renaming}<RecoveryNotice problem={renameError} />{/if}
         <div class="dialog-actions">
           <DialogClose id="close-client-form" class="secondary-button" disabled={busy} aria-keyshortcuts="Escape"
             title={createError?.uncertain ? 'Back to clients (Escape)' : 'Cancel (Escape)'} onkeydown={guardEnter}>
             {createError?.uncertain ? 'Back to clients' : 'Cancel'}
           </DialogClose>
           {#if !createError?.uncertain}
-            <Button type="submit" class="primary-button" aria-keyshortcuts="Enter" disabled={!canSubmitClient()} onkeydown={guardEnter}>{busy ? 'Creating…' : 'Create client'} <kbd aria-hidden="true">↵</kbd></Button>
+            <Button type="submit" class="primary-button" aria-keyshortcuts="Enter" disabled={!canSubmitClient()} onkeydown={guardEnter}>
+              {#if renaming}{busy ? 'Saving…' : 'Save name'}{:else}{busy ? 'Creating…' : 'Create client'}{/if}
+              <kbd aria-hidden="true">↵</kbd>
+            </Button>
           {/if}
         </div>
       </form>
@@ -556,16 +623,24 @@
   </DialogContent>
 </Dialog>
 
-<AlertDialog bind:open={revokeOpen} onOpenChange={(open, details) => { if (!open && busy) details.cancel(); }}>
+<AlertDialog bind:open={confirmOpen} onOpenChange={(open, details) => { if (!open && busy) details.cancel(); }}>
   <AlertDialogBackdrop class="dialog-backdrop" />
-  <AlertDialogContent class="dialog-content" finalFocus={revokeDialogReturnFocus}>
-    <AlertDialogTitle class="dialog-title">Revoke this key?</AlertDialogTitle>
-    <AlertDialogDescription class="muted">New HTTP requests and WebSocket connections using <code>{revoking?.key.prefix}…</code> will be denied. The client’s usage history stays available.</AlertDialogDescription>
-    {#if revokeError}<RecoveryNotice problem={revokeError} />{/if}
+  <AlertDialogContent class="dialog-content" finalFocus={removalDialogReturnFocus}>
+    <AlertDialogTitle class="dialog-title">{removal?.key ? 'Revoke this key?' : 'Archive this client?'}</AlertDialogTitle>
+    <AlertDialogDescription class="muted">
+      {#if removal?.key}
+        New HTTP requests and WebSocket connections using <code>{removal.key.prefix}…</code> will be denied. The client’s usage history stays available.
+      {:else}
+        Archiving <strong class="archive-name">{removal?.name}</strong> revokes all its proxy keys and removes it from Clients. Its usage history stays available.
+      {/if}
+    </AlertDialogDescription>
+    {#if removalError}<RecoveryNotice problem={removalError} />{/if}
     <div class="dialog-actions">
       <AlertDialogClose class="secondary-button" disabled={busy} onkeydown={guardEnter}>Cancel</AlertDialogClose>
-      <Button class="danger-button" disabled={busy} title="Confirm revocation (Enter)" aria-keyshortcuts="Enter"
-        data-agent-confirm="Revokes this client key immediately." onclick={revoke} onkeydown={guardEnter}>{busy ? 'Revoking…' : 'Confirm revocation'}</Button>
+      <Button class="danger-button" disabled={busy} focusableWhenDisabled title={removal?.key ? 'Confirm revocation (Enter)' : 'Confirm archive (Enter)'} aria-keyshortcuts="Enter"
+        data-agent-confirm={removal?.key ? 'Revokes this client key immediately.' : 'Archives this client and revokes all its proxy keys.'} onclick={remove} onkeydown={guardEnter}>
+        {#if removal?.key}{busy ? 'Revoking…' : 'Confirm revocation'}{:else}{busy ? 'Archiving…' : 'Confirm archive'}{/if}
+      </Button>
     </div>
   </AlertDialogContent>
 </AlertDialog>
@@ -593,6 +668,7 @@
   .key-secret input { flex: 1; min-width: 0; margin: 0; padding: 0 9px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--bg); font: 13px var(--mono); }
   .key-secret :global(button) { flex: none; }
   .copy-status { min-height: 1.5em; margin: 4px 0; font-size: 12px; }
+  .archive-name { overflow-wrap: anywhere; }
   .dialog-actions.key-dialog-actions { flex-wrap: wrap; }
   @media (max-width: 760px) {
     .clients-table { table-layout: fixed; }

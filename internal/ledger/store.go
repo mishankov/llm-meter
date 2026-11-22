@@ -32,7 +32,8 @@ PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    archived_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS client_keys (
     id TEXT PRIMARY KEY,
@@ -110,6 +111,10 @@ func Open(path string, catalog pricing.Catalog) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize SQLite: %w", err)
 	}
+	if err := prepareClients(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize clients: %w", err)
+	}
 	store := &Store{db: db, pricing: catalog}
 	if err := preparePricing(db); err != nil {
 		_ = db.Close()
@@ -120,6 +125,16 @@ func Open(path string, catalog pricing.Catalog) (*Store, error) {
 		return nil, fmt.Errorf("load saved prices: %w", err)
 	}
 	return store, nil
+}
+
+func prepareClients(db *sql.DB) error {
+	var hasArchivedAt bool
+	err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pragma_table_info('clients') WHERE name = 'archived_at')`).Scan(&hasArchivedAt)
+	if err != nil || hasArchivedAt {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE clients ADD COLUMN archived_at INTEGER`)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -157,6 +172,7 @@ func (s *Store) Clients(ctx context.Context) ([]Client, error) {
             SELECT id FROM requests WHERE client_id = c.id ORDER BY time DESC, id DESC LIMIT 1
         )
         CROSS JOIN client_keys k ON k.client_id = c.id
+        WHERE c.archived_at IS NULL
         ORDER BY c.created_at DESC, c.id, k.created_at DESC, k.id`)
 	if err != nil {
 		return nil, err
@@ -212,6 +228,28 @@ func (s *Store) CreateClient(ctx context.Context, name string, now time.Time) (C
 	return client, key, nil
 }
 
+func (s *Store) RenameClient(ctx context.Context, clientID, name string) error {
+	return requireMatch(s.db.ExecContext(ctx, `UPDATE clients SET name = ?
+        WHERE id = ? AND archived_at IS NULL`, name, clientID))
+}
+
+func (s *Store) ArchiveClient(ctx context.Context, clientID string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := requireMatch(tx.ExecContext(ctx, `UPDATE clients SET archived_at = COALESCE(archived_at, ?)
+        WHERE id = ?`, now.UnixMilli(), clientID)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE client_keys SET revoked_at = ?
+        WHERE client_id = ? AND revoked_at IS NULL`, now.UnixMilli(), clientID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) CreateKey(ctx context.Context, clientID string, now time.Time) (Key, error) {
 	return createKey(ctx, s.db, clientID, now)
 }
@@ -225,20 +263,19 @@ func createKey(ctx context.Context, db interface {
 	digest := sha256.Sum256([]byte(token))
 	key := Key{ID: rand.Text(), Prefix: token[:13], CreatedAt: now, Token: token}
 	result, err := db.ExecContext(ctx, `INSERT INTO client_keys (id, client_id, digest, prefix, created_at)
-        SELECT ?, id, ?, ?, ? FROM clients WHERE id = ?`, key.ID, digest[:], key.Prefix, now.UnixMilli(), clientID)
-	if err != nil {
+        SELECT ?, id, ?, ?, ? FROM clients WHERE id = ? AND archived_at IS NULL`, key.ID, digest[:], key.Prefix, now.UnixMilli(), clientID)
+	if err := requireMatch(result, err); err != nil {
 		return Key{}, err
 	}
-	count, err := result.RowsAffected()
-	if err == nil && count == 0 {
-		err = sql.ErrNoRows
-	}
-	return key, err
+	return key, nil
 }
 
 func (s *Store) RevokeKey(ctx context.Context, clientID, keyID string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE client_keys SET revoked_at = COALESCE(revoked_at, ?)
-        WHERE id = ? AND client_id = ?`, now.UnixMilli(), keyID, clientID)
+	return requireMatch(s.db.ExecContext(ctx, `UPDATE client_keys SET revoked_at = COALESCE(revoked_at, ?)
+        WHERE id = ? AND client_id = ?`, now.UnixMilli(), keyID, clientID))
+}
+
+func requireMatch(result sql.Result, err error) error {
 	if err != nil {
 		return err
 	}

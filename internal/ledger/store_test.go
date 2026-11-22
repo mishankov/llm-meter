@@ -117,6 +117,63 @@ func TestClientsReportLatestRecordedRequest(t *testing.T) {
 	}
 }
 
+func TestArchivePreservesExistingClientUsage(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "test.sqlite")
+	store, err := Open(path, pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
+	at := time.Now().UTC()
+	client, key, err := store.CreateClient(ctx, "Relay", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := proxy.Usage{
+		At: at, Status: 200, Source: "codex", Model: "fixture", HasUsage: true, InputTokens: 12,
+		RateLimits: []proxy.RateLimit{{ID: "codex", Window: "primary", WindowMinutes: 300, UsedPercent: 12}},
+	}
+	if err := store.RecordRelay(ctx, client.ID, "first", usage); err != nil {
+		t.Fatal(err)
+	}
+	// Start the next instance with the client table from before archiving existed.
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE clients DROP COLUMN archived_at`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path, pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := store.AuthenticateKey(ctx, key.Token, at); err != nil || id != client.ID {
+		t.Fatalf("existing client key after migration: %q, %v", id, err)
+	}
+	if err := store.ArchiveClient(ctx, client.ID, at); err != nil {
+		t.Fatal(err)
+	}
+	// A report that authenticated before archiving can still commit or deduplicate.
+	for _, event := range []string{"first", "in-flight"} {
+		if err := store.RecordRelay(ctx, client.ID, event, usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Hour), End: at.Add(time.Hour), Interval: time.Hour, Client: client.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Summary.RequestCount != 2 || dashboard.Summary.InputTokens != 24 ||
+		len(dashboard.Allowance) != 1 || dashboard.Allowance[0].RemainingPercent != 88 {
+		t.Fatalf("incorrect usage after archive: %+v, %+v", dashboard.Summary, dashboard.Allowance)
+	}
+}
+
 func TestRequestOutcomeFiltersPagesWithoutChangingOverview(t *testing.T) {
 	ctx := t.Context()
 	store, err := Open(":memory:", pricing.Catalog{})

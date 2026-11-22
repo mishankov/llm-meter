@@ -197,6 +197,8 @@ Include a rate for every token category a request reports. Use `0` when a catego
 2. Create a client and copy its proxy key (`llmm_...`). The full key is displayed **only once**; the server stores only its SHA-256 digest and 13-character prefix.
 3. Keep multiple active keys for the same client during rotation. Revoke the old key once the replacement is in use.
 
+Open a client’s details in **Clients** to use **Rename** or **Archive**. Renaming changes its label throughout the dashboard, including past usage. Existing proxy keys continue to work. Archiving removes the client from **Clients** and revokes all its proxy keys. Past usage stays available in **Usage**. If you use the usage-only relay, let it upload its pending reports before archiving the client.
+
 **Key scope:**
 
 - One proxy key authenticates across **all four proxy routes** (`/v1`, `/codex`, `/opencode-go`, `/antigravity`) **and** the usage ingestion endpoint (`POST /api/usage/events`).
