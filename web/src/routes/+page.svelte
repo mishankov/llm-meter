@@ -26,6 +26,7 @@
   let screen = $state<Screen>('usage');
   let clientId = $state('');
   let clientDraft = $state('');
+  const renameDrafts = new SvelteMap<string, string>();
   let keyDialogOpen = $state(false);
   let token = $state('');
   let loggingIn = $state(false);
@@ -281,6 +282,7 @@
     }
     if (current.signal.aborted) return;
     clientDraft = '';
+    renameDrafts.clear();
     lockSession();
   }
 
@@ -428,7 +430,7 @@
         {#await import('../lib/ClientsView.svelte')}
           <p class="muted" role="status">Opening clients…</p>
         {:then { default: ClientsView }}
-          <ClientsView active={screen === 'clients'} {clientId} {loggingOut} bind:draft={clientDraft} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
+          <ClientsView active={screen === 'clients'} {clientId} {loggingOut} bind:draft={clientDraft} {renameDrafts} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />
         {:catch}
           {@render screenLoadError('clients')}
         {/await}

@@ -46,6 +46,8 @@ func New(store *ledger.Store, token string, secureCookie bool, log *slog.Logger)
 	}))
 	mux.HandleFunc("GET /api/clients", s.requireSession(s.listClients))
 	mux.HandleFunc("POST /api/clients", s.requireSession(s.createClient))
+	mux.HandleFunc("PATCH /api/clients/{client}", s.requireSession(s.renameClient))
+	mux.HandleFunc("DELETE /api/clients/{client}", s.requireSession(s.archiveClient))
 	mux.HandleFunc("POST /api/clients/{client}/keys", s.requireSession(s.createKey))
 	mux.HandleFunc("DELETE /api/clients/{client}/keys/{key}", s.requireSession(s.revokeKey))
 	mux.HandleFunc("GET /api/usage", s.requireSession(s.usage))
@@ -133,15 +135,8 @@ func (s *server) listClients(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) createClient(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Name string `json:"name"`
-	}
-	if !decode(w, r, &input) {
-		return
-	}
-	name := strings.TrimSpace(input.Name)
-	if name == "" || utf8.RuneCountInString(name) > 100 {
-		writeError(w, http.StatusBadRequest, "Enter a client name between 1 and 100 characters")
+	name, ok := decodeClientName(w, r)
+	if !ok {
 		return
 	}
 	client, key, err := s.store.CreateClient(r.Context(), name, s.now())
@@ -150,6 +145,51 @@ func (s *server) createClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"client": client, "key": key})
+}
+
+func (s *server) renameClient(w http.ResponseWriter, r *http.Request) {
+	name, ok := decodeClientName(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.RenameClient(r.Context(), r.PathValue("client"), name)
+	if ledger.NotFound(err) {
+		writeError(w, http.StatusNotFound, "Client not found")
+		return
+	}
+	if err != nil {
+		s.failed(w, "rename client", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) archiveClient(w http.ResponseWriter, r *http.Request) {
+	err := s.store.ArchiveClient(r.Context(), r.PathValue("client"), s.now())
+	if ledger.NotFound(err) {
+		writeError(w, http.StatusNotFound, "Client not found")
+		return
+	}
+	if err != nil {
+		s.failed(w, "archive client", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func decodeClientName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &input) {
+		return "", false
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" || utf8.RuneCountInString(name) > 100 {
+		writeError(w, http.StatusBadRequest, "Enter a client name between 1 and 100 characters")
+		return "", false
+	}
+	return name, true
 }
 
 func (s *server) createKey(w http.ResponseWriter, r *http.Request) {

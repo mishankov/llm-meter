@@ -105,6 +105,14 @@ async function mockAPI(page: Page, {
       clients.push(client);
       return route.fulfill({ json: { client, key: created } });
     }
+    if (url.pathname === '/api/clients/open-code') {
+      const index = clients.findIndex(({ id }) => id === 'open-code');
+      if (index < 0) return route.fulfill({ status: 404 });
+      if (method === 'PATCH') clients[index].name = http.postDataJSON().name;
+      else if (method === 'DELETE') clients.splice(index, 1);
+      else return route.fulfill({ status: 405 });
+      return route.fulfill({ status: 204 });
+    }
     if (url.pathname === '/api/clients/open-code/keys') {
       const { metadata, created } = createKey();
       clients[0].keys.push(metadata);
@@ -960,6 +968,64 @@ test('creates a client and rotates its key using the dashboard', async ({ contex
   await expect.poll(() => usageQueries.at(-1)?.get('client')).toBe('open-code');
 });
 
+test('renames and archives a client by keyboard, preserving the draft and guarding writes', async ({ page }) => {
+  const key: Key = { id: '1', prefix: 'fixture_key', createdAt: initialStart, lastUsedAt: null, revokedAt: null };
+  await mockAPI(page, { initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [key] }] });
+  let saves = 0;
+  await page.route('**/api/clients/open-code', (route) => {
+    if (route.request().method() === 'PATCH' && ++saves === 1) return route.fulfill({ status: 503 });
+    return route.fallback();
+  });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients' }).press('Enter');
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).press('Enter');
+  const rename = page.getByRole('button', { name: 'Rename' });
+  const archive = page.getByRole('button', { name: 'Archive', exact: true });
+  await expect(rename).toBeEnabled();
+  await expect(rename).toHaveAttribute('aria-keyshortcuts', 'F2');
+  await rename.focus();
+  await rename.dispatchEvent('keydown', { key: 'F2', code: 'F2', repeat: true });
+  await expect(page.getByRole('dialog')).toBeHidden();
+  await rename.press('F2');
+  const dialog = page.getByRole('dialog', { name: 'Rename client' });
+  const name = dialog.getByRole('textbox', { name: 'Client name' });
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue('OpenCode');
+  await name.fill(' ');
+  const save = dialog.getByRole('button', { name: 'Save name' });
+  await expect(save).toBeDisabled();
+  await name.fill('  Рабочая станция  ');
+  await name.press('Escape');
+  await expect(rename).toBeFocused();
+  await rename.press('F2');
+  await expect(name).toHaveValue('  Рабочая станция  ');
+  expect(await name.evaluate((input) => input.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', isComposing: true, bubbles: true, cancelable: true
+  })))).toBe(false);
+  await expect(dialog).toBeVisible();
+  expect(saves).toBe(0);
+  await name.press('Enter');
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await expect(name).toHaveValue('  Рабочая станция  ');
+  await name.press('Enter');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Рабочая станция' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Revoke key fixture_key' })).toBeVisible();
+
+  await expect(archive).toHaveAttribute('aria-keyshortcuts', 'Delete');
+  await archive.press('Delete');
+  const confirmation = page.getByRole('alertdialog', { name: 'Archive this client?' });
+  const cancel = confirmation.getByRole('button', { name: 'Cancel' });
+  await expect(cancel).toBeFocused();
+  await cancel.press('Enter');
+  await expect(archive).toBeFocused();
+  await archive.press('Delete');
+  await confirmation.getByRole('button', { name: 'Confirm archive' }).press('Enter');
+  await expect(page).toHaveURL(/#clients$/);
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeFocused();
+  await expect(page.getByText('No clients yet.', { exact: false })).toBeVisible();
+});
+
 test('the UI SDK exposes and unlocks the dashboard by accessible names', async ({ page }) => {
   await mockAPI(page);
   await page.goto('/');
@@ -983,6 +1049,31 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.ok, result.error?.message).toBe(true);
   await expect(page.getByRole('link', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+});
+
+test('the UI SDK exposes client management and gates archive confirmation', async ({ page }) => {
+  await mockAPI(page, { initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [] }] });
+  await unlock(page);
+  await page.getByRole('link', { name: 'Clients' }).click();
+  await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
+  await expect(page.getByRole('button', { name: 'Rename' })).toBeEnabled();
+  const result = await page.evaluate(async (path) => {
+    const { agent } = await import(path);
+    const rename = await agent.act({ steps: [
+      { ref: 'Rename', action: 'press' },
+      { ref: 'Client name', action: 'setValue', args: ['Workstation'] },
+      { ref: 'Save name', action: 'press' }
+    ] });
+    const archive = await agent.act({ steps: [
+      { ref: 'Archive', action: 'press' },
+      { ref: 'Confirm archive', action: 'press' }
+    ] });
+    return { rename, archive };
+  }, '/test/agent.ts');
+  expect(result.rename.ok, result.rename.error?.message).toBe(true);
+  expect(result.archive.ok).toBe(false);
+  expect(result.archive.error?.message).toContain('Needs a person');
+  await expect(page.getByRole('alertdialog', { name: 'Archive this client?' })).toContainText('Workstation');
 });
 
 test('bounds stalled unlock and lock requests and keeps keyboard recovery available', async ({ page }) => {
