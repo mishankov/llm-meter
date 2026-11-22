@@ -144,7 +144,7 @@ Use Go `1.25+` and Node.js `24`.
 | `DATA_DIR` | `./data` (`/data` in Docker) | No | Stores `llm-proxy.db` (SQLite in WAL mode). The server creates a missing directory with mode `0700`. |
 | `PRICING_FILE` | _(unset)_ | No | Path to a JSON file of per-model rate overrides in USD per million tokens. |
 | `OPENAI_UPSTREAM` | `https://api.openai.com/v1` | No | HTTP/HTTPS base URL for `/v1` requests. Must omit userinfo, query, and fragment. |
-| `CODEX_UPSTREAM` | `https://chatgpt.com/backend-api/codex` | No | HTTP/HTTPS base URL for `/backend-api/codex` requests. Must omit userinfo, query, and fragment. |
+| `CODEX_UPSTREAM` | `https://chatgpt.com/backend-api/codex` | No | HTTP/HTTPS base URL for `/codex` requests. Must omit userinfo, query, and fragment. |
 | `OPENCODE_GO_UPSTREAM` | `https://opencode.ai/inference/go` | No | HTTP/HTTPS base URL for `/opencode-go` requests. Must omit userinfo, query, and fragment. |
 | `ANTIGRAVITY_UPSTREAM` | `https://daily-cloudcode-pa.googleapis.com` | No | HTTP/HTTPS base URL for `/antigravity` requests. Must omit userinfo, query, and fragment. |
 | `DASHBOARD_DIR` | `web/build` | No | Path to static dashboard assets containing `index.html`. Used **only** when built without `-tags embedui`; ignored in Docker and `-tags embedui` binaries. |
@@ -201,7 +201,7 @@ Include a rate for every token category a request reports. Use `0` when a catego
 
 **Key scope:**
 
-- One proxy key authenticates across **all four proxy routes** (`/v1`, `/backend-api/codex`, `/opencode-go`, `/antigravity`) **and** the usage ingestion endpoint (`POST /api/usage/events`).
+- One proxy key authenticates across **all four proxy routes** (`/v1`, `/codex`, `/opencode-go`, `/antigravity`) **and** the usage ingestion endpoint (`POST /api/usage/events`).
 - All requests using keys belonging to the same dashboard client are grouped under that client, while retaining their individual provider labels (`openai`, `codex`, `opencode-go`, `antigravity`, etc.).
 - Create **one client** per workstation/relay if you want one combined client view, or **separate clients** (with separate keys, and separate relay instances if using the relay) if you want per-tool or per-provider attribution in **Clients** and **Usage**.
 - **Background responses (`background: true`):** Keep both the initial `POST /v1/responses` and follow-up `GET /v1/responses/<id>` polls on the **same dashboard client and measurement mode** (`proxy` vs `relay`) so the server can correlate completion usage onto the originating request.
@@ -219,7 +219,7 @@ Include a rate for every token category a request reports. Use `0` when a catego
 | Provider | Direct to LLM Meter server | Via local relay (`127.0.0.1:8765`) | Server path (`remote-proxy`) | Provider auth accepted by relay | Default upstream |
 | --- | --- | --- | --- | --- | --- |
 | **OpenAI-compatible** (`openai`) | `https://proxy.example.com/v1` | `http://127.0.0.1:8765/v1` | `/v1` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://api.openai.com/v1` |
-| **Signed-in Codex** (`codex`) | `https://proxy.example.com/backend-api/codex` | `http://127.0.0.1:8765/backend-api/codex` | `/backend-api/codex` | `Authorization` (ChatGPT sign-in) or API key headers above | `https://chatgpt.com/backend-api/codex` |
+| **Signed-in Codex** (`codex`) | `https://proxy.example.com/codex` | `http://127.0.0.1:8765/codex` | `/codex` | `Authorization` (ChatGPT sign-in) or API key headers above | `https://chatgpt.com/backend-api/codex` |
 | **OpenCode Go** (`opencode-go`) | `https://proxy.example.com/opencode-go` | `http://127.0.0.1:8765/opencode-go` | `/opencode-go` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://opencode.ai/inference/go` |
 | **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765` | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
 
@@ -371,10 +371,10 @@ Positional arguments are rejected; pass all options as flags.
 
 | Goal | Flags | Resulting routes & destination |
 | --- | --- | --- |
-| All 4 providers via LLM Meter (default) | `--target https://proxy.example.com` | All 4 routes → `https://proxy.example.com/{antigravity,v1,backend-api/codex,opencode-go}` |
+| All 4 providers via LLM Meter (default) | `--target https://proxy.example.com` | All 4 routes → `https://proxy.example.com/{antigravity,v1,codex,opencode-go}` |
 | All 4 providers, direct to standard upstreams | `--mode usage-only --target https://proxy.example.com` | All 4 routes → each provider's default upstream; usage → `https://proxy.example.com/api/usage/events` |
-| Single provider via LLM Meter | `--provider codex --target https://proxy.example.com` | `codex` only → `https://proxy.example.com/backend-api/codex` |
-| Legacy single-route `remote-proxy` command | `--target https://proxy.example.com/antigravity` (or `/v1`, `/backend-api/codex`, `/opencode-go`) | Automatically scoped to that single provider (same as setting `--provider`) |
+| Single provider via LLM Meter | `--provider codex --target https://proxy.example.com` | `codex` only → `https://proxy.example.com/codex` |
+| Single-route `remote-proxy` target | `--target https://proxy.example.com/antigravity` (or `/v1`, `/codex`, `/opencode-go`) | Automatically scoped to that single provider (same as setting `--provider`) |
 | Single provider, custom HTTPS upstream (`usage-only`) | `--mode usage-only --provider openai --target https://proxy.example.com --upstream https://openrouter.ai/api/v1` | `openai` only → `https://openrouter.ai/api/v1`; usage → `https://proxy.example.com/api/usage/events` |
 | Legacy Antigravity custom upstream (`usage-only`) | `--mode usage-only --target https://proxy.example.com --upstream https://upstream.example.com` | Scoped to `antigravity` → `https://upstream.example.com` |
 | **Rejected** combinations | `--mode remote-proxy --upstream ...`<br>`--mode usage-only --target https://proxy.example.com/v1`<br>`--provider codex --target https://proxy.example.com/v1`<br>`--mode usage-only --target https://proxy.example.com --upstream https://proxy.example.com/v1` | Startup fails with a validation error (see [Troubleshooting](#8-troubleshooting)). |
@@ -389,9 +389,9 @@ Positional arguments are rejected; pass all options as flags.
 | --- | --- | --- | --- |
 | **OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Proxy-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
 | **OpenCode (`openai`, API key)** | `settings.baseURL: "https://proxy.example.com/v1"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/v1"` (no `headers`) | Saved OpenAI API key |
-| **OpenCode (`openai`, ChatGPT sign-in)** | `settings.baseURL: "https://proxy.example.com/backend-api/codex"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/backend-api/codex"` (no `headers`) | Saved ChatGPT sign-in |
+| **OpenCode (`openai`, ChatGPT sign-in)** | `settings.baseURL: "https://proxy.example.com/codex"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/codex"` (no `headers`) | Saved ChatGPT sign-in |
 | **OpenCode Go (`opencode-go`)** | `settings.baseURL: "https://proxy.example.com/opencode-go"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/opencode-go"` (no `headers`) | Saved OpenCode Go credentials |
-| **Signed-in Codex** | `base_url = "https://proxy.example.com/backend-api/codex"` + `env_http_headers` | `base_url = "http://127.0.0.1:8765/backend-api/codex"` (omit `env_http_headers`) | Existing ChatGPT sign-in (`requires_openai_auth = true`) |
+| **Signed-in Codex** | `base_url = "https://proxy.example.com/codex"` + `env_http_headers` | `base_url = "http://127.0.0.1:8765/codex"` (omit `env_http_headers`) | Existing ChatGPT sign-in (`requires_openai_auth = true`) |
 | **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Proxy-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
 
 ### 5.1 OpenAI-compatible clients and OpenCode / OpenCode Go
@@ -411,7 +411,7 @@ For direct requests, set `LLM_PROXY_KEY` in OpenCode's environment.
 {
   "providers": {
     "openai": {
-      // Use /v1 with an OpenAI API key, or /backend-api/codex with ChatGPT sign-in.
+      // Use /v1 with an OpenAI API key, or /codex with ChatGPT sign-in.
       "settings": { "baseURL": "https://proxy.example.com/v1" },
       "headers": { "X-LLM-Proxy-Key": "{env:LLM_PROXY_KEY}" }
     },
@@ -429,7 +429,7 @@ For requests through the local relay, set the local base URLs. The relay supplie
 {
   "providers": {
     "openai": {
-      // Use /v1 with an OpenAI API key, or /backend-api/codex with ChatGPT sign-in.
+      // Use /v1 with an OpenAI API key, or /codex with ChatGPT sign-in.
       "settings": { "baseURL": "http://127.0.0.1:8765/v1" }
     },
     "opencode-go": {
@@ -452,7 +452,7 @@ model_provider = "metered-codex"
 
 [model_providers.metered-codex]
 name = "OpenAI"
-base_url = "https://proxy.example.com/backend-api/codex"
+base_url = "https://proxy.example.com/codex"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = true
@@ -466,7 +466,7 @@ model_provider = "metered-codex"
 
 [model_providers.metered-codex]
 name = "OpenAI"
-base_url = "http://127.0.0.1:8765/backend-api/codex"
+base_url = "http://127.0.0.1:8765/codex"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = true
@@ -562,7 +562,7 @@ git remote set-url origin https://github.com/mishankov/llm-meter.git
 
 LLM Meter continues publishing the `ghcr.io/mishankov/llm-proxy` and `ghcr.io/mishankov/llm-proxy-relay` image names. To switch to `llm-meter` and `llm-meter-relay`, update the image reference in your existing deployment. Keep the Compose service name, the server's `/data` mount, and the relay's key and outbox mounts. The examples for new installs use `~/.config/llm-meter/relay`; existing relays can keep their current host paths.
 
-Clients continue using their existing URLs, credentials, and `X-LLM-Proxy-Key` header.
+For Codex or OpenCode with ChatGPT sign-in, change the client base URL from `/backend-api/codex` to `/codex`. If your remote-proxy relay specifies the old route in `--target`, update that path as well. Drain any pending usage-only reports before upgrading the server and relay. Clients continue using their existing credentials and `X-LLM-Proxy-Key` header.
 
 ### Upgrading the LLM Meter server
 
@@ -609,7 +609,7 @@ A result of `0` means the queue is empty. If it stays above zero, check the rela
 
 - **`remote-proxy` → `usage-only`:**
   1. Confirm the server has been upgraded to support `POST /api/usage/events`.
-  2. Ensure `--target` is the server origin only (no `/v1`, `/antigravity`, `/backend-api/codex`, or `/opencode-go` path).
+  2. Ensure `--target` is the server origin only (no `/v1`, `/antigravity`, `/codex`, or `/opencode-go` path).
   3. Ensure `--data-dir` points to a persistent directory.
   4. Add `--mode=usage-only` and restart the relay.
 - **`usage-only` → `remote-proxy`:**

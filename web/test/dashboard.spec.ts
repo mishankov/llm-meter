@@ -21,7 +21,7 @@ const response: Usage = {
   },
   requests: [
     { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
-    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/backend-api/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
+    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
     { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', provider: 'antigravity', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/antigravity/v1internal:streamGenerateContent', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
   ],
@@ -504,7 +504,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/v1$/);
   await clientType.press('Enter');
   await page.getByRole('option', { name: 'Codex (ChatGPT sign-in)' }).click();
-  const baseURL = new URL('/backend-api/codex', page.url()).href;
+  const baseURL = new URL('/codex', page.url()).href;
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });

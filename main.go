@@ -130,7 +130,7 @@ func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *
 		}
 	}
 	proxyAccess := withProxyKey(store, proxy.New(api, codex, opencodeGo, record), log)
-	for _, prefix := range []string{"/v1", "/backend-api/codex", proxy.OpenCodeGoPrefix} {
+	for _, prefix := range []string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix} {
 		mux.Handle(prefix, proxyAccess)
 		mux.Handle(prefix+"/", proxyAccess)
 	}

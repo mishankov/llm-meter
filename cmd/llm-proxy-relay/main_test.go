@@ -205,15 +205,16 @@ func TestRelayDestinations(t *testing.T) {
 		name, mode, provider, target, upstream, wantRoute string
 	}{
 		{"legacy Antigravity command", remoteProxyMode, "", "https://proxy.test/antigravity", "", "https://proxy.test/antigravity"},
-		{"legacy Codex route", remoteProxyMode, "", "https://proxy.test/backend-api/codex/", "", "https://proxy.test/backend-api/codex"},
-		{"remote with explicit provider", remoteProxyMode, "codex", "https://proxy.test", "", "https://proxy.test/backend-api/codex"},
-		{"remote with explicit matching route", remoteProxyMode, "codex", "https://proxy.test/backend-api/codex", "", "https://proxy.test/backend-api/codex"},
+		{"Codex route", remoteProxyMode, "", "https://proxy.test/codex/", "", "https://proxy.test/codex"},
+		{"removed Codex route", remoteProxyMode, "", "https://proxy.test/backend-api/codex", "", ""},
+		{"remote with explicit provider", remoteProxyMode, "codex", "https://proxy.test", "", "https://proxy.test/codex"},
+		{"remote with explicit matching route", remoteProxyMode, "codex", "https://proxy.test/codex", "", "https://proxy.test/codex"},
 		{"usage with explicit provider", usageOnlyMode, "codex", "https://proxy.test/", "", providers["codex"].defaultUpstream},
 		{"custom upstream", usageOnlyMode, "codex", "https://proxy.test", "https://upstream.test/codex", "https://upstream.test/codex"},
 		{"remote with mismatched route", remoteProxyMode, "codex", "https://proxy.test/v1", "", ""},
 		{"remote with override", remoteProxyMode, "codex", "https://proxy.test", "https://upstream.test/codex", ""},
 		{"legacy Antigravity upstream override", usageOnlyMode, "", "https://proxy.test", "https://upstream.test", "https://upstream.test"},
-		{"usage with proxy route", usageOnlyMode, "codex", "https://proxy.test/backend-api/codex", "", ""},
+		{"usage with proxy route", usageOnlyMode, "codex", "https://proxy.test/codex", "", ""},
 		{"usage with same upstream host", usageOnlyMode, "codex", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
 		{"usage with a default upstream on the proxy host", usageOnlyMode, "", "https://chatgpt.com", "", ""},
 		{"unknown mode", "auto", "codex", "https://proxy.test", "", ""},
@@ -260,7 +261,7 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 	}{
 		{"antigravity", "antigravity", "Authorization", "/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
 		{"openai", "openai", "Authorization", "/v1/responses", "/v1/responses", "/direct/responses", usage},
-		{"codex", "codex", "Authorization", "/backend-api/codex/responses", "/backend-api/codex/responses", "/direct/responses", usage},
+		{"codex", "codex", "Authorization", "/codex/responses", "/codex/responses", "/direct/responses", usage},
 		{"opencode-go", "opencode-go", "Authorization", "/opencode-go/responses", "/opencode-go/responses", "/direct/openai/v1/responses", usage},
 		{"opencode-go Gemini", "opencode-go", "X-Goog-Api-Key", "/opencode-go/models/fixture:generateContent", "/opencode-go/models/fixture:generateContent", "/direct/google/v1beta/models/fixture:generateContent", usage},
 	} {
@@ -330,7 +331,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 	}{
 		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
 		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
-		{"codex", http.MethodGet, "/backend-api/codex/models", "/backend-api/codex/models", "/backend-api/codex/models"},
+		{"codex", http.MethodGet, "/codex/models", "/codex/models", "/backend-api/codex/models"},
 		{"opencode-go", http.MethodGet, "/opencode-go/models", "/opencode-go/models", "/inference/go/v1/models"},
 	}
 	for _, mode := range []string{remoteProxyMode, usageOnlyMode} {
@@ -403,7 +404,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 			} else if len(observed) != 0 {
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
-			for _, path := range []string{"/api/usage/events", "/v1/../opencode-go/models", "/v1suffix"} {
+			for _, path := range []string{"/api/usage/events", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
 				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 				r.Header.Set("Authorization", authorization)
 				response := httptest.NewRecorder()

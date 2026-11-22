@@ -204,7 +204,8 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 		t.Fatal("client listing must expose only the key prefix and omit unavailable request metadata")
 	}
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
-	request("POST", "/backend-api/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
+	request("GET", "/backend-api/codex/models", "", created.Key.Token, http.StatusNotFound)
+	request("POST", "/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
 
 	var dashboard ledger.Dashboard
 	body = request("GET", "/api/usage?client="+created.Client.ID, "", "", 200)

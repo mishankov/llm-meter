@@ -157,7 +157,7 @@ func (limit RateLimit) valid() bool {
 
 func validProvider(endpoint, provider string) bool {
 	switch {
-	case strings.HasPrefix(endpoint, "/backend-api/codex"):
+	case strings.HasPrefix(endpoint, proxy.CodexPrefix):
 		return provider == "codex"
 	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
 		return provider == "opencode-go"
@@ -178,7 +178,7 @@ func serviceTier(value string) string {
 
 func (e Event) Usage() proxy.Usage {
 	source := "api"
-	if strings.HasPrefix(e.Endpoint, "/backend-api/codex") {
+	if strings.HasPrefix(e.Endpoint, proxy.CodexPrefix) {
 		source = "codex"
 	}
 	usage := proxy.Usage{
@@ -207,7 +207,7 @@ func knownValue(value string, values []string) string {
 // data. Only known operation names and fixed route templates cross the wire.
 func endpointName(path string) string {
 	path, _, _ = strings.Cut(path, "?")
-	for _, prefix := range [...]string{"/v1", "/backend-api/codex", proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {
+	for _, prefix := range [...]string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {
 		suffix, ok := strings.CutPrefix(path, prefix)
 		if !ok || (suffix != "" && !strings.HasPrefix(suffix, "/")) {
 			continue

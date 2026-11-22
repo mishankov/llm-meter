@@ -15,8 +15,7 @@ import (
 const keyHeader = "X-LLM-Proxy-Key"
 
 const (
-	apiPrefix   = "/v1"
-	codexPrefix = "/backend-api/codex"
+	apiPrefix = "/v1"
 )
 
 type connectionProvider struct {
@@ -26,7 +25,7 @@ type connectionProvider struct {
 var providers = map[string]connectionProvider{
 	"antigravity": {proxy.AntigravityPrefix, "https://daily-cloudcode-pa.googleapis.com"},
 	"openai":      {apiPrefix, "https://api.openai.com/v1"},
-	"codex":       {codexPrefix, "https://chatgpt.com/backend-api/codex"},
+	"codex":       {proxy.CodexPrefix, "https://chatgpt.com/backend-api/codex"},
 	"opencode-go": {proxy.OpenCodeGoPrefix, "https://opencode.ai/inference/go"},
 }
 
@@ -140,7 +139,7 @@ func directProxy(provider connectionProvider, upstream url.URL, record func(prox
 			}
 			forward.ServeHTTP(w, request)
 		})
-	case codexPrefix:
+	case proxy.CodexPrefix:
 		return proxy.New(nil, &upstream, nil, record)
 	case proxy.OpenCodeGoPrefix:
 		return proxy.New(nil, nil, &upstream, record)

@@ -3,6 +3,8 @@
 .env*
 data
 llm-proxy
+llm-meter
+llm-meter-relay
 web/node_modules
 web/build
 web/.svelte-kit

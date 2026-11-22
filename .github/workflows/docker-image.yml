@@ -55,7 +55,7 @@ jobs:
               --mount "type=bind,src=$scratch/data,dst=/data" \
               llm-meter-relay:smoke --mode "$mode" --target https://llm-meter.invalid \
               --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data)
-            for path in /v1internal:loadCodeAssist /v1/models /backend-api/codex/models /opencode-go/models; do
+            for path in /v1internal:loadCodeAssist /v1/models /codex/models /opencode-go/models; do
               if ! status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
                   --request POST --max-time 2 --retry 5 --retry-all-errors --retry-delay 1 \
                   "http://127.0.0.1:8765$path") || [[ "$status" != 401 ]]; then

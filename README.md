@@ -39,7 +39,7 @@ For OpenCode, add these fields to the OpenAI provider in `opencode.jsonc` and se
 }
 ```
 
-If OpenCode's `openai` provider is signed in with ChatGPT, use `https://proxy.example.com/backend-api/codex` as its base URL. For the separate `opencode-go` provider, set its `settings.baseURL` to `https://proxy.example.com/opencode-go` and add the same proxy header. OpenCode keeps using its saved upstream credentials for each provider.
+If OpenCode's `openai` provider is signed in with ChatGPT, use `https://proxy.example.com/codex` as its base URL. For the separate `opencode-go` provider, set its `settings.baseURL` to `https://proxy.example.com/opencode-go` and add the same proxy header. OpenCode keeps using its saved upstream credentials for each provider.
 
 ### Signed-in Codex
 
@@ -50,7 +50,7 @@ model_provider = "metered-codex"
 
 [model_providers.metered-codex]
 name = "OpenAI"
-base_url = "https://proxy.example.com/backend-api/codex"
+base_url = "https://proxy.example.com/codex"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = true
@@ -97,7 +97,7 @@ Usage-only mode sends the model, token counts, outcome, and any reported costs o
 | --- | --- | --- |
 | `antigravity` | `http://127.0.0.1:8765` | `/antigravity` |
 | `openai` (OpenAI-compatible) | `http://127.0.0.1:8765/v1` | `/v1` |
-| `codex` | `http://127.0.0.1:8765/backend-api/codex` | `/backend-api/codex` |
+| `codex` | `http://127.0.0.1:8765/codex` | `/codex` |
 | `opencode-go` | `http://127.0.0.1:8765/opencode-go` | `/opencode-go` |
 
 Point each client at its local base URL and use its usual provider authentication. The relay picks the provider from the request path and uses the provider's standard upstream in `usage-only` mode.

@@ -10,8 +10,8 @@
 
   const profiles = [
     { value: 'openai', label: 'OpenAI-compatible client', path: '/v1' },
-    { value: 'codex', label: 'Codex (ChatGPT sign-in)', path: '/backend-api/codex' },
-    { value: 'opencode-chatgpt', label: 'OpenCode (ChatGPT sign-in)', path: '/backend-api/codex' },
+    { value: 'codex', label: 'Codex (ChatGPT sign-in)', path: '/codex' },
+    { value: 'opencode-chatgpt', label: 'OpenCode (ChatGPT sign-in)', path: '/codex' },
     { value: 'opencode-go', label: 'OpenCode Go', path: '/opencode-go' }
   ];
   let profile = $state(profiles[0]);

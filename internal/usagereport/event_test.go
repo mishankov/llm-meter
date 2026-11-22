@@ -17,13 +17,15 @@ func TestReportKeepsUsageWhenQuotaMetadataIsInvalid(t *testing.T) {
 	for i := range 34 {
 		limits = append(limits, proxy.RateLimit{ID: fmt.Sprintf("limit-%d", i), Window: "primary", WindowMinutes: 300, UsedPercent: 20})
 	}
-	usage := proxy.Usage{At: time.Now(), Provider: "codex", Endpoint: "/backend-api/codex/responses", Method: http.MethodPost,
+	usage := proxy.Usage{At: time.Now(), Provider: "codex", Endpoint: "/codex/responses", Method: http.MethodPost,
 		Status: http.StatusOK, HasUsage: true, InputTokens: 21, OutputTokens: 5, RateLimits: limits}
 	event, err := NewEvent(usage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(event.RateLimits) != 32 || event.RateLimits[0].ID != "limit-0" || event.Usage().InputTokens != 21 {
+	reported := event.Usage()
+	if len(event.RateLimits) != 32 || event.RateLimits[0].ID != "limit-0" || reported.InputTokens != 21 ||
+		reported.Source != "codex" || reported.Endpoint != "/codex/responses" {
 		t.Fatal("the report lost usage or included invalid quota data")
 	}
 	event.Provider = "openai"
