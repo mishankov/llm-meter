@@ -15,10 +15,8 @@
   import meterMark from '../../lib/assets/llm-meter.png';
   import { guardEnter } from '../../lib/format';
   import RecoveryNotice from '../../lib/RecoveryNotice.svelte';
+  import { defaultFilters, overviewParams, parseUsageFilters, requestParams, usageURL, type UsageFilters } from '../../lib/usage-filters';
 
-  const defaultFilters = { range: '24h', source: '', client: '', model: '', bucket: '', outcome: '' as RequestOutcome };
-  type Filters = typeof defaultFilters;
-  type Filter = keyof Filters;
   type Screen = 'usage' | 'clients';
   type UsageScope = 'overview' | 'requests';
   type ScopedProblem = { query: string; problem: DashboardProblem };
@@ -40,9 +38,10 @@
   let online = $state(true);
 
   let filters = $state({ ...defaultFilters });
+  let pendingUsage: UsageFilters | null = null;
   let chartMetric = $state<'cost' | 'tokens'>('tokens');
   let cursors = $state<string[]>(['']);
-  let resetSnapshot = $state<{ filters: Filters; cursors: string[] } | null>(null);
+  let resetSnapshot = $state<{ filters: UsageFilters; cursors: string[] } | null>(null);
   let requestFocus = $state(false);
   let overviewResult = $state<{ data: Usage; query: string; updatedAt: string } | null>(null);
   let requestResult = $state<{ data: RequestPage; query: string } | null>(null);
@@ -52,13 +51,9 @@
   let request: AbortController | null = null;
   let refreshOnReturn = true;
   const usageHref = $derived(usageURL(filters));
-  const overviewQuery = $derived(new URLSearchParams(
-    Object.entries(filters).filter(([name, value]) => name !== 'bucket' && name !== 'outcome' && value)
-  ).toString());
+  const overviewQuery = $derived(overviewParams(filters).toString());
   const usageQuery = $derived.by(() => {
-    const query = new URLSearchParams(overviewQuery);
-    if (filters.bucket) query.set('bucket', filters.bucket);
-    if (filters.outcome) query.set('outcome', filters.outcome);
+    const query = requestParams(filters);
     const cursor = cursors[cursors.length - 1];
     if (cursor) query.set('cursor', cursor);
     return query.toString();
@@ -107,39 +102,14 @@
     untrack(() => void fetchUsage(overview, query, refreshOnReturn));
   });
 
-  function usageURL(values: Filters) {
-    const query = new URLSearchParams();
-    for (const name of Object.keys(defaultFilters) as Filter[]) {
-      if (values[name] !== defaultFilters[name]) query.set(name, values[name]);
-    }
-    return query.size ? '/usage?' + query.toString() : '/usage';
-  }
-
   function readFilters(params: URLSearchParams) {
-    const range = params.get('range');
-    const source = params.get('source');
-    const outcome = params.get('outcome');
-    const next: Filters = {
-      range: range === '7d' || range === '30d' ? range : defaultFilters.range,
-      source: source === 'api' || source === 'codex' ? source : defaultFilters.source,
-      client: filterText(params.get('client'), 100),
-      model: filterText(params.get('model'), 500),
-      bucket: params.get('bucket') ?? '',
-      outcome: outcome === 'succeeded' || outcome === 'failed' ? outcome : ''
-    };
-    const interval = (next.range === '24h' ? 1 : 24) * 3_600_000;
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(next.bucket) ||
-      Date.parse(next.bucket) % interval !== 0) next.bucket = '';
+    const next = parseUsageFilters(params);
     const nextURL = usageURL(next);
     if (nextURL !== usageHref) {
       if (nextURL !== '/usage') resetSnapshot = null;
       filters = next;
       cursors = [''];
     }
-  }
-
-  function filterText(value: string | null, maxBytes: number) {
-    return value && new TextEncoder().encode(value).length <= maxBytes ? value : '';
   }
 
   function legacyURL(url: URL) {
@@ -163,20 +133,30 @@
   }
 
   function viewUsage(id: string, outcome: RequestOutcome = '') {
-    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id, source: '', model: '', bucket: '', outcome }, outcome !== '');
+    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id ? [id] : [], source: [], model: [], bucket: '', outcome }, outcome !== '');
   }
 
-  function filtersChanged(name: Filter, value: string) {
-    if (filters[name] === value) return;
-    void navigateUsage({ ...filters, [name]: value, bucket: name === 'bucket' ? value : name === 'outcome' ? filters.bucket : '' });
+  function filtersChanged<Name extends keyof UsageFilters>(name: Name, value: UsageFilters[Name]) {
+    const active = pendingUsage ?? filters;
+    if (active[name] === value) return;
+    const next = { ...active, [name]: value };
+    if (name !== 'bucket' && name !== 'outcome') next.bucket = '';
+    void navigateUsage(next);
   }
 
-  async function navigateUsage(values: Filters, focusRequests = false, cursorHistory = ['']) {
+  async function navigateUsage(values: UsageFilters, focusRequests = false, cursorHistory = ['']) {
     const route = usageURL(values);
-    if (page.url.pathname + page.url.search !== route) await goto(route, { reset: false });
-    if (page.url.pathname + page.url.search === route) {
-      cursors = cursorHistory;
-      requestFocus = focusRequests;
+    const sameURL = page.url.pathname + page.url.search === route;
+    const supersedesPending = pendingUsage !== null;
+    pendingUsage = values;
+    try {
+      if (!sameURL || supersedesPending) await goto(route, { reset: false, replace: sameURL });
+      if (pendingUsage === values && page.url.pathname + page.url.search === route) {
+        cursors = cursorHistory;
+        requestFocus = focusRequests;
+      }
+    } finally {
+      if (pendingUsage === values) pendingUsage = null;
     }
   }
 

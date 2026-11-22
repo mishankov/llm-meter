@@ -93,7 +93,7 @@ func TestUsageReportsShareLedgerAndRetrySafely(t *testing.T) {
 	}
 	post(usagereport.Path, strings.Replace(completionPayload, "/responses/:id", "/responses/background-id", 1), firstKey.Token, http.StatusBadRequest)
 	post(usagereport.Path, completionPayload, secondKey.Token, http.StatusNoContent)
-	filter := ledger.Filter{Start: now.Add(-time.Minute), End: now.Add(time.Minute), Interval: time.Minute, Client: first.ID}
+	filter := ledger.Filter{Start: now.Add(-time.Minute), End: now.Add(time.Minute), Interval: time.Minute, Clients: []string{first.ID}}
 	firstUsage, err := store.Dashboard(t.Context(), filter)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestUsageReportsShareLedgerAndRetrySafely(t *testing.T) {
 	if counts["proxy"] != 1 || counts["relay"] != 3 {
 		t.Errorf("incorrect measurement sources: %v", counts)
 	}
-	filter.Client = second.ID
+	filter.Clients = []string{second.ID}
 	secondUsage, err := store.Dashboard(t.Context(), filter)
 	if err != nil {
 		t.Fatal(err)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -14,12 +16,12 @@ import (
 )
 
 type Filter struct {
-	Start, End            time.Time
-	Interval              time.Duration
-	Source, Client, Model string
-	Outcome               string
-	Bucket                *time.Time
-	Cursor                int64
+	Start, End               time.Time
+	Interval                 time.Duration
+	Sources, Clients, Models []string
+	Outcome                  string
+	Bucket                   *time.Time
+	Cursor                   int64
 }
 
 const (
@@ -149,19 +151,18 @@ func (s *Store) Requests(ctx context.Context, filter Filter) (RequestPage, error
 func (f Filter) conditions() (string, []any) {
 	where := ` WHERE r.time >= ? AND r.time <= ?`
 	args := []any{f.Start.UnixMilli(), f.End.UnixMilli()}
-	if f.Source != "" {
-		where += ` AND r.source = ?`
-		args = append(args, f.Source)
+	where, args = withSelection(where, args, "r.source", f.Sources)
+	where, args = withSelection(where, args, "r.client_id", f.Clients)
+	return withSelection(where, args, "r.model", f.Models)
+}
+
+func withSelection(where string, args []any, column string, values []string) (string, []any) {
+	if len(values) == 0 {
+		return where, args
 	}
-	if f.Client != "" {
-		where += ` AND r.client_id = ?`
-		args = append(args, f.Client)
-	}
-	if f.Model != "" {
-		where += ` AND r.model = ?`
-		args = append(args, f.Model)
-	}
-	return where, args
+	// Binding each list as one value keeps the query within SQLite's parameter limit.
+	encoded, _ := json.Marshal(values)
+	return where + ` AND ` + column + ` IN (SELECT value FROM json_each(?))`, append(args, string(encoded))
 }
 
 func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, args []any, result *Dashboard) error {
@@ -386,15 +387,12 @@ func (s *Store) collectFilters(ctx context.Context, filter Filter, result *Dashb
 
 func (s *Store) allowance(ctx context.Context, filter Filter) ([]Allowance, error) {
 	items := []Allowance{}
-	if filter.Source == "api" {
+	if len(filter.Sources) > 0 && !slices.Contains(filter.Sources, "codex") {
 		return items, nil
 	}
 	where := ` WHERE a.observed_at >= ? AND (a.resets_at IS NULL OR a.resets_at > ?)`
 	args := []any{filter.End.Add(-24 * time.Hour).UnixMilli(), filter.End.UnixMilli()}
-	if filter.Client != "" {
-		where += ` AND a.client_id = ?`
-		args = append(args, filter.Client)
-	}
+	where, args = withSelection(where, args, "a.client_id", filter.Clients)
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.name, a.limit_id, a.window, a.window_minutes, a.remaining_percent,
         a.resets_at FROM allowances a JOIN clients c ON c.id = a.client_id`+where+` ORDER BY c.name, a.limit_id, a.window`, args...)
 	if err != nil {

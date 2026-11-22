@@ -198,7 +198,7 @@ func TestArchivePreservesExistingClientUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Hour), End: at.Add(time.Hour), Interval: time.Hour, Client: client.ID})
+	dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Hour), End: at.Add(time.Hour), Interval: time.Hour, Clients: []string{client.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestRequestOutcomeFiltersPagesWithoutChangingOverview(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	filter := Filter{Start: at.Add(-time.Hour), End: at.Add(time.Minute), Interval: time.Hour, Client: client.ID}
+	filter := Filter{Start: at.Add(-time.Hour), End: at.Add(time.Minute), Interval: time.Hour, Clients: []string{client.ID}}
 	baseline, err := store.Dashboard(ctx, filter)
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +351,10 @@ func TestDashboardGroupedBuckets(t *testing.T) {
 			t.Fatalf("client totals for %s = %d tokens and %g, aggregate = %+v", bucket.Start, tokens, cost, bucket)
 		}
 	}
-	query.Start, query.Interval, query.Source, query.Client, query.Model = start.Add(time.Minute), 24*time.Hour, "codex", second.ID, "a"
+	query.Start, query.Interval = start.Add(time.Minute), 24*time.Hour
+	query.Sources = []string{"codex"}
+	query.Clients = []string{second.ID}
+	query.Models = []string{"a"}
 	filtered, err := store.Dashboard(ctx, query)
 	if err != nil {
 		t.Fatal(err)

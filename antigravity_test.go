@@ -135,7 +135,7 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	}
 	post("/v1internal:loadCodeAssist", key.Token, http.StatusUnauthorized).Body.Close()
 	app.Close()
-	dashboard, err := store.Dashboard(t.Context(), ledger.Filter{Start: now.Add(-time.Minute), End: now.Add(time.Minute), Interval: time.Minute, Client: client.ID})
+	dashboard, err := store.Dashboard(t.Context(), ledger.Filter{Start: now.Add(-time.Minute), End: now.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}

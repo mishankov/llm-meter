@@ -3,17 +3,18 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '@ui-sdk/svelte/button';
   import { SegmentedControl, SegmentedControlItem } from '@ui-sdk/svelte/segmented-control';
-  import type { DashboardProblem, RequestOutcome, Usage, UsageGroup } from './api';
+  import type { DashboardProblem, Usage, UsageGroup } from './api';
   import { compactCount, count, formatDateTime, formatTime, formatTimeWindow, formatUTCDay, guardEnter, money, partialPricing, tokens, unpricedBucket } from './format';
   import Filter from './Filter.svelte';
   import RequestList from './RequestList.svelte';
   import RecoveryNotice from './RecoveryNotice.svelte';
   import TimeChart, { groupedSeries, tokenSeries, type ChartSeries } from './TimeChart.svelte';
+  import type { UsageFilterChange, UsageFilters } from './usage-filters';
 
   type ChartMetric = 'cost' | 'tokens';
   type Dimension = 'models' | 'clients';
 
-  interface Props {
+  interface Props extends UsageFilters {
     data: Usage | null;
     filterOptions?: Usage['filters'];
     requestPage: Pick<Usage, 'requests' | 'nextCursor'> | null;
@@ -22,16 +23,10 @@
     overviewError: DashboardProblem | null;
     requestError: DashboardProblem | null;
     updatedAt: string;
-    range: string;
-    source: string;
-    client: string;
-    model: string;
-    bucket: string;
-    outcome: RequestOutcome;
     canPrevious: boolean;
     pageNumber: number;
     chartMetric?: ChartMetric;
-    update: (name: 'range' | 'source' | 'client' | 'model' | 'bucket' | 'outcome', value: string) => void;
+    update: UsageFilterChange;
     clearFilters: () => void;
     canUndoReset: boolean;
     undoFilters: () => void;
@@ -51,7 +46,7 @@
   let dimension = $state<Dimension>('models');
   let resetStatus = $state('');
   let chartTitle = $derived(chartMetric === 'tokens' ? 'Tokens over time' : 'Usage value over time');
-  let scoped = $derived(Boolean(source || client || model || bucket || outcome));
+  let scoped = $derived(Boolean(source.length || client.length || model.length || bucket || outcome));
   let loading = $derived(loadingScope !== null);
   let firstRun = $derived(data?.summary.requestCount === 0 && !data.filters.clients.length);
   let showFilters = $derived(!firstRun || scoped || range !== '24h' || canUndoReset);
@@ -61,22 +56,27 @@
   let chartSeries = $derived(getSeries(chartMetric === 'tokens' ? 'tokens' : 'estimatedCost'));
 
   const sourceOptions = [
-    { value: '', label: 'All sources' },
     { value: 'api', label: 'API providers' },
     { value: 'codex', label: 'Codex subscription' }
   ];
 
-  let clientOptions = $derived(withSelectedOption('All clients', (filterOptions?.clients ?? []).map(({ id, name }) => ({ value: id, label: name })), client, 'Unknown client'));
-  let modelOptions = $derived(withSelectedOption('All models', (filterOptions?.models ?? []).map((name) => ({ value: name, label: name })), model, model));
-  let windowOptions = $derived(withSelectedOption('All time windows', (data?.buckets ?? []).map(({ start }) => ({
-    value: start, label: range === '24h' ? formatDateTime(start) : formatUTCDay(start) + ' UTC'
-  })), bucket, bucketLabel));
+  let clientOptions = $derived(withSelectedOptions(
+    (filterOptions?.clients ?? []).map(({ id, name }) => ({ value: id, label: name })), client, (id) => `Unknown client (${id})`
+  ));
+  let modelOptions = $derived(withSelectedOptions(
+    (filterOptions?.models ?? []).map((name) => ({ value: name, label: name })), model
+  ));
+  let windowOptions = $derived([
+    { value: '', label: 'All time windows' },
+    ...withSelectedOptions((data?.buckets ?? []).map(({ start }) => ({
+      value: start, label: range === '24h' ? formatDateTime(start) : formatUTCDay(start) + ' UTC'
+    })), bucket ? [bucket] : [], () => bucketLabel)
+  ]);
 
-  function withSelectedOption(all: string, options: { value: string; label: string }[], selected: string, fallback: string) {
-    if (selected && !options.some(({ value }) => selected === value)) {
-      options.unshift({ value: selected, label: fallback });
-    }
-    return [{ value: '', label: all }, ...options];
+  function withSelectedOptions(options: { value: string; label: string }[], selected: string[], fallback?: (value: string) => string) {
+    const available = new Set(options.map(({ value }) => value));
+    const missing = selected.filter((value) => !available.has(value)).map((value) => ({ value, label: fallback?.(value) ?? value }));
+    return [...missing, ...options];
   }
 
   function getSeries(metric: 'estimatedCost' | 'tokens') {
@@ -92,7 +92,8 @@
     const control = document.getElementById(filter + '-filter')?.querySelector<HTMLElement>('[role="combobox"]');
     control?.focus({ preventScroll: true });
     control?.scrollIntoView({ block: 'center' });
-    update(filter, (filter === 'model' ? model : client) === group.id ? '' : group.id);
+    const selected = filter === 'model' ? model : client;
+    update(filter, selected.includes(group.id) ? selected.filter((id) => id !== group.id) : [...selected, group.id]);
   }
 
   function viewRequests() {
@@ -156,7 +157,7 @@
                 {#if group.id}
                   <Button class="breakdown-filter" title={group.name + ' (Enter or Space)'}
                     aria-label={'Filter by ' + filter + ' ' + group.name} aria-keyshortcuts="Enter Space"
-                    aria-pressed={(filter === 'model' ? model : client) === group.id}
+                    aria-pressed={(filter === 'model' ? model : client).includes(group.id)}
                     onclick={() => selectGroup(group, filter)} onkeydown={guardEnter}>{group.name}</Button>
                 {:else}
                   {group.name}
@@ -200,10 +201,10 @@
   </div>
 {/snippet}
 
-{#snippet overviewFilter(id: string, label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void)}
+{#snippet overviewFilter(id: string, label: string, value: string[], options: { value: string; label: string }[], onChange: (value: string[]) => void)}
   <div class="filter-field" {id}>
     <span aria-hidden="true">{label}</span>
-    <Filter {label} {value} items={options} {onChange} />
+    <Filter multiple placeholder={'All ' + label.toLowerCase() + 's'} {label} {value} items={options} {onChange} />
   </div>
 {/snippet}
 
@@ -332,7 +333,10 @@
       {/key}
     </section>
     <div class="chart-actions">
-      {@render overviewFilter('request-window-filter', 'Request time window', bucket, windowOptions, (value) => update('bucket', value))}
+      <div class="filter-field" id="request-window-filter">
+        <span aria-hidden="true">Request time window</span>
+        <Filter label="Request time window" value={bucket} items={windowOptions} onChange={(value: string) => update('bucket', value)} />
+      </div>
       {@render chartSelection()}
     </div>
   </div>
