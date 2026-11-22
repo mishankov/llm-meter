@@ -20,7 +20,7 @@ Open `http://localhost:8080` and enter the value of `DASHBOARD_TOKEN`. Go serves
 
 CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-meter`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-meter` in the `docker run` command.
 
-Upgrading from LLM Proxy? CI also publishes the existing `llm-proxy` and `llm-proxy-relay` image names. Keep your current client settings, keys, and data mounts when changing the image tag. [Upgrade instructions](docs/configuration.md#upgrading-from-llm-proxy)
+Upgrading from LLM Proxy? CI also publishes the existing `llm-proxy` and `llm-proxy-relay` image names. Keep your keys and data mounts when changing the image tag. For Codex and OpenCode with ChatGPT sign-in, change any client base URL or relay `--target` that ends in `/backend-api/codex` to end in `/codex`. [Upgrade instructions](docs/configuration.md#upgrading-from-llm-proxy)
 
 ## Connect a client
 
