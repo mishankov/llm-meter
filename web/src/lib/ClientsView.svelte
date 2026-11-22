@@ -637,7 +637,7 @@
     {#if removalError}<RecoveryNotice problem={removalError} />{/if}
     <div class="dialog-actions">
       <AlertDialogClose class="secondary-button" disabled={busy} onkeydown={guardEnter}>Cancel</AlertDialogClose>
-      <Button class="danger-button" disabled={busy} title={removal?.key ? 'Confirm revocation (Enter)' : 'Confirm archive (Enter)'} aria-keyshortcuts="Enter"
+      <Button class="danger-button" disabled={busy} focusableWhenDisabled title={removal?.key ? 'Confirm revocation (Enter)' : 'Confirm archive (Enter)'} aria-keyshortcuts="Enter"
         data-agent-confirm={removal?.key ? 'Revokes this client key immediately.' : 'Archives this client and revokes all its proxy keys.'} onclick={remove} onkeydown={guardEnter}>
         {#if removal?.key}{busy ? 'Revoking…' : 'Confirm revocation'}{:else}{busy ? 'Archiving…' : 'Confirm archive'}{/if}
       </Button>

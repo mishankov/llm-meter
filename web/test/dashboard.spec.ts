@@ -972,8 +972,10 @@ test('renames and archives a client by keyboard, preserving the draft and guardi
   const key: Key = { id: '1', prefix: 'fixture_key', createdAt: initialStart, lastUsedAt: null, revokedAt: null };
   await mockAPI(page, { initialClients: [{ id: 'open-code', name: 'OpenCode', createdAt: initialStart, keys: [key] }] });
   let saves = 0;
+  let archives = 0;
   await page.route('**/api/clients/open-code', (route) => {
     if (route.request().method() === 'PATCH' && ++saves === 1) return route.fulfill({ status: 503 });
+    if (route.request().method() === 'DELETE' && ++archives === 1) return route.fulfill({ status: 503 });
     return route.fallback();
   });
   await unlock(page);
@@ -1020,7 +1022,11 @@ test('renames and archives a client by keyboard, preserving the draft and guardi
   await cancel.press('Enter');
   await expect(archive).toBeFocused();
   await archive.press('Delete');
-  await confirmation.getByRole('button', { name: 'Confirm archive' }).press('Enter');
+  const confirmArchive = confirmation.getByRole('button', { name: 'Confirm archive' });
+  await confirmArchive.press('Enter');
+  await expect(confirmation.getByRole('alert')).toContainText('Could not archive the client');
+  await expect(confirmArchive).toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#clients$/);
   await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeFocused();
   await expect(page.getByText('No clients yet.', { exact: false })).toBeVisible();
