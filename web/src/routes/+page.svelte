@@ -9,6 +9,7 @@
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
   import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../lib/api';
+  import favicon from '../lib/assets/favicon.png?no-inline';
   import meterMark from '../lib/assets/llm-meter.png';
   import { guardEnter } from '../lib/format';
   import RecoveryNotice from '../lib/RecoveryNotice.svelte';
@@ -333,7 +334,7 @@
 <svelte:head>
   <title>LLM Meter</title>
   <meta name="description" content="Dashboard for LLM usage, costs, and provider allowances." />
-  <link rel="icon" type="image/png" href={meterMark} />
+  <link rel="icon" type="image/png" sizes="32x32" href={favicon} />
 </svelte:head>
 
 <svelte:window onhashchange={readHash} ononline={connectionChanged} onoffline={connectionChanged} />
