@@ -62,7 +62,8 @@ func preparePricing(db *sql.DB) error {
         source TEXT PRIMARY KEY, url TEXT NOT NULL, fetched_at INTEGER NOT NULL, snapshot BLOB NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS requests_metered_response ON requests(source, response_id)
-        WHERE (usage_available = 1 OR cost IS NOT NULL) AND response_id <> '';`); err != nil {
+        WHERE (usage_available = 1 OR cost IS NOT NULL) AND response_id <> '';
+    UPDATE requests SET provider = 'google' WHERE provider = 'antigravity';`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -158,6 +159,10 @@ func (s *Store) priceFor(usage proxy.Usage, at time.Time) (*pricing.Rates, *floa
 	}
 	s.pricingMu.RLock()
 	defer s.pricingMu.RUnlock()
+	if proxy.IsAntigravityEndpoint(usage.Endpoint) {
+		return s.pricing.ForAntigravityUsage(usage.Model, usage.ServiceTier, at,
+			usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens)
+	}
 	rates, cost, origin := s.pricing.ForProviderUsage(usage.Provider, usage.Model, usage.ServiceTier, at,
 		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens)
 	if usage.Provider == "openai" && rates != nil && origin != "override" {

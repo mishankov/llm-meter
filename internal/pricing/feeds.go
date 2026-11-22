@@ -234,6 +234,11 @@ type modelsDevRates struct {
 	AudioOutput *float64 `json:"output_audio"`
 }
 
+func differingAudioRate(text, audio *float64, tiered bool) bool {
+	// With context tiers, the base audio rate can differ from an effective text rate.
+	return audio != nil && (tiered || text == nil || *audio != *text)
+}
+
 type modelsDevPrice struct {
 	modelsDevRates
 	Tiers []struct {
@@ -261,9 +266,11 @@ func parseModelsDev(data []byte) (map[string]map[string]modelPrice, error) {
 			if model.Cost == nil || !model.Cost.partialRates.valid() {
 				continue
 			}
+			tiered := len(model.Cost.Tiers) != 0
 			price := modelPrice{
-				Rates:              model.Cost.partialRates,
-				SeparateAudioRates: model.Cost.AudioInput != nil || model.Cost.AudioOutput != nil,
+				Rates: model.Cost.partialRates,
+				SeparateAudioRates: differingAudioRate(model.Cost.Input, model.Cost.AudioInput, tiered) ||
+					differingAudioRate(model.Cost.Output, model.Cost.AudioOutput, tiered),
 			}
 			for _, tier := range model.Cost.Tiers {
 				price.SeparateAudioRates = price.SeparateAudioRates || tier.AudioInput != nil || tier.AudioOutput != nil

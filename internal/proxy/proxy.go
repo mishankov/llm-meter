@@ -16,13 +16,12 @@ import (
 )
 
 const (
-	apiPrefix           = "/v1"
-	CodexPrefix         = "/codex"
-	codexUpstreamPath   = "/backend-api/codex"
-	accessKey           = "X-LLM-Meter-Key"
-	OpenCodeGoPrefix    = "/opencode-go"
-	AntigravityPrefix   = "/antigravity"
-	antigravityProvider = "antigravity"
+	apiPrefix         = "/v1"
+	CodexPrefix       = "/codex"
+	codexUpstreamPath = "/backend-api/codex"
+	accessKey         = "X-LLM-Meter-Key"
+	OpenCodeGoPrefix  = "/opencode-go"
+	AntigravityPrefix = "/antigravity"
 )
 
 // Usage is the metadata available for an upstream request or WebSocket response.
@@ -116,7 +115,7 @@ func NewAntigravity(baseURL url.URL, record func(Usage)) http.Handler {
 	}
 	route := newUpstream(AntigravityPrefix, "api", baseURL, func(usage Usage) {
 		if usage.ResponseID != "" {
-			usage.ResponseID = antigravityProvider + ":" + usage.ResponseID
+			usage.ResponseID = "antigravity:" + usage.ResponseID
 		}
 		record(usage)
 	})
@@ -182,13 +181,13 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 		Endpoint: r.URL.Path,
 		Method:   r.Method,
 	}
-	if u.provider != antigravityProvider && websocket.IsWebSocketUpgrade(r) {
+	if u.prefix != AntigravityPrefix && websocket.IsWebSocketUpgrade(r) {
 		u.serveWebSocket(w, r, usage)
 		return
 	}
 
 	captureUsage := r.Method == http.MethodPost
-	if u.provider == antigravityProvider {
+	if u.prefix == AntigravityPrefix {
 		captureUsage = captureUsage && (suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent")
 	} else {
 		responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
@@ -216,7 +215,7 @@ func upstreamProvider(prefix string, baseURL url.URL) string {
 	case OpenCodeGoPrefix:
 		return "opencode-go"
 	case AntigravityPrefix:
-		return antigravityProvider
+		return "google"
 	}
 	switch strings.ToLower(baseURL.Hostname()) {
 	case "api.openai.com":
@@ -319,6 +318,11 @@ func openCodeGoProtocol(suffix string) string {
 	default:
 		return "/openai/v1"
 	}
+}
+
+// IsAntigravityEndpoint reports whether a recorded endpoint uses Cloud Code Assist.
+func IsAntigravityEndpoint(path string) bool {
+	return hasPrefix(path, AntigravityPrefix)
 }
 
 func hasPrefix(path, prefix string) bool {

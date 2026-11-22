@@ -54,3 +54,29 @@ func TestUnknownTierDoesNotUseStandardPricing(t *testing.T) {
 		t.Fatal("relay pricing did not preserve the distinction between unknown and standard tiers")
 	}
 }
+
+func TestAntigravityRelayReportsGoogleUsage(t *testing.T) {
+	usage := proxy.Usage{At: time.Now(), Provider: "google", Endpoint: "/antigravity/v1internal:generateContent",
+		Method: http.MethodPost, Status: http.StatusOK, Model: "gemini-3.5-flash-lite", HasUsage: true, InputTokens: 40}
+	event, err := NewEvent(usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Provider != "antigravity" {
+		t.Fatalf("older servers require the original wire value, got %q", event.Provider)
+	}
+	for _, provider := range []string{"antigravity", "google"} {
+		event.Provider = provider
+		payload, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := Decode(bytes.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reported := decoded.Usage(); reported.Provider != "google" || reported.Endpoint != usage.Endpoint {
+			t.Fatalf("incorrect attribution for %q: %+v", provider, reported)
+		}
+	}
+}
