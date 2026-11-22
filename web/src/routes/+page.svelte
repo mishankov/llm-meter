@@ -3,13 +3,13 @@
   import { SvelteMap } from 'svelte/reactivity';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-  import Layers3Icon from '@lucide/svelte/icons/layers-3';
   import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
   import LogOutIcon from '@lucide/svelte/icons/log-out';
   import { Button } from '@ui-sdk/svelte/button';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
   import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../lib/api';
+  import meterMark from '../lib/assets/llm-meter.png';
   import { guardEnter } from '../lib/format';
   import RecoveryNotice from '../lib/RecoveryNotice.svelte';
 
@@ -333,6 +333,7 @@
 <svelte:head>
   <title>LLM Meter</title>
   <meta name="description" content="Dashboard for LLM usage, costs, and provider allowances." />
+  <link rel="icon" type="image/png" href={meterMark} />
 </svelte:head>
 
 <svelte:window onhashchange={readHash} ononline={connectionChanged} onoffline={connectionChanged} />
@@ -340,7 +341,7 @@
 {#if session !== 'ready'}
   <main class="auth-page">
     <section class="auth-form-shell" aria-labelledby="auth-title">
-      <div class="app-mark auth-mark"><Layers3Icon size={24} aria-hidden="true" /></div>
+      <img class="app-mark auth-mark" src={meterMark} alt="" />
       <h1 id="auth-title">LLM Meter</h1>
       {#if session === 'locked'}
         {#if expiredSession}<p class="muted" role="status">Your session expired. Unlock the dashboard to continue where you left off.</p>{/if}
@@ -369,7 +370,7 @@
     <a class="skip-link" href="#content" onclick={skipToContent} onkeydown={guardEnter}>Skip to main content</a>
     <aside class="sidebar">
       <a class="brand" href={usageHref}>
-        <span class="app-mark"><Layers3Icon size={19} aria-hidden="true" /></span>
+        <img class="app-mark" src={meterMark} alt="" />
         <span>LLM Meter</span>
       </a>
       <nav aria-label="Main navigation">

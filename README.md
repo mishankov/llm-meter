@@ -1,3 +1,5 @@
+<img src="web/src/lib/assets/llm-meter.png" alt="" width="56" height="56">
+
 # LLM Meter
 
 LLM Meter is a self-hosted dashboard for tracking tokens, costs, and provider allowances across OpenAI-compatible clients, Codex, OpenCode Go, and Antigravity. Meter requests on the server, or run a local relay that sends usage metadata while model traffic goes directly to the provider.

@@ -22,8 +22,6 @@
   --segment-selected: #323b4b;
   --selected-border: #7f8fa8;
   --option-highlighted: #333d4e;
-  --mark: #c0cdff;
-  --mark-text: #202748;
   --action: #aebfff;
   --action-border: #b8c8ff;
   --action-text: #172249;
@@ -80,7 +78,7 @@ kbd { padding: 0 4px; border: 1px solid currentColor; border-radius: 4px; font: 
 .shell { display: grid; grid-template-columns: 176px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { position: sticky; inset-block-start: 0; display: flex; flex-direction: column; height: 100dvh; padding: 22px 12px 13px; background: var(--sidebar); border-inline-end: 1px solid var(--line); }
 .brand { display: flex; gap: 9px; padding-inline: 7px; align-items: center; text-decoration: none; font-weight: 640; line-height: 1; letter-spacing: -.02em; font-size: 15px; white-space: nowrap; }
-.app-mark { display: grid; place-items: center; flex: none; inline-size: 29px; block-size: 29px; background: var(--mark); color: var(--mark-text); border-radius: 8px; }
+.app-mark { display: block; flex: none; inline-size: 29px; block-size: 29px; }
 .sidebar nav { display: grid; gap: 3px; margin-block-start: 38px; }
 .sidebar nav a, .lock-button { display: flex; align-items: center; gap: 9px; min-height: 39px; border-radius: 7px; padding: 0 9px; font-size: 13px; color: var(--muted); background: transparent; border: 1px solid transparent; text-decoration: none; }
 .sidebar nav a:hover, .lock-button:hover { background: var(--hover); color: var(--text); }
@@ -146,7 +144,7 @@ table :is(th,td).numeric:not(:first-child) { text-align: end; }
 .field-error { margin: 0; color: var(--danger); font-size: 12px; }
 .auth-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: radial-gradient(65% 55% at 50% 14%, var(--auth-glow) 0%, var(--bg) 90%); }
 .auth-form-shell { display: grid; gap: 14px; width: min(100%, 340px); }
-.auth-mark { inline-size: 41px; block-size: 41px; border-radius: 10px; }
+.auth-mark { inline-size: 41px; block-size: 41px; }
 .auth-form-shell h1 { font-size: 27px; }
 .auth-form-shell p { margin: 0; }
 .auth-form { margin-block-start: 6px; }
