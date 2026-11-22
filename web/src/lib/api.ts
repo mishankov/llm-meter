@@ -127,7 +127,7 @@ export function dashboardProblem(cause: unknown, title: string): DashboardProble
   if (cause.status === 403) return { title: 'Access was denied', detail: 'Open the dashboard at the proxy’s own address and unlock it with its dashboard token.' };
   if (cause.status === 404) return { title, detail: 'Refresh the dashboard to check whether this item or view is still available.' };
   if (cause.status === 429) return { title: 'The dashboard received too many requests', detail: 'Wait briefly, then retry.' };
-  return { title, detail: 'Check the LLM Proxy service and its logs. If you use an ingress, verify it can reach the proxy, then retry.' };
+  return { title, detail: 'Check the LLM Meter service and its logs. If you use an ingress, verify it can reach the server, then retry.' };
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {

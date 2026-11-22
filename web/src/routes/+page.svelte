@@ -331,8 +331,8 @@
 {/snippet}
 
 <svelte:head>
-  <title>LLM Proxy</title>
-  <meta name="description" content="OpenAI API and Codex usage dashboard." />
+  <title>LLM Meter</title>
+  <meta name="description" content="Dashboard for LLM usage, costs, and provider allowances." />
 </svelte:head>
 
 <svelte:window onhashchange={readHash} ononline={connectionChanged} onoffline={connectionChanged} />
@@ -341,7 +341,7 @@
   <main class="auth-page">
     <section class="auth-form-shell" aria-labelledby="auth-title">
       <div class="app-mark auth-mark"><Layers3Icon size={24} aria-hidden="true" /></div>
-      <h1 id="auth-title">LLM Proxy</h1>
+      <h1 id="auth-title">LLM Meter</h1>
       {#if session === 'locked'}
         {#if expiredSession}<p class="muted" role="status">Your session expired. Unlock the dashboard to continue where you left off.</p>{/if}
         <form class="dialog-form auth-form" onsubmit={login}>
@@ -370,7 +370,7 @@
     <aside class="sidebar">
       <a class="brand" href={usageHref}>
         <span class="app-mark"><Layers3Icon size={19} aria-hidden="true" /></span>
-        <span>LLM Proxy</span>
+        <span>LLM Meter</span>
       </a>
       <nav aria-label="Main navigation">
         <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined}>

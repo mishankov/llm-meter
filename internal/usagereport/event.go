@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 const (

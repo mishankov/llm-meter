@@ -8,7 +8,7 @@ web
 
 ## Users
 
-LLM Proxy is for developers and homelab operators who run a proxy for their AI clients. They use the dashboard to see which clients and models are consuming tokens, estimate the cost, and manage access keys.
+LLM Meter is for developers and homelab operators who track usage across their AI clients. They use the dashboard to see which clients and models are consuming tokens, estimate the cost, and manage access keys.
 
 ## Product Purpose
 
@@ -16,12 +16,12 @@ Give operators one place to inspect model usage across connected clients. An ope
 
 ## Positioning
 
-LLM Proxy meters requests through a self-hosted reverse proxy across OpenAI-compatible clients, signed-in Codex sessions, and OpenCode Go. It uses a proxy key to attribute usage to a named client while retaining the client's existing upstream authentication.
+LLM Meter tracks tokens, costs, and provider allowances across OpenAI-compatible clients, signed-in Codex and Antigravity sessions, and OpenCode Go. The server can meter traffic as a reverse proxy, or a local relay can send usage metadata while passing model traffic directly to the provider. A client key attributes usage while the client keeps its existing upstream credentials.
 
 ## Operating Context
 
-- Run the proxy locally or on a self-hosted server. The Go service serves the dashboard and proxy from the same deployment and stores usage in SQLite.
-- Unlock the browser dashboard with the dashboard token. In **Clients**, create a client and copy its proxy key. Configure the client with the matching proxy base URL and send the key in `X-LLM-Proxy-Key` alongside its existing upstream credentials.
+- Run the server locally or on a self-hosted host. The Go service serves the dashboard, proxy routes, and usage ingestion API and stores usage in SQLite.
+- Unlock the dashboard with the dashboard token. Create a client in **Clients** and copy its proxy key. Send the key in `X-LLM-Proxy-Key` for direct connections or supply it to the relay in a private key file.
 - Use **Usage** to inspect estimates and token counts over time, compare clients and models, and drill into recent requests. Use **Clients** to issue and revoke keys.
 
 ## Capabilities and Constraints

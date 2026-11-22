@@ -34,8 +34,8 @@ jobs:
         if: matrix.image_suffix == '-relay'
         shell: bash
         run: |
-          docker buildx build --file Dockerfile.relay --platform linux/amd64 --load --tag llm-proxy-relay:smoke .
-          test "$(docker run --rm --entrypoint id llm-proxy-relay:smoke -u)" = 10001
+          docker buildx build --file Dockerfile.relay --platform linux/amd64 --load --tag llm-meter-relay:smoke .
+          test "$(docker run --rm --entrypoint id llm-meter-relay:smoke -u)" = 10001
           scratch=$(mktemp -d)
           container=
           cleanup() {
@@ -53,7 +53,7 @@ jobs:
             container=$(docker run --detach --user "$(id -u):$(id -g)" --publish 127.0.0.1:8765:8765 \
               --mount "type=bind,src=$scratch/key,dst=/run/secrets/proxy-key,readonly" \
               --mount "type=bind,src=$scratch/data,dst=/data" \
-              llm-proxy-relay:smoke --mode "$mode" --target https://llm-proxy.invalid \
+              llm-meter-relay:smoke --mode "$mode" --target https://llm-meter.invalid \
               --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data)
             for path in /v1internal:loadCodeAssist /v1/models /backend-api/codex/models /opencode-go/models; do
               if ! status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
@@ -78,7 +78,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository }}${{ matrix.image_suffix }}
+          images: |
+            ghcr.io/${{ github.repository_owner }}/llm-meter${{ matrix.image_suffix }}
+            ghcr.io/${{ github.repository_owner }}/llm-proxy${{ matrix.image_suffix }}
           flavor: latest=false
           tags: |
             type=ref,event=branch,prefix=branch-

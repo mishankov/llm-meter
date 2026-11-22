@@ -34,7 +34,7 @@ jobs:
       - run: npm test --prefix web
       - run: go test -race ./...
       - run: go vet ./...
-      - run: CGO_ENABLED=0 go build -tags embedui -o /tmp/llm-proxy .
+      - run: CGO_ENABLED=0 go build -tags embedui -o /tmp/llm-meter .
 
   verify-image:
     name: Verify Docker image

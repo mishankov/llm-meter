@@ -388,7 +388,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
   await expect(page.getByRole('alert')).toContainText('Could not load usage');
-  await expect(page.getByRole('alert')).toContainText('Check the LLM Proxy service and its logs.');
+  await expect(page.getByRole('alert')).toContainText('Check the LLM Meter service and its logs.');
   await expect(apiRequest).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Usage value over time' })).not.toBeVisible();
 
@@ -961,6 +961,8 @@ test('creates a client and rotates its key using the dashboard', async ({ contex
 test('the UI SDK exposes and unlocks the dashboard by accessible names', async ({ page }) => {
   await mockAPI(page);
   await page.goto('/');
+  await expect(page).toHaveTitle('LLM Meter');
+  await expect(page.getByRole('heading', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByLabel('Access token')).toBeVisible();
   const result = await page.evaluate(async (path) => {
     const { agent } = await import(path);
@@ -977,6 +979,7 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.labels).toContain('Access token');
   expect(result.labels).toContain('Unlock dashboard');
   expect(result.ok, result.error?.message).toBe(true);
+  await expect(page.getByRole('link', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
 });
 

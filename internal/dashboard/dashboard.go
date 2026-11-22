@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/ledger"
 )
 
 const (

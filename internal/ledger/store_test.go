@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/pricing"
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {

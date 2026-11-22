@@ -1,4 +1,4 @@
-module github.com/mishankov/llm-proxy
+module github.com/mishankov/llm-meter
 
 go 1.25.0
 

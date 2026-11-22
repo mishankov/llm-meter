@@ -23,9 +23,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/mishankov/llm-proxy/internal/proxy"
-	"github.com/mishankov/llm-proxy/internal/relayoutbox"
-	"github.com/mishankov/llm-proxy/internal/usagereport"
+	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/relayoutbox"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 const (
@@ -43,7 +43,7 @@ func main() {
 	flag.StringVar(&opts.bind, "bind", "", "container socket address, e.g. 0.0.0.0:8765 with a loopback-only Docker port mapping")
 	flag.StringVar(&opts.mode, "mode", remoteProxyMode, "remote-proxy or usage-only")
 	flag.StringVar(&opts.provider, "provider", "", "restrict to antigravity, openai, codex, or opencode-go (default all)")
-	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Proxy origin (remote-proxy also accepts a legacy provider route)")
+	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Meter origin (remote-proxy also accepts a legacy provider route)")
 	flag.StringVar(&opts.upstream, "upstream", "", "direct HTTPS provider base URL override in usage-only mode (scopes to Antigravity if --provider is omitted)")
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to the private proxy key file")
 	flag.StringVar(&opts.dataDir, "data-dir", "./data/relay", "persistent directory for this connection's pending usage in usage-only mode")
@@ -182,7 +182,7 @@ func configureRelay(opts options) (relayConfig, error) {
 	}
 	origin, err := parseHTTPS(opts.target)
 	if err != nil {
-		return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy URL without user info, query, or fragment")
+		return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter URL without user info, query, or fragment")
 	}
 	path := strings.TrimSuffix(origin.EscapedPath(), "/")
 	var config relayConfig
@@ -202,12 +202,12 @@ func configureRelay(opts options) (relayConfig, error) {
 				}
 			}
 			if selected == "" || providers[selected].prefix != path {
-				return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy origin or a matching provider route")
+				return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter origin or a matching provider route")
 			}
 		}
 	case usageOnlyMode:
 		if path != "" {
-			return relayConfig{}, errors.New("--target must be an HTTPS LLM Proxy origin in usage-only mode")
+			return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter origin in usage-only mode")
 		}
 		if opts.upstream != "" && selected == "" {
 			// Before multi-provider routing, an upstream override defaulted to Antigravity.
@@ -248,7 +248,7 @@ func directTarget(origin *url.URL, provider connectionProvider, raw string) (*ur
 		return nil, errors.New("--upstream must be an HTTPS provider base URL without user info, query, or fragment")
 	}
 	if strings.EqualFold(strings.TrimSuffix(origin.Hostname(), "."), strings.TrimSuffix(upstream.Hostname(), ".")) {
-		return nil, errors.New("the provider and LLM Proxy must use different hosts in usage-only mode")
+		return nil, errors.New("the provider and LLM Meter must use different hosts in usage-only mode")
 	}
 	return upstream, nil
 }

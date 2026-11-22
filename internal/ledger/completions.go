@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 func (s *Store) completeRequest(ctx context.Context, tx *sql.Tx, usage *proxy.Usage, measurementSource string) (bool, error) {

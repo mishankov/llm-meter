@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 const keyHeader = "X-LLM-Proxy-Key"
@@ -119,7 +119,7 @@ func remoteProxy(provider connectionProvider, target *url.URL, key string, trans
 		},
 		ErrorLog: log.New(io.Discard, "", 0),
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
-			http.Error(w, "LLM Proxy unavailable", http.StatusBadGateway)
+			http.Error(w, "LLM Meter unavailable", http.StatusBadGateway)
 		},
 	}
 	if provider.prefix == proxy.AntigravityPrefix {

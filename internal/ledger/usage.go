@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/pricing"
 )
 
 type Filter struct {

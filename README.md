@@ -1,20 +1,24 @@
-# LLM Proxy
+# LLM Meter
 
-A Go reverse proxy with a SvelteKit dashboard for tracking token usage across OpenAI-compatible clients and signed-in Codex and Antigravity sessions. The dashboard shows estimated usage in USD and attributes requests to clients by their proxy keys.
+LLM Meter is a self-hosted dashboard for tracking tokens, costs, and provider allowances across OpenAI-compatible clients, Codex, OpenCode Go, and Antigravity. Meter requests on the server, or run a local relay that sends usage metadata while model traffic goes directly to the provider.
+
+See the [Configuration Guide](docs/configuration.md) for choosing between direct, `remote-proxy`, and `usage-only` relay setups, complete server/relay options, client examples, durable queue behavior, upgrades, and troubleshooting.
 
 ## Run with Docker
 
 ```sh
 export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
-docker build -t llm-proxy .
+docker build -t llm-meter .
 docker run --rm -p 127.0.0.1:8080:8080 \
   -e DASHBOARD_TOKEN -e COOKIE_SECURE=false \
-  -v llm-proxy-data:/data llm-proxy
+  -v llm-proxy-data:/data llm-meter
 ```
 
 Open `http://localhost:8080` and enter the value of `DASHBOARD_TOKEN`. Go serves the bundled dashboard and proxy from the same container. The volume holds the SQLite database and survives container replacement. Keep the dashboard token stable across restarts. For remote access on a VPS or Pi, serve the container through an HTTPS ingress and leave `COOKIE_SECURE` at its default `true`.
 
-CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-proxy`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-proxy` in the `docker run` command.
+CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-meter`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-meter` in the `docker run` command.
+
+Upgrading from LLM Proxy? CI also publishes the existing `llm-proxy` and `llm-proxy-relay` image names. Keep your current client settings, keys, and data mounts when changing the image tag. [Upgrade instructions](docs/configuration.md#upgrading-from-llm-proxy)
 
 ## Connect a client
 
@@ -80,12 +84,12 @@ The dashboard shows requests as **Antigravity** under the client that owns the p
 
 ## Run the relay
 
-One relay serves all four supported providers on the same port. Set `--target` to the LLM Proxy server's HTTPS origin, such as `https://proxy.example.com`, and supply one proxy key file. Requests across all four routes are attributed to the dashboard client that owns the key and retain their individual provider labels.
+One relay serves all four supported providers on the same port. Set `--target` to the LLM Meter server's HTTPS origin, such as `https://proxy.example.com`, and supply one proxy key file. Requests across all four routes are attributed to the dashboard client that owns the key and retain their individual provider labels.
 
 | Mode | Model traffic | Usage |
 | --- | --- | --- |
 | `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
-| `remote-proxy` (default) | Relay connects to LLM Proxy, which forwards to the provider | Server meters the proxied request |
+| `remote-proxy` (default) | Relay connects to LLM Meter, which forwards to the provider | Server meters the proxied request |
 
 Usage-only mode sends the model, token counts, outcome, and any reported costs or quotas. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`). Use a server version that supports usage ingestion before starting a `usage-only` relay.
 
@@ -102,10 +106,10 @@ To limit an instance to one route, set `--provider` to one of `antigravity`, `op
 
 ### Relay with Docker
 
-The relay image is `ghcr.io/mishankov/llm-proxy-relay`, with the same Linux platforms and tag scheme as the server. Authenticate to GHCR if the package is private. You can also build it from the checkout with `docker build -f Dockerfile.relay -t llm-proxy-relay .` and substitute that image name below.
+The relay image is `ghcr.io/mishankov/llm-meter-relay`, with the same Linux platforms and tag scheme as the server. Authenticate to GHCR if the package is private. You can also build it from the checkout with `docker build -f Dockerfile.relay -t llm-meter-relay .` and substitute that image name below.
 
 ```sh
-relay_dir="$HOME/.config/llm-proxy/relay"
+relay_dir="$HOME/.config/llm-meter/relay"
 (umask 077; mkdir -p "$relay_dir/data"; touch "$relay_dir/proxy.key")
 chmod 600 "$relay_dir/proxy.key"
 ```
@@ -115,20 +119,20 @@ Save the dashboard client key as the only line in `proxy.key`. Save this as `com
 ```yaml
 services:
   relay:
-    image: ghcr.io/mishankov/llm-proxy-relay:latest
+    image: ghcr.io/mishankov/llm-meter-relay:latest
     user: "${RELAY_UID}:${RELAY_GID}"
     stop_grace_period: 15s
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
       - type: bind
-        source: ${HOME}/.config/llm-proxy/relay/proxy.key
+        source: ${HOME}/.config/llm-meter/relay/proxy.key
         target: /run/secrets/proxy-key
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${HOME}/.config/llm-proxy/relay/data
+        source: ${HOME}/.config/llm-meter/relay/data
         target: /data
         bind:
           create_host_path: false
@@ -155,13 +159,13 @@ Attach only trusted clients to the relay's Docker network because containers on 
 
 ### Relay as a Go binary
 
-Build with `go build -o llm-proxy-relay ./cmd/llm-proxy-relay`. The binary listens on `127.0.0.1:8765` by default.
+Build with `go build -o llm-meter-relay ./cmd/llm-proxy-relay`. The binary listens on `127.0.0.1:8765` by default.
 
 ```sh
-./llm-proxy-relay --target https://proxy.example.com --key-file "$HOME/.config/llm-proxy/relay/proxy.key"
+./llm-meter-relay --target https://proxy.example.com --key-file "$HOME/.config/llm-meter/relay/proxy.key"
 ```
 
-For usage-only mode, add `--mode usage-only --data-dir "$HOME/.config/llm-proxy/relay/data"`.
+For usage-only mode, add `--mode usage-only --data-dir "$HOME/.config/llm-meter/relay/data"`.
 
 ## Usage and rates
 

@@ -19,16 +19,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/dashboard"
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
-	"github.com/mishankov/llm-proxy/internal/proxy"
-	"github.com/mishankov/llm-proxy/internal/usagereport"
+	"github.com/mishankov/llm-meter/internal/dashboard"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("LLM Proxy stopped", "error", err)
+		slog.Error("LLM Meter stopped", "error", err)
 		os.Exit(1)
 	}
 }
@@ -94,7 +94,7 @@ func run() error {
 	}()
 	stopped := make(chan error, 1)
 	go func() { stopped <- server.ListenAndServe() }()
-	slog.Info("LLM Proxy serving", "address", server.Addr)
+	slog.Info("LLM Meter serving", "address", server.Addr)
 	select {
 	case err := <-stopped:
 		return err

@@ -17,7 +17,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/mishankov/llm-proxy/internal/usagereport"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 const (

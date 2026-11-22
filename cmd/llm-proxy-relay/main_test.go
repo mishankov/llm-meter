@@ -17,7 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -150,7 +150,7 @@ func TestRelayHidesUpstreamErrors(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer fixture")
 	response := httptest.NewRecorder()
 	antigravityRelay(host, target, "llmp_fixture", transport).ServeHTTP(response, request)
-	if response.Code != http.StatusBadGateway || response.Body.String() != "LLM Proxy unavailable\n" {
+	if response.Code != http.StatusBadGateway || response.Body.String() != "LLM Meter unavailable\n" {
 		t.Fatalf("upstream error was not sanitized: status %d", response.Code)
 	}
 }

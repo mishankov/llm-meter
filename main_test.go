@@ -20,8 +20,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
 )
 
 func TestDashboardServesPrecompressedAssets(t *testing.T) {

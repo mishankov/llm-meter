@@ -13,10 +13,10 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/mishankov/llm-proxy/internal/ledger"
-	"github.com/mishankov/llm-proxy/internal/pricing"
-	"github.com/mishankov/llm-proxy/internal/proxy"
-	"github.com/mishankov/llm-proxy/internal/usagereport"
+	"github.com/mishankov/llm-meter/internal/ledger"
+	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 func TestUsageReportsShareLedgerAndRetrySafely(t *testing.T) {
