@@ -61,26 +61,7 @@ Create an Antigravity client in the dashboard and use `https://proxy.example.com
 
 Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Proxy-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs.
 
-#### Loopback relay for personal Google sign-in
-
-If your Antigravity client only accepts an endpoint override, run `llm-proxy-relay` on the same machine as the ACP process. It adds the proxy key and forwards the original Google authorization and streaming responses. Build it with Go from the repository root on macOS or Linux:
-
-```sh
-mkdir -p "$HOME/.local/bin" "$HOME/.config/llm-proxy"
-go build -o "$HOME/.local/bin/llm-proxy-relay" ./cmd/llm-proxy-relay
-(umask 077; touch "$HOME/.config/llm-proxy/antigravity.key")
-chmod 600 "$HOME/.config/llm-proxy/antigravity.key"
-```
-
-Save the Antigravity client's proxy key as the only line in `antigravity.key`, then start the relay:
-
-```sh
-"$HOME/.local/bin/llm-proxy-relay" \
-  --target https://proxy.example.com/antigravity \
-  --key-file "$HOME/.config/llm-proxy/antigravity.key"
-```
-
-The default listener is `http://127.0.0.1:8765`. If you change `--listen`, use the matching loopback URL in the ACP arguments. Run the relay on a machine where you trust the other local processes.
+If your Antigravity client accepts only an endpoint override, [run the relay](#run-the-relay) on the same machine as the ACP process. Set `--provider antigravity` and choose the mode for that connection.
 
 For T3 Code, set **Settings → Providers → Antigravity → Binary path** to an executable launcher named `antigravity` or `agy` on the environment that runs Antigravity. The launcher adds the endpoint flag to ACP invocations and passes through T3's profile arguments and other commands:
 
@@ -96,6 +77,56 @@ exec "/absolute/path/to/antigravity" "$@"
 Set the last line to your installed Antigravity executable, make the launcher executable with `chmod +x`, and start a fresh Antigravity session in T3 using your existing Google sign-in. You can confirm flag support on your runtime with `antigravity acp --help`.
 
 The dashboard shows requests as **Antigravity** under the client that owns the proxy key. Generation responses contribute token counts when Google reports them.
+
+## Run the relay
+
+Run one relay instance per connection and choose its mode explicitly. Both modes attribute requests to the dashboard client that owns the relay's proxy key.
+
+| Mode | Model traffic | Usage |
+| --- | --- | --- |
+| `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
+| `remote-proxy` | Relay connects to LLM Proxy, which forwards to the provider | Server meters the proxied request |
+
+Usage-only mode sends the model, token counts, outcome, and any reported costs or quotas. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`). Use a server version that supports usage ingestion before starting a `usage-only` relay.
+
+| `--provider` | Client base URL | HTTPS server path in `remote-proxy` mode |
+| --- | --- | --- |
+| `antigravity` | `http://127.0.0.1:8765` | `/antigravity` |
+| `openai` (OpenAI-compatible) | `http://127.0.0.1:8765/v1` | `/v1` |
+| `codex` | `http://127.0.0.1:8765/backend-api/codex` | `/backend-api/codex` |
+| `opencode-go` | `http://127.0.0.1:8765/opencode-go` | `/opencode-go` |
+
+The relay supports both modes for these four routes. The client needs to accept a local base URL for the selected provider. Use its usual provider authentication and supply the LLM Proxy key to the relay through `--key-file`. In `usage-only` mode, set `--target` to the server's HTTPS origin. The relay uses the provider's standard upstream by default. `--upstream` can select another trusted HTTPS provider base URL.
+
+### Relay with Docker
+
+The relay image is `ghcr.io/mishankov/llm-proxy-relay`, with the same Linux platforms and tag scheme as the server. Authenticate to GHCR if the package is private. You can also build it from the checkout with `docker build -f Dockerfile.relay -t llm-proxy-relay .` and substitute that image name below.
+
+```sh
+relay_dir="$HOME/.config/llm-proxy/antigravity"
+relay_network=llm-proxy-relay-antigravity
+(umask 077; mkdir -p "$relay_dir/data"; touch "$relay_dir/proxy.key")
+chmod 600 "$relay_dir/proxy.key"
+docker network create "$relay_network"
+```
+
+Save the dashboard client key as the only line in `proxy.key`. Mount a separate persistent state directory per usage-only connection so pending reports survive container replacement. Drain pending reports before moving to a different usage server or key, then use a fresh state directory.
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" --network "$relay_network" --stop-timeout 15 \
+  -p 127.0.0.1:8765:8765 \
+  --mount "type=bind,src=$relay_dir/proxy.key,dst=/run/secrets/proxy-key,readonly" \
+  --mount "type=bind,src=$relay_dir/data,dst=/data" \
+  ghcr.io/mishankov/llm-proxy-relay:latest \
+  --mode usage-only --provider antigravity --target https://proxy.example.com \
+  --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data
+```
+
+Create the relay's Docker network once per connection. Attach only trusted clients because containers on that network can reach the relay directly. For remote proxying, use `--mode remote-proxy --target https://proxy.example.com/antigravity`. For another connection, give it a different host port, set `--listen` to match that port, and update the client URL. Use Docker Engine 28 or newer and keep the published port bound to `127.0.0.1`. [Docker bridge networking](https://docs.docker.com/engine/network/drivers/bridge/) · [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/#publishing-ports)
+
+### Relay as a Go binary
+
+Build with `go build -o llm-proxy-relay ./cmd/llm-proxy-relay`. Use the same mode, provider, and target flags from the Docker example, with the local key and data paths. The binary listens on `127.0.0.1:8765` by default. Use `--bind` only for the Docker port mapping. Existing Antigravity commands with only `--target` and `--key-file` select `remote-proxy` mode.
 
 ## Usage and rates
 

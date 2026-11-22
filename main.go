@@ -23,6 +23,7 @@ import (
 	"github.com/mishankov/llm-proxy/internal/ledger"
 	"github.com/mishankov/llm-proxy/internal/pricing"
 	"github.com/mishankov/llm-proxy/internal/proxy"
+	"github.com/mishankov/llm-proxy/internal/usagereport"
 )
 
 func main() {
@@ -107,6 +108,19 @@ func run() error {
 func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", dashboard.New(store, dashboardToken, secureCookie, log))
+	mux.Handle("POST "+usagereport.Path, withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
+		event, err := usagereport.Decode(http.MaxBytesReader(w, r.Body, usagereport.MaxBodyBytes))
+		if err != nil {
+			proxyError(w, http.StatusBadRequest, "Invalid usage event")
+			return
+		}
+		if err := store.RecordRelay(r.Context(), clientID, event.ID, event.Usage()); err != nil {
+			log.Error("record relay usage", "error", err)
+			proxyError(w, http.StatusServiceUnavailable, "Could not record usage event")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}, log))
 	record := func(usage proxy.Usage) {
 		// Persist completed requests even if the downstream client has gone away.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -133,6 +147,12 @@ func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *
 }
 
 func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http.Handler {
+	return withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
+		next.ServeHTTP(w, r.WithContext(proxy.WithClient(r.Context(), clientID)))
+	}, log)
+}
+
+func withClientKey(store *ledger.Store, next func(http.ResponseWriter, *http.Request, string), log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys := r.Header.Values("X-LLM-Proxy-Key")
 		if len(keys) != 1 {
@@ -150,7 +170,7 @@ func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http
 			return
 		}
 		r.Header.Del("X-LLM-Proxy-Key")
-		next.ServeHTTP(w, r.WithContext(proxy.WithClient(r.Context(), clientID)))
+		next(w, r, clientID)
 	})
 }
 

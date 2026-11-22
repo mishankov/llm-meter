@@ -9,8 +9,17 @@ on:
 
 jobs:
   image:
-    name: Build linux/amd64 and linux/arm64
+    name: Build linux/amd64 and linux/arm64${{ matrix.name_suffix }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - file: Dockerfile
+            name_suffix: ''
+            image_suffix: ''
+          - file: Dockerfile.relay
+            name_suffix: ' (relay)'
+            image_suffix: '-relay'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -21,6 +30,45 @@ jobs:
           platforms: arm64
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Smoke test relay container
+        if: matrix.image_suffix == '-relay'
+        shell: bash
+        run: |
+          docker buildx build --file Dockerfile.relay --platform linux/amd64 --load --tag llm-proxy-relay:smoke .
+          test "$(docker run --rm --entrypoint id llm-proxy-relay:smoke -u)" = 10001
+          scratch=$(mktemp -d)
+          container=
+          cleanup() {
+            if [[ -n "$container" ]]; then
+              docker rm --force "$container" >/dev/null || true
+            fi
+            rm -rf "$scratch"
+          }
+          trap cleanup EXIT
+
+          umask 077
+          printf '%s\n' llmp_fixture > "$scratch/key"
+          mkdir "$scratch/data"
+          for mode in remote-proxy usage-only; do
+            target=https://llm-proxy.invalid
+            if [[ "$mode" == remote-proxy ]]; then
+              target+=/antigravity
+            fi
+            container=$(docker run --detach --user "$(id -u):$(id -g)" --publish 127.0.0.1:8765:8765 \
+              --mount "type=bind,src=$scratch/key,dst=/run/secrets/proxy-key,readonly" \
+              --mount "type=bind,src=$scratch/data,dst=/data" \
+              llm-proxy-relay:smoke --mode "$mode" --provider antigravity --target "$target" \
+              --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data)
+            if ! status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                --request POST --max-time 2 --retry 5 --retry-all-errors --retry-delay 1 \
+                http://127.0.0.1:8765/v1internal:loadCodeAssist) || [[ "$status" != 401 ]]; then
+              docker logs "$container"
+              printf 'Expected relay mode %s to return 401, got %s\n' "$mode" "$status" >&2
+              exit 1
+            fi
+            docker rm --force "$container" >/dev/null
+            container=
+          done
       - name: Log in to GHCR
         if: inputs.publish
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -32,7 +80,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}${{ matrix.image_suffix }}
           flavor: latest=false
           tags: |
             type=ref,event=branch,prefix=branch-
@@ -44,9 +92,10 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: ${{ inputs.publish }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=docker-image
-          cache-to: type=gha,scope=docker-image,mode=max,ignore-error=true
+          cache-from: type=gha,scope=docker-image${{ matrix.image_suffix }}
+          cache-to: type=gha,scope=docker-image${{ matrix.image_suffix }},mode=max,ignore-error=true

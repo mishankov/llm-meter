@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -84,6 +85,19 @@ CREATE TABLE IF NOT EXISTS allowances (
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (client_id, limit_id, window)
 );
+
+CREATE TABLE IF NOT EXISTS relay_events (
+    client_id TEXT NOT NULL REFERENCES clients(id),
+    event_id TEXT NOT NULL,
+    PRIMARY KEY (client_id, event_id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS relay_completions (
+    source TEXT NOT NULL,
+    response_id TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (source, response_id)
+) WITHOUT ROWID;
 `
 
 func Open(path string, catalog pricing.Catalog) (*Store, error) {
@@ -247,38 +261,79 @@ func (s *Store) AuthenticateKey(ctx context.Context, token string, now time.Time
 }
 
 func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
+	return s.record(ctx, usage, "")
+}
+
+// RecordRelay records a usage event once per authenticated client. The event ID
+// and its ledger changes commit together so retries can safely reuse that ID.
+func (s *Store) RecordRelay(ctx context.Context, clientID, eventID string, usage proxy.Usage) error {
+	if eventID == "" {
+		return errors.New("relay event ID is required")
+	}
+	usage.ClientID = clientID
+	if usage.ResponseID != "" {
+		// Uploaded identifiers can only correlate responses reported for this
+		// client and provider, independently of IDs from the remote proxy.
+		usage.ResponseID = "relay:" + clientID + ":" + usage.Provider + ":" + usage.ResponseID
+	}
+	return s.record(ctx, usage, eventID)
+}
+
+func (s *Store) record(ctx context.Context, usage proxy.Usage, eventID string) error {
 	// Quota readings sometimes arrive independently of a response completion.
 	if usage.Status == 0 && len(usage.RateLimits) == 0 {
 		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	measurementSource := "proxy"
+	if eventID != "" {
+		result, err := tx.ExecContext(ctx, `INSERT INTO relay_events (client_id, event_id) VALUES (?, ?)
+            ON CONFLICT (client_id, event_id) DO NOTHING`, usage.ClientID, eventID)
+		if err != nil {
+			return err
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows == 0 {
+			return err
+		}
+		measurementSource = "relay"
 	}
 	at := usage.At
 	if at.IsZero() {
 		at = time.Now()
 	}
 	if len(usage.RateLimits) > 0 {
-		if err := s.recordAllowances(ctx, usage.ClientID, at, usage.RateLimits); err != nil {
+		if err := recordAllowances(ctx, tx, usage.ClientID, at, usage.RateLimits); err != nil {
 			return err
 		}
 	}
-	if usage.Status == 0 {
-		return nil
+	if usage.Status != 0 {
+		if err := s.recordRequest(ctx, tx, usage, at, measurementSource); err != nil {
+			return err
+		}
 	}
-	pricingAt := at
-	execRequest := s.db.ExecContext
-	var replayTx *sql.Tx
-	if usage.Provider == "antigravity" && usage.HasUsage && !usage.UsageUpdate && usage.ResponseID != "" && usage.Model == "" {
-		// Resolve the original pricing context and persist the replay atomically.
-		tx, err := s.db.BeginTx(ctx, nil)
+	return tx.Commit()
+}
+
+func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage, at time.Time, measurementSource string) error {
+	if measurementSource == "relay" && usage.Method == http.MethodPost && usage.ResponseID != "" {
+		var err error
+		usage, err = mergePendingWithPost(ctx, tx, usage)
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
-		replayTx, execRequest = tx, tx.ExecContext
+	}
+	pricingAt := at
+	if usage.Provider == "antigravity" && usage.HasUsage && !usage.UsageUpdate && usage.ResponseID != "" && usage.Model == "" {
 		var originalTime int64
 		var originalTier string
-		err = tx.QueryRowContext(ctx, `SELECT time, model, service_tier FROM requests
-            WHERE source = ? AND response_id = ? AND provider = 'antigravity' AND usage_available = 1`,
-			usage.Source, usage.ResponseID).Scan(&originalTime, &usage.Model, &originalTier)
+		err := tx.QueryRowContext(ctx, `SELECT time, model, service_tier FROM requests
+            WHERE source = ? AND response_id = ? AND provider = 'antigravity' AND usage_available = 1
+                AND measurement_source = ?`,
+			usage.Source, usage.ResponseID, measurementSource).Scan(&originalTime, &usage.Model, &originalTier)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -289,72 +344,39 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 			}
 		}
 	}
-	var originatingID int64
-	var originalCost sql.NullFloat64
-	if usage.UsageUpdate && (usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil) && usage.ResponseID != "" {
-		var originalTime int64
-		var originalModel, originalTier, completionWindow string
-		err := s.db.QueryRowContext(ctx, `SELECT id, time, model, cost, service_tier, completion_window FROM requests
-            WHERE source = ? AND response_id = ? AND method = 'POST' AND usage_available = 0
-            ORDER BY id LIMIT 1`, usage.Source, usage.ResponseID).Scan(&originatingID, &originalTime, &originalModel, &originalCost, &originalTier, &completionWindow)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if originatingID != 0 {
-			pricingAt = timestamp(originalTime)
-			usage.CompletionWindow = completionWindow
-			if usage.Model == "" {
-				usage.Model = originalModel
-			}
-			if usage.ServiceTier == "" {
-				usage.ServiceTier = originalTier
-			}
-		}
-	}
-	var inputRate, cachedRate, writeRate, write12hRate, outputRate, cost *float64
-	var priceSource string
-	if !usage.UsageUpdate || originatingID != 0 {
-		if !usage.HasCacheWriteSplit && usage.CacheRetention == "12h" {
-			usage.CacheWrite12hTokens = usage.CacheWriteTokens
-		}
-		rates, amount, origin := s.priceFor(usage, pricingAt)
-		cost, priceSource = amount, origin
-		if rates != nil && !originalCost.Valid {
-			inputRate, cachedRate, writeRate, write12hRate, outputRate = &rates.Input, &rates.CachedInput, &rates.CacheWrite, &rates.CacheWrite12h, &rates.Output
-		}
-	}
 	if usage.UsageUpdate {
-		if originatingID != 0 {
-			// The POST incurred the usage. Pollers may use another client key or
-			// fetch the same completed response more than once.
-			_, err := s.db.ExecContext(ctx, `UPDATE OR IGNORE requests SET usage_available = ?,
-                model = COALESCE(NULLIF(?, ''), model), input_tokens = ?, cached_input_tokens = ?, cache_write_tokens = ?,
-                cache_write_12h_tokens = ?, output_tokens = ?, cost = COALESCE(cost, ?), input_rate = ?, cached_input_rate = ?,
-                cache_write_rate = ?, cache_write_12h_rate = ?, output_rate = ?,
-                price_source = COALESCE(NULLIF(price_source, ''), ?), reported_cost = COALESCE(reported_cost, ?),
-                reported_list_cost = COALESCE(reported_list_cost, ?), reported_allowance = COALESCE(reported_allowance, ?)
-				WHERE id = ? AND usage_available = 0`, usage.HasUsage, usage.Model, usage.InputTokens, usage.CachedInputTokens,
-				usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate,
-				write12hRate, outputRate, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, originatingID)
+		if usage.ResponseID != "" && (usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil) {
+			matched, err := s.completeRequest(ctx, tx, &usage, measurementSource)
 			if err != nil {
 				return err
+			}
+			if !matched && measurementSource == "relay" {
+				if err := saveRelayCompletion(ctx, tx, usage); err != nil {
+					return err
+				}
 			}
 		}
 		usage.HasUsage = false
 		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens = 0, 0, 0, 0, 0
-		cost, inputRate, cachedRate, writeRate, write12hRate, outputRate = nil, nil, nil, nil, nil, nil
-		priceSource = ""
 		usage.CompletionWindow = ""
 		usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance = nil, nil, nil
 	}
+	if !usage.HasCacheWriteSplit && usage.CacheRetention == "12h" {
+		usage.CacheWrite12hTokens = usage.CacheWriteTokens
+	}
+	var inputRate, cachedRate, writeRate, write12hRate, outputRate *float64
+	rates, cost, priceSource := s.priceFor(usage, pricingAt)
+	if rates != nil {
+		inputRate, cachedRate, writeRate, write12hRate, outputRate = &rates.Input, &rates.CachedInput, &rates.CacheWrite, &rates.CacheWrite12h, &rates.Output
+	}
 	// A replay of an Antigravity stream can report more usage for the same response.
 	// Keep the original request and replace its usage and price together.
-	_, err := execRequest(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
+	_, err := tx.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
 		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
-		reported_cost, reported_list_cost, reported_allowance, service_tier, completion_window)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		reported_cost, reported_list_cost, reported_allowance, service_tier, completion_window, measurement_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO UPDATE SET
             model = COALESCE(NULLIF(excluded.model, ''), requests.model),
             input_tokens = excluded.input_tokens, cached_input_tokens = excluded.cached_input_tokens,
@@ -365,6 +387,7 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
             price_source = excluded.price_source, reported_cost = excluded.reported_cost,
             reported_list_cost = excluded.reported_list_cost, reported_allowance = excluded.reported_allowance
         WHERE requests.provider = 'antigravity' AND excluded.provider = 'antigravity'
+            AND requests.measurement_source = excluded.measurement_source
             AND requests.usage_available = 1 AND excluded.usage_available = 1
             AND excluded.input_tokens >= requests.input_tokens AND excluded.cached_input_tokens >= requests.cached_input_tokens
             AND excluded.cache_write_tokens >= requests.cache_write_tokens
@@ -377,19 +400,11 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.Endpoint, usage.Method, usage.Status,
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
 		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
-		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, usage.ServiceTier, usage.CompletionWindow)
-	if err != nil || replayTx == nil {
-		return err
-	}
-	return replayTx.Commit()
+		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, usage.ServiceTier, usage.CompletionWindow, measurementSource)
+	return err
 }
 
-func (s *Store) recordAllowances(ctx context.Context, clientID string, at time.Time, limits []proxy.RateLimit) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+func recordAllowances(ctx context.Context, tx *sql.Tx, clientID string, at time.Time, limits []proxy.RateLimit) error {
 	for _, limit := range limits {
 		if limit.UsedPercent < 0 || limit.UsedPercent > 100 {
 			continue
@@ -410,7 +425,7 @@ func (s *Store) recordAllowances(ctx context.Context, clientID string, at time.T
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func timestamp(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
