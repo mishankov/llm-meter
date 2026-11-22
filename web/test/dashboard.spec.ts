@@ -513,6 +513,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(baseURL);
   await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
   await expect(page.getByText('config.toml', { exact: true })).toBeVisible();
+  await expect(page.getByText('LLM_METER_KEY', { exact: true })).toBeVisible();
   await clientType.press('Enter');
   await page.getByRole('option', { name: 'OpenCode (ChatGPT sign-in)' }).click();
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
@@ -766,6 +767,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.keyboard.press('Escape');
   await expect(secret).toHaveValue('test_key_1_secret');
   const reveal = page.getByRole('dialog', { name: 'New proxy key' });
+  await expect(reveal.getByText('X-LLM-Meter-Key', { exact: true })).toBeVisible();
   await reveal.getByRole('button', { name: 'Close without saving' }).click();
   const discard = page.getByRole('alertdialog', { name: 'Close without saving the key?' });
   await expect(discard).toBeVisible();
@@ -786,7 +788,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
   await expect(page.getByText('Waiting for first request', { exact: true })).toBeVisible();
-  await expect(page.getByText('X-LLM-Proxy-Key', { exact: true })).toBeVisible();
+  await expect(page.getByText('X-LLM-Meter-Key', { exact: true })).toBeVisible();
 });
 
 test('keeps a client draft through session expiry and clears it on lock', async ({ page }) => {

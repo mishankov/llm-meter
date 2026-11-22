@@ -4,17 +4,16 @@ ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY cmd/llm-proxy-relay/ ./cmd/llm-proxy-relay/
+COPY cmd/llm-meter-relay/ ./cmd/llm-meter-relay/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' -o /llm-meter-relay ./cmd/llm-proxy-relay
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' -o /llm-meter-relay ./cmd/llm-meter-relay
 
 FROM alpine:3.23
-RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 llmproxy && \
-    adduser -S -u 10001 -G llmproxy llmproxy && mkdir /data && \
-    chown llmproxy:llmproxy /data && chmod 700 /data
+RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 llmmeter && \
+    adduser -S -u 10001 -G llmmeter llmmeter && mkdir /data && \
+    chown llmmeter:llmmeter /data && chmod 700 /data
 COPY --from=build /llm-meter-relay /usr/local/bin/llm-meter-relay
-RUN ln -s llm-meter-relay /usr/local/bin/llm-proxy-relay
-USER llmproxy
+USER llmmeter
 EXPOSE 8765
 VOLUME ["/data"]
 ENTRYPOINT ["/usr/local/bin/llm-meter-relay"]

@@ -19,7 +19,7 @@ const (
 	apiPrefix           = "/v1"
 	CodexPrefix         = "/codex"
 	codexUpstreamPath   = "/backend-api/codex"
-	accessKey           = "X-LLM-Proxy-Key"
+	accessKey           = "X-LLM-Meter-Key"
 	OpenCodeGoPrefix    = "/opencode-go"
 	AntigravityPrefix   = "/antigravity"
 	antigravityProvider = "antigravity"
@@ -333,7 +333,7 @@ func isJSON(contentType string) bool {
 func removeLocalHeaders(header http.Header) {
 	header.Del(accessKey)
 	for _, cookie := range (&http.Request{Header: header}).Cookies() {
-		if cookie.Name != "llm_proxy_session" {
+		if cookie.Name != "llm_meter_session" {
 			continue
 		}
 		cookies := (&http.Request{Header: header}).Cookies()

@@ -21,7 +21,7 @@ LLM Meter tracks tokens, costs, and provider allowances across OpenAI-compatible
 ## Operating Context
 
 - Run the server locally or on a self-hosted host. The Go service serves the dashboard, proxy routes, and usage ingestion API and stores usage in SQLite.
-- Unlock the dashboard with the dashboard token. Create a client in **Clients** and copy its proxy key. Send the key in `X-LLM-Proxy-Key` for direct connections or supply it to the relay in a private key file.
+- Unlock the dashboard with the dashboard token. Create a client in **Clients** and copy its proxy key. Send the key in `X-LLM-Meter-Key` for direct connections or supply it to the relay in a private key file.
 - Use **Usage** to inspect estimates and token counts over time, compare clients and models, and drill into recent requests. Use **Clients** to issue and revoke keys.
 
 ## Capabilities and Constraints

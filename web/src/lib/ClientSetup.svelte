@@ -67,7 +67,7 @@
   </div>
 
   <p class="credentials muted">
-    Send your proxy key in <code>X-LLM-Proxy-Key</code>.
+    Send your proxy key in <code>X-LLM-Meter-Key</code>.
     {#if profile.value === 'openai'}
       Keep your provider API key in <code>Authorization</code>.
     {:else if profile.value === 'opencode-go'}
@@ -84,13 +84,13 @@
     <CollapsiblePanel>
       <div class="instructions muted">
         {#if profile.value === 'openai'}
-          <p>Set the API base URL in your client. For OpenCode, set <code>settings.baseURL</code> on the <code>openai</code> provider in <code>opencode.jsonc</code>. Add <code>X-LLM-Proxy-Key</code> to the provider’s <code>headers</code>.</p>
+          <p>Set the API base URL in your client. For OpenCode, set <code>settings.baseURL</code> on the <code>openai</code> provider in <code>opencode.jsonc</code>. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
         {:else if profile.value === 'codex'}
-          <p>In Codex’s <code>config.toml</code>, select a provider with this <code>base_url</code>. Set <code>wire_api = "responses"</code>, <code>requires_openai_auth = true</code>, and <code>supports_websockets = true</code>. Map <code>X-LLM-Proxy-Key</code> to <code>LLM_PROXY_KEY</code> in <code>env_http_headers</code>, set that environment variable to your proxy key, and start a new Codex session.</p>
+          <p>In Codex’s <code>config.toml</code>, select a provider with this <code>base_url</code>. Set <code>wire_api = "responses"</code>, <code>requires_openai_auth = true</code>, and <code>supports_websockets = true</code>. Map <code>X-LLM-Meter-Key</code> to <code>LLM_METER_KEY</code> in <code>env_http_headers</code>, set that environment variable to your proxy key, and start a new Codex session.</p>
         {:else if profile.value === 'opencode-chatgpt'}
-          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>openai</code> provider. Add <code>X-LLM-Proxy-Key</code> to the provider’s <code>headers</code>.</p>
+          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>openai</code> provider. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
         {:else}
-          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>opencode-go</code> provider. Add <code>X-LLM-Proxy-Key</code> to the provider’s <code>headers</code>.</p>
+          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>opencode-go</code> provider. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
         {/if}
       </div>
     </CollapsiblePanel>

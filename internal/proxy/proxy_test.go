@@ -81,7 +81,7 @@ func TestHTTPForwardsTheOriginalCredentialsAndMetersNewUsage(t *testing.T) {
 		req := httptest.NewRequest(method, "/v1/responses/resp%2F1?expand=a%2Fb", body)
 		req.Header.Set("Authorization", "Bearer upstream-secret")
 		req.Header.Set("OpenAI-Project", "project-1")
-		req.Header.Set("Cookie", "upstream=keep; llm_proxy_session=do-not-forward")
+		req.Header.Set("Cookie", "upstream=keep; llm_meter_session=do-not-forward")
 		req.Header.Set(accessKey, "proxy-secret")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept-Encoding", "gzip")

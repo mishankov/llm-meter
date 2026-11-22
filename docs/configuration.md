@@ -15,21 +15,19 @@ This guide covers every supported way to deploy **LLM Meter** and **`llm-meter-r
 
 ## 1. Choose Your Setup
 
-LLM Meter supports three topologies. All three feed the same dashboard ledger and use dashboard client proxy keys (`llmp_...`) for attribution.
+LLM Meter supports three topologies. All three feed the same dashboard ledger and use dashboard client proxy keys (`llmm_...`) for attribution.
 
-| Setup | Model traffic path | What the LLM Meter server sees | Client custom header (`X-LLM-Proxy-Key`) needed? | Local relay `/data` state needed? | Server version requirement | Request `measurementSource` |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Direct client-to-server** | Client → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Yes | No | Server supports the selected provider route | `proxy` |
-| **Relay (`remote-proxy`, default)** | Client → Local Relay → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Relay supplies it | Optional for switching to `usage-only` | Server supports the selected provider route | `proxy` |
-| **Relay (`usage-only`)** | Client → Local Relay → Provider. Relay reports to LLM Meter. | Usage metadata only (model, canonical route, status, tokens, costs, quotas) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | Server supports `POST /api/usage/events` | `relay` |
+| Setup | Model traffic path | What the LLM Meter server sees | Client custom header (`X-LLM-Meter-Key`) needed? | Local relay `/data` state needed? | Request `measurementSource` |
+| --- | --- | --- | --- | --- | --- |
+| **Direct client-to-server** | Client → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Yes | No | `proxy` |
+| **Relay (`remote-proxy`, default)** | Client → Local Relay → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Relay supplies it | Optional for switching to `usage-only` | `proxy` |
+| **Relay (`usage-only`)** | Client → Local Relay → Provider. Relay reports to LLM Meter. | Usage metadata only (model, canonical route, status, tokens, costs, quotas) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
 
 ### When to pick each setup
 
 - **Choose direct client-to-server** when your client can send custom headers (OpenAI SDKs, OpenCode, signed-in Codex) and you want central routing and server-side `*_UPSTREAM` overrides without running a local relay process.
 - **Choose relay in `remote-proxy` mode** when a client only supports an endpoint override without custom headers (for example, Antigravity ACP), or when you want all tools on a workstation to point at `http://127.0.0.1:8765` with one local key file while still routing traffic through your LLM Meter server.
 - **Choose relay in `usage-only` mode** when you want prompts, responses, and provider credentials to stay between your machine and the model provider while still tracking spend, tokens, and Codex quotas in your central LLM Meter dashboard.
-
-Upgrade the LLM Meter server to a version that supports `POST /api/usage/events` before enabling `--mode usage-only`. An older server typically returns `404` or `405`, leaving events queued locally.
 
 In `usage-only` mode, the server authenticates uploads with the dashboard client's proxy key and trusts that client to report its own usage. Prompt and response content and provider credentials travel between the client, relay, and provider. Uploads contain canonical route templates such as `/v1/responses/:id`, hashed response IDs, token counts, request outcomes, reported costs, and quota readings.
 
@@ -56,7 +54,7 @@ To build an image from your checkout, run the following command.
 docker build -t llm-meter .
 ```
 
-The image runs as non-root user `llmproxy` (UID/GID `10001`), sets `DATA_DIR=/data`, exposes port `8080`, declares `VOLUME ["/data"]`, and embeds the built dashboard UI (`-tags embedui`).
+The image runs as non-root user `llmmeter` (UID/GID `10001`), sets `DATA_DIR=/data`, exposes port `8080`, declares `VOLUME ["/data"]`, and embeds the built dashboard UI (`-tags embedui`).
 
 ### Docker with `docker run`
 
@@ -67,7 +65,7 @@ export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
 docker run --rm -p 127.0.0.1:8080:8080 \
   -e DASHBOARD_TOKEN \
   -e COOKIE_SECURE=false \
-  -v llm-proxy-data:/data \
+  -v llm-meter-data:/data \
   ghcr.io/mishankov/llm-meter:latest
 ```
 
@@ -94,11 +92,11 @@ services:
       # OPENCODE_GO_UPSTREAM: https://opencode.ai/inference/go
       # ANTIGRAVITY_UPSTREAM: https://daily-cloudcode-pa.googleapis.com
     volumes:
-      - llm-proxy-data:/data
+      - llm-meter-data:/data
       # - ./pricing.json:/config/pricing.json:ro
 
 volumes:
-  llm-proxy-data:
+  llm-meter-data:
 ```
 
 Set a persistent `DASHBOARD_TOKEN`, for example in a `0600` `.env` file beside `compose.yaml`, then start the server.
@@ -138,10 +136,10 @@ Use Go `1.25+` and Node.js `24`.
 
 | Variable | Default | Required | Notes |
 | --- | --- | --- | --- |
-| `DASHBOARD_TOKEN` | _(none)_ | Yes | 24–512 characters. Unlocks the dashboard UI/API (`POST /api/login`) and signs the `llm_proxy_session` cookie. Never valid as a proxy client key (`X-LLM-Proxy-Key`). |
+| `DASHBOARD_TOKEN` | _(none)_ | Yes | 24–512 characters. Unlocks the dashboard UI/API (`POST /api/login`) and signs the `llm_meter_session` cookie. Never valid as a proxy client key (`X-LLM-Meter-Key`). |
 | `COOKIE_SECURE` | `true` | No | `true` or `false`. Keep `true` behind HTTPS. Set `false` only for plain local HTTP (`http://localhost:8080`). |
 | `LISTEN_ADDR` | `:8080` | No | TCP listen address (for example `127.0.0.1:8080` or `:8080`). |
-| `DATA_DIR` | `./data` (`/data` in Docker) | No | Stores `llm-proxy.db` (SQLite in WAL mode). The server creates a missing directory with mode `0700`. |
+| `DATA_DIR` | `./data` (`/data` in Docker) | No | Stores `llm-meter.db` (SQLite in WAL mode). The server creates a missing directory with mode `0700`. |
 | `PRICING_FILE` | _(unset)_ | No | Path to a JSON file of per-model rate overrides in USD per million tokens. |
 | `OPENAI_UPSTREAM` | `https://api.openai.com/v1` | No | HTTP/HTTPS base URL for `/v1` requests. Must omit userinfo, query, and fragment. |
 | `CODEX_UPSTREAM` | `https://chatgpt.com/backend-api/codex` | No | HTTP/HTTPS base URL for `/codex` requests. Must omit userinfo, query, and fragment. |
@@ -153,7 +151,7 @@ Use Go `1.25+` and Node.js `24`.
 
 - **`OPENAI_UPSTREAM` provider detection:** When you point `OPENAI_UPSTREAM` at another OpenAI-compatible host, LLM Meter infers the provider label for pricing lookup from known hostnames: `api.openai.com` (`openai`), `openrouter.ai` (`openrouter`), `opencode.ai/inference/go` (`opencode-go`), `opencode.ai/inference` (`opencode`), `api.anthropic.com` (`anthropic`), `api.deepseek.com` (`deepseek`), `api.groq.com` (`groq`), `api.mistral.ai` (`mistral`), `api.x.ai` (`xai`), and `generativelanguage.googleapis.com` (`google`). Unknown hosts are recorded without a provider label and can be priced via `PRICING_FILE`.
 - **`OPENCODE_GO_UPSTREAM` protocol routing:** LLM Meter automatically maps `/opencode-go` subpaths onto OpenCode Go's backend prefixes: `/models` and `/usage` → `/v1`, `/messages*` → `/anthropic/v1`, `/models/<id>:<action>` → `/google/v1beta`, and all other paths → `/openai/v1`.
-- **In `usage-only` mode:** Server `*_UPSTREAM` variables do not affect traffic sent directly from a `usage-only` relay to providers. To override a provider base URL in `usage-only` mode, use the relay's `--upstream` flag instead (see [Section 4.6](#46-scoping-legacy-targets-and-optional-https---upstream-overrides)).
+- **In `usage-only` mode:** Set `--provider` and `--upstream` on the relay to override the base URL used for direct provider requests. [Provider scoping](#46-provider-scoping-and-https---upstream-overrides)
 
 ### Pricing feeds and `PRICING_FILE`
 
@@ -187,7 +185,7 @@ Provide a JSON object mapping model names (or `provider/model`) to non-negative 
 }
 ```
 
-Include a rate for every token category a request reports. Use `0` when a category is free. When a request has no provider-reported cost or applicable override, automatic pricing can leave it **Unpriced** if a rate is missing or the catalog lists separate audio rates. After upgrading from an older catalog snapshot, allow one successful Models.dev refresh to load the audio-rate metadata.
+Include a rate for every token category a request reports. Use `0` when a category is free. When a request has no provider-reported cost or applicable override, automatic pricing can leave it **Unpriced** if a rate is missing or the catalog lists separate audio rates.
 
 ---
 
@@ -196,7 +194,7 @@ Include a rate for every token category a request reports. Use `0` when a catego
 ### Creating and scoping proxy keys
 
 1. Open the dashboard, unlock it with `DASHBOARD_TOKEN`, and go to **Clients**.
-2. Create a client and copy its proxy key (`llmp_...`). The full key is displayed **only once**; the server stores only its SHA-256 digest and 13-character prefix.
+2. Create a client and copy its proxy key (`llmm_...`). The full key is displayed **only once**; the server stores only its SHA-256 digest and 13-character prefix.
 3. Keep multiple active keys for the same client during rotation. Revoke the old key once the replacement is in use.
 
 **Key scope:**
@@ -206,13 +204,13 @@ Include a rate for every token category a request reports. Use `0` when a catego
 - Create **one client** per workstation/relay if you want one combined client view, or **separate clients** (with separate keys, and separate relay instances if using the relay) if you want per-tool or per-provider attribution in **Clients** and **Usage**.
 - **Background responses (`background: true`):** Keep both the initial `POST /v1/responses` and follow-up `GET /v1/responses/<id>` polls on the **same dashboard client and measurement mode** (`proxy` vs `relay`) so the server can correlate completion usage onto the originating request.
 
-### Normal provider auth vs. `X-LLM-Proxy-Key`
+### Normal provider auth vs. `X-LLM-Meter-Key`
 
 | Connection path | What the client sends | What LLM Meter / Relay does with headers |
 | --- | --- | --- |
-| **Direct to server** | Client's normal upstream auth (`Authorization`, API key, etc.) **plus** one `X-LLM-Proxy-Key` header | Server validates `X-LLM-Proxy-Key`, strips `X-LLM-Proxy-Key` (and any `llm_proxy_session` cookie), and forwards the client's upstream auth to the provider. |
-| **Via relay (`remote-proxy`)** | Client's normal upstream auth only (no `X-LLM-Proxy-Key` needed) | Relay requires provider auth before forwarding, sets/replaces `X-LLM-Proxy-Key` from `--key-file`, and forwards over HTTPS to LLM Meter. |
-| **Via relay (`usage-only`)** | Client's normal upstream auth only (no `X-LLM-Proxy-Key` needed) | Relay requires provider auth, strips any inbound `X-LLM-Proxy-Key`, forwards directly over HTTPS to the provider, and sends `--key-file` only in `X-LLM-Proxy-Key` to `POST /api/usage/events`. |
+| **Direct to server** | Client's normal upstream auth (`Authorization`, API key, etc.) **plus** one `X-LLM-Meter-Key` header | Server validates `X-LLM-Meter-Key`, strips `X-LLM-Meter-Key` (and any `llm_meter_session` cookie), and forwards the client's upstream auth to the provider. |
+| **Via relay (`remote-proxy`)** | Client's normal upstream auth only (no `X-LLM-Meter-Key` needed) | Relay requires provider auth before forwarding, sets/replaces `X-LLM-Meter-Key` from `--key-file`, and forwards over HTTPS to LLM Meter. |
+| **Via relay (`usage-only`)** | Client's normal upstream auth only (no `X-LLM-Meter-Key` needed) | Relay requires provider auth, strips any inbound `X-LLM-Meter-Key`, forwards directly over HTTPS to the provider, and sends `--key-file` only in `X-LLM-Meter-Key` to `POST /api/usage/events`. |
 
 ### All four client base paths
 
@@ -243,7 +241,7 @@ relay_dir="$HOME/.config/llm-meter/relay"
 chmod 600 "$relay_dir/proxy.key"
 ```
 
-Write your dashboard client proxy key (`llmp_...`) as the **only line** in `$HOME/.config/llm-meter/relay/proxy.key` (no extra lines, spaces, or comments).
+Write your dashboard client proxy key (`llmm_...`) as the **only line** in `$HOME/.config/llm-meter/relay/proxy.key` (no extra lines, spaces, or comments).
 
 ### 4.2 Default single-service Docker Compose setup
 
@@ -294,7 +292,7 @@ export RELAY_UID="$(id -u)" RELAY_GID="$(id -g)"
 docker compose up -d relay
 ```
 
-- **To switch this service to `usage-only` mode**, add `- --mode=usage-only` under `command` (after upgrading your LLM Meter server to a version that supports `POST /api/usage/events`) and re-run `docker compose up -d relay`.
+- **To switch this service to `usage-only` mode**, add `- --mode=usage-only` under `command` and re-run `docker compose up -d relay`.
 - **Keep `/data` mounted** in `usage-only` mode so queued usage reports survive container recreation.
 
 ### 4.3 Equivalent native Go binary commands
@@ -302,7 +300,7 @@ docker compose up -d relay
 Build the relay binary.
 
 ```sh
-go build -o llm-meter-relay ./cmd/llm-proxy-relay
+go build -o llm-meter-relay ./cmd/llm-meter-relay
 ```
 
 - Run the relay for all four providers on `127.0.0.1:8765` in the default `remote-proxy` mode.
@@ -358,26 +356,23 @@ Positional arguments are rejected; pass all options as flags.
 
 | Flag | Default | Required | Description & validation |
 | --- | --- | --- | --- |
-| `--target` | _(none)_ | Yes | HTTPS LLM Meter URL (`https://...`), without userinfo, query, or fragment. Must be an origin only in `usage-only` mode; in `remote-proxy` mode also accepts a legacy provider route suffix. |
+| `--target` | _(none)_ | Yes | HTTPS LLM Meter origin, without a route, user info, query, or fragment. |
 | `--key-file` | _(none)_ | Yes | Path to a private regular file containing a single proxy key (max 4,096 bytes, one line, printable ASCII, no whitespace). Must be owner-only (`0600`/`0400`) on Linux/macOS. |
 | `--mode` | `remote-proxy` | No | `remote-proxy` or `usage-only`. |
 | `--provider` | `""` (all 4) | No | Restrict the instance to one route: `antigravity`, `openai`, `codex`, or `opencode-go`. |
-| `--upstream` | `""` | No | Direct HTTPS provider base URL override (no userinfo, query, or fragment). Only valid with `--mode usage-only`. Hostname must differ from `--target`. If `--provider` is omitted, scopes the instance to `antigravity`. |
+| `--upstream` | `""` | No | Direct HTTPS provider base URL override (no user info, query, or fragment). Requires `--mode usage-only` and `--provider`. Hostname must differ from `--target`. |
 | `--listen` | `127.0.0.1:8765` | No | Client-facing loopback IP and port (`127.0.0.1:<port>` or `[::1]:<port>`). Enforced against the incoming HTTP `Host` header. |
 | `--bind` | `""` | No | Container socket address. When set, must be `0.0.0.0:<nonzero-port>` paired with a fixed non-zero loopback `--listen`. |
 | `--data-dir` | `./data/relay` | No | Persistent `usage-outbox.db` directory for `usage-only`. Give each relay instance its own queue directory. |
 
-### 4.6 Scoping, legacy targets, and optional HTTPS `--upstream` overrides
+### 4.6 Provider scoping and HTTPS `--upstream` overrides
 
 | Goal | Flags | Resulting routes & destination |
 | --- | --- | --- |
 | All 4 providers via LLM Meter (default) | `--target https://proxy.example.com` | All 4 routes → `https://proxy.example.com/{antigravity,v1,codex,opencode-go}` |
 | All 4 providers, direct to standard upstreams | `--mode usage-only --target https://proxy.example.com` | All 4 routes → each provider's default upstream; usage → `https://proxy.example.com/api/usage/events` |
 | Single provider via LLM Meter | `--provider codex --target https://proxy.example.com` | `codex` only → `https://proxy.example.com/codex` |
-| Single-route `remote-proxy` target | `--target https://proxy.example.com/antigravity` (or `/v1`, `/codex`, `/opencode-go`) | Automatically scoped to that single provider (same as setting `--provider`) |
 | Single provider, custom HTTPS upstream (`usage-only`) | `--mode usage-only --provider openai --target https://proxy.example.com --upstream https://openrouter.ai/api/v1` | `openai` only → `https://openrouter.ai/api/v1`; usage → `https://proxy.example.com/api/usage/events` |
-| Legacy Antigravity custom upstream (`usage-only`) | `--mode usage-only --target https://proxy.example.com --upstream https://upstream.example.com` | Scoped to `antigravity` → `https://upstream.example.com` |
-| **Rejected** combinations | `--mode remote-proxy --upstream ...`<br>`--mode usage-only --target https://proxy.example.com/v1`<br>`--provider codex --target https://proxy.example.com/v1`<br>`--mode usage-only --target https://proxy.example.com --upstream https://proxy.example.com/v1` | Startup fails with a validation error (see [Troubleshooting](#8-troubleshooting)). |
 
 ---
 
@@ -387,25 +382,25 @@ Positional arguments are rejected; pass all options as flags.
 
 | Client | Direct to server | Via local relay (`127.0.0.1:8765`) | Upstream credentials |
 | --- | --- | --- | --- |
-| **OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Proxy-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
+| **OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Meter-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
 | **OpenCode (`openai`, API key)** | `settings.baseURL: "https://proxy.example.com/v1"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/v1"` (no `headers`) | Saved OpenAI API key |
 | **OpenCode (`openai`, ChatGPT sign-in)** | `settings.baseURL: "https://proxy.example.com/codex"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/codex"` (no `headers`) | Saved ChatGPT sign-in |
 | **OpenCode Go (`opencode-go`)** | `settings.baseURL: "https://proxy.example.com/opencode-go"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/opencode-go"` (no `headers`) | Saved OpenCode Go credentials |
 | **Signed-in Codex** | `base_url = "https://proxy.example.com/codex"` + `env_http_headers` | `base_url = "http://127.0.0.1:8765/codex"` (omit `env_http_headers`) | Existing ChatGPT sign-in (`requires_openai_auth = true`) |
-| **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Proxy-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
+| **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Meter-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
 
 ### 5.1 OpenAI-compatible clients and OpenCode / OpenCode Go
 
 #### Generic OpenAI-compatible clients
 
-- **Direct:** Set the OpenAI base URL to `https://proxy.example.com/v1` (or `http://localhost:8080/v1` for local testing) and attach `X-LLM-Proxy-Key: <your-proxy-key>` alongside your normal `Authorization: Bearer <provider-api-key>` header.
-- **Via relay:** Set the OpenAI base URL to `http://127.0.0.1:8765/v1` and keep your normal `Authorization` (or `X-API-Key` / `Api-Key` / `X-Goog-Api-Key`) header. Do not add `X-LLM-Proxy-Key`.
+- **Direct:** Set the OpenAI base URL to `https://proxy.example.com/v1` (or `http://localhost:8080/v1` for local testing) and attach `X-LLM-Meter-Key: <your-proxy-key>` alongside your normal `Authorization: Bearer <provider-api-key>` header.
+- **Via relay:** Set the OpenAI base URL to `http://127.0.0.1:8765/v1` and keep your normal `Authorization` (or `X-API-Key` / `Api-Key` / `X-Goog-Api-Key`) header. Do not add `X-LLM-Meter-Key`.
 
 #### OpenCode (`opencode.jsonc`)
 
 These examples use OpenCode v2 provider settings. [OpenCode provider configuration](https://opencode.ai/docs/providers/)
 
-For direct requests, set `LLM_PROXY_KEY` in OpenCode's environment.
+For direct requests, set `LLM_METER_KEY` in OpenCode's environment.
 
 ```jsonc
 {
@@ -413,11 +408,11 @@ For direct requests, set `LLM_PROXY_KEY` in OpenCode's environment.
     "openai": {
       // Use /v1 with an OpenAI API key, or /codex with ChatGPT sign-in.
       "settings": { "baseURL": "https://proxy.example.com/v1" },
-      "headers": { "X-LLM-Proxy-Key": "{env:LLM_PROXY_KEY}" }
+      "headers": { "X-LLM-Meter-Key": "{env:LLM_METER_KEY}" }
     },
     "opencode-go": {
       "settings": { "baseURL": "https://proxy.example.com/opencode-go" },
-      "headers": { "X-LLM-Proxy-Key": "{env:LLM_PROXY_KEY}" }
+      "headers": { "X-LLM-Meter-Key": "{env:LLM_METER_KEY}" }
     }
   }
 }
@@ -445,7 +440,7 @@ OpenCode continues using its saved upstream credentials for each provider.
 
 Edit the user `config.toml` read by the Codex process, including the process that T3 launches, then start a fresh session. [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 
-For direct requests, supply `LLM_PROXY_KEY` in the Codex process environment.
+For direct requests, supply `LLM_METER_KEY` in the Codex process environment.
 
 ```toml
 model_provider = "metered-codex"
@@ -456,7 +451,7 @@ base_url = "https://proxy.example.com/codex"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = true
-env_http_headers = { "X-LLM-Proxy-Key" = "LLM_PROXY_KEY" }
+env_http_headers = { "X-LLM-Meter-Key" = "LLM_METER_KEY" }
 ```
 
 For requests through the local relay, select its local base URL. The relay supplies the proxy key.
@@ -479,7 +474,7 @@ supports_websockets = true
 
 Keep Antigravity signed in to Google and keep both Google's token and your proxy key out of URLs, command arguments, and logs.
 
-- **If your Antigravity client supports custom headers (direct):** Set the Cloud Code Assist base URL to `https://proxy.example.com/antigravity` and send `X-LLM-Proxy-Key` alongside Google's `Authorization` header.
+- **If your Antigravity client supports custom headers (direct):** Set the Cloud Code Assist base URL to `https://proxy.example.com/antigravity` and send `X-LLM-Meter-Key` alongside Google's `Authorization` header.
 - For the tested T3 Code Antigravity setup, run `llm-meter-relay` on the machine hosting the ACP process. Create an executable launcher named `antigravity` or `agy`.
 
 ```sh
@@ -525,13 +520,13 @@ The relay enforces strict checks when opening `--key-file`:
 **Container UID/GID choices:**
 
 - **Recommended (default Compose example):** Run with `user: "${RELAY_UID}:${RELAY_GID}"` matching the host owner of `proxy.key` and `data`, and set `bind: { create_host_path: false }` so Docker fails fast instead of silently creating an empty directory if a path is missing.
-- **Alternative (built-in image user):** Omit `user:` to run as the image's default `llmproxy` user (`10001:10001`), and `chown 10001:10001` on `proxy.key` (`0600`) and `data` (`0700`) on the host.
+- **Alternative (built-in image user):** Omit `user:` to run as the image's default `llmmeter` user (`10001:10001`), and `chown 10001:10001` on `proxy.key` (`0600`) and `data` (`0700`) on the host.
 
 ### 6.3 When `/data` is needed
 
 | Component / mode | Is persistent `/data` needed? | What is stored there |
 | --- | --- | --- |
-| **LLM Meter server** | **Always** (`DATA_DIR=/data` in Docker, `./data` natively) | `llm-proxy.db` — clients, hashed proxy keys, request/usage ledger, allowances, and cached pricing catalogs. |
+| **LLM Meter server** | **Always** (`DATA_DIR=/data` in Docker, `./data` natively) | `llm-meter.db` — clients, hashed proxy keys, request/usage ledger, allowances, and cached pricing catalogs. |
 | **Relay (`remote-proxy`)** | **No** (not opened or written) | Nothing. Mounting `/data` in the default Compose file is harmless and makes switching to `usage-only` a one-line change. |
 | **Relay (`usage-only`)** | **Yes** (`--data-dir`) | `usage-outbox.db` — durable SQLite queue of pending usage events plus the destination `(endpoint, key)` fingerprint. |
 
@@ -541,7 +536,7 @@ The relay enforces strict checks when opening `--key-file`:
 
 - The relay queues metered HTTP requests, WebSocket usage, and quota observations in `usage-outbox.db`. Each event has a stable ID and a 16 KiB size limit.
 - **Queue capacity:** Up to **10,000** pending events. If the queue reaches 10,000 events during an extended server outage, new events are dropped with log message `Could not queue a usage report`, while live model traffic to providers continues uninterrupted.
-- **Ordered delivery & deduplication:** A single background worker uploads events strictly in FIFO order via `POST https://<target>/api/usage/events` with `X-LLM-Proxy-Key` and a 10-second timeout. The server returns `204 No Content` and deduplicates retries atomically by `(client_id, event_id)`, so retries never double-count.
+- **Ordered delivery & deduplication:** A single background worker uploads events strictly in FIFO order via `POST https://<target>/api/usage/events` with `X-LLM-Meter-Key` and a 10-second timeout. The server returns `204 No Content` and deduplicates retries atomically by `(client_id, event_id)`, so retries never double-count.
 - The uploader sends requests to the configured HTTPS URL. A redirect response leaves the event queued for retry at that URL.
 - **Retry backoff vs. permanent rejection:**
   - **Retryable errors** (network failure, timeout, `401`, `404`, `405`, `429`, `5xx`, redirects): event stays queued; relay logs `Usage event remains queued` and backs off exponentially from **1 second** up to **60 seconds** (`1s → 2s → 4s → ... → 60s`), resetting to 1s after a successful upload.
@@ -552,21 +547,7 @@ The relay enforces strict checks when opening `--key-file`:
 
 ## 7. Lifecycle, Upgrades, and Key Rotation
 
-### Upgrading from LLM Proxy
-
-The repository moved to [`mishankov/llm-meter`](https://github.com/mishankov/llm-meter). To update an existing checkout, run:
-
-```sh
-git remote set-url origin https://github.com/mishankov/llm-meter.git
-```
-
-LLM Meter continues publishing the `ghcr.io/mishankov/llm-proxy` and `ghcr.io/mishankov/llm-proxy-relay` image names. To switch to `llm-meter` and `llm-meter-relay`, update the image reference in your existing deployment. Keep the Compose service name, the server's `/data` mount, and the relay's key and outbox mounts. The examples for new installs use `~/.config/llm-meter/relay`; existing relays can keep their current host paths.
-
-For Codex or OpenCode with ChatGPT sign-in, change the client base URL from `/backend-api/codex` to `/codex`. If your remote-proxy relay specifies the old route in `--target`, update that path as well. Drain any pending usage-only reports before upgrading the server and relay. Clients continue using their existing credentials and `X-LLM-Proxy-Key` header.
-
 ### Upgrading the LLM Meter server
-
-Upgrade the server **before** enabling `usage-only` on any relay.
 
 1. Keep the existing `/data` volume and `DASHBOARD_TOKEN`.
 2. Pull the new image and recreate the container (or replace the native binary and restart):
@@ -583,8 +564,6 @@ Upgrade the server **before** enabling `usage-only` on any relay.
    # Expect: 204
    ```
 
-SQLite schema additions (such as `measurement_source`, `relay_events`, and `relay_completions`) apply automatically on startup.
-
 ### Upgrading the relay
 
 ```sh
@@ -593,7 +572,7 @@ docker compose pull relay
 docker compose up -d relay
 ```
 
-For native binaries, rebuild with `go build -o llm-meter-relay ./cmd/llm-proxy-relay` and restart the process. In `usage-only` mode, keeping the same `--data-dir` preserves any queued events across the restart.
+For native binaries, rebuild with `go build -o llm-meter-relay ./cmd/llm-meter-relay` and restart the process. In `usage-only` mode, keeping the same `--data-dir` preserves any queued events across the restart.
 
 ### Check for pending reports
 
@@ -608,10 +587,8 @@ A result of `0` means the queue is empty. If it stays above zero, check the rela
 ### Switching relay modes
 
 - **`remote-proxy` → `usage-only`:**
-  1. Confirm the server has been upgraded to support `POST /api/usage/events`.
-  2. Ensure `--target` is the server origin only (no `/v1`, `/antigravity`, `/codex`, or `/opencode-go` path).
-  3. Ensure `--data-dir` points to a persistent directory.
-  4. Add `--mode=usage-only` and restart the relay.
+  1. Set `--data-dir` to a persistent directory.
+  2. Add `--mode=usage-only` and restart the relay.
 - **`usage-only` → `remote-proxy`:**
   1. [Check for pending reports](#check-for-pending-reports) and wait for the queue to empty.
   2. Remove `--mode=usage-only` and restart the relay.
@@ -640,16 +617,15 @@ Use a fresh queue directory when changing the proxy key or destination. The exis
 | `<NAME>_UPSTREAM must be an HTTP or HTTPS base URL without credentials, query, or fragment` | Malformed upstream override | Remove any `user:pass@`, `?query`, or `#fragment` and include `http://` or `https://`. |
 | `dashboard build unavailable` (native run) | Built without `-tags embedui` and `web/build/index.html` is missing | Run `npm ci --prefix web && npm run build --prefix web`, set `DASHBOARD_DIR`, or build with `-tags embedui`. |
 | Dashboard prompts to unlock again right after sign-in | Running over plain `http://` while `COOKIE_SECURE=true` | Set `COOKIE_SECURE=false` for local `http://localhost:8080`, or access over HTTPS via your reverse proxy. |
-| `401 A valid X-LLM-Proxy-Key is required` on proxy requests | Sent `DASHBOARD_TOKEN`, missing/duplicate `X-LLM-Proxy-Key` header, or revoked key | Create a client key (`llmp_...`) in **Clients** and send exactly one `X-LLM-Proxy-Key` header. |
+| `401 A valid X-LLM-Meter-Key is required` on proxy requests | Sent `DASHBOARD_TOKEN`, missing/duplicate `X-LLM-Meter-Key` header, or revoked key | Create a client key (`llmm_...`) in **Clients** and send exactly one `X-LLM-Meter-Key` header. |
 
 ### Relay startup errors
 
 | Error message | Likely cause | Fix |
 | --- | --- | --- |
-| `--target must be an HTTPS LLM Meter URL without user info, query, or fragment` | Used `http://`, or included credentials/query/fragment | Use an `https://` origin such as `https://proxy.example.com`. |
-| `--target must be an HTTPS LLM Meter origin in usage-only mode` | Included a route like `/antigravity` or `/v1` in `--target` with `--mode usage-only` | Strip the path so `--target` is only `https://proxy.example.com`; use `--provider` if you want to restrict routes. |
-| `--target must be an HTTPS LLM Meter origin or a matching provider route` | Path on `--target` is not a valid provider route or disagrees with `--provider` | Use the server origin only, or make `--provider` and the `--target` path match. |
+| `--target must be an HTTPS LLM Meter origin without a route, user info, query, or fragment` | The target contains a path, credentials, a query, or a fragment, or uses HTTP | Set `--target` to a server origin such as `https://proxy.example.com`. |
 | `--upstream requires --mode usage-only` | Passed `--upstream` in `remote-proxy` mode | Add `--mode usage-only`, or set `*_UPSTREAM` on the LLM Meter server instead. |
+| `--upstream requires --provider` | Passed `--upstream` without a provider selection | Set `--provider` to the provider whose base URL you want to override. |
 | `the provider and LLM Meter must use different hosts in usage-only mode` | `--upstream` (or default provider upstream) shares a hostname with `--target` | Point `--target` at your LLM Meter server host and `--upstream` at the provider host. |
 | `--listen must specify a loopback IP and port` / `--bind requires 0.0.0.0 and a fixed port...` | Non-loopback `--listen`, ephemeral port `0`, or non-`0.0.0.0` `--bind` | Use `127.0.0.1:<port>` or `[::1]:<port>` for `--listen`; in Docker pair it with `--bind=0.0.0.0:<port>`. |
 | `cannot open the proxy key file` / `must be a regular file` / `must be accessible only to its owner` / `must contain a single key` | Wrong path, directory mounted instead of file, loose permissions, container UID mismatch, or extra lines/whitespace | Verify `proxy.key` exists as a regular single-line file, run `chmod 600 proxy.key`, and match `RELAY_UID`/`RELAY_GID` (or `10001:10001`). |
@@ -661,7 +637,7 @@ Use a fresh queue directory when changing the proxy key or destination. The exis
 | --- | --- | --- |
 | `403 Forbidden` | Request `Host` header does not match `--listen` (e.g., client used `localhost:8765` instead of `127.0.0.1:8765`, or host port mapping differs from `--listen`), or request included `Origin` / `Sec-Fetch-Site` | Point clients at `http://127.0.0.1:<port>` matching `--listen`, and do not call the relay from browser contexts sending `Origin`/`Sec-Fetch-Site`. |
 | `401 Google authorization is required` / `401 Provider authorization is required` | Client did not send its upstream auth header | Confirm the client is signed in (Google for Antigravity, ChatGPT for Codex) or configured with its provider API key. |
-| `404 Not Found` | Wrong base URL path (e.g., `/antigravity` on the relay instead of root `http://127.0.0.1:8765`), or route excluded by `--provider` / legacy `--target` | Check [Section 3](#all-four-client-base-paths) and verify `--provider` / `--target` scope. |
+| `404 Not Found` | Wrong client base URL or route excluded by `--provider` | Check the client base URL and provider scope. [Client base URLs](#all-four-client-base-paths) |
 | `502 LLM Meter unavailable` (`remote-proxy`) | Relay cannot connect to the LLM Meter server over HTTPS | Check DNS, TLS certificate trust, firewall/VPN, and server `/healthz`. |
 | `502 Upstream unavailable` (`usage-only` or direct server) | Provider upstream is unreachable or refused the connection | Check outbound HTTPS connectivity and any `--upstream` / `*_UPSTREAM` override. |
 
@@ -669,10 +645,10 @@ Use a fresh queue directory when changing the proxy key or destination. The exis
 
 | Symptom / Log message | Likely cause | Fix |
 | --- | --- | --- |
-| `Usage event remains queued` (`HTTP 404` or `HTTP 405`) | LLM Meter server does not yet support `POST /api/usage/events` | Upgrade the LLM Meter server; queued events drain automatically once the updated server is running. |
+| `Usage event remains queued` (`HTTP 404` or `HTTP 405`) | Usage endpoint unavailable at the configured target | Verify the target origin and that its ingress routes `POST /api/usage/events` to LLM Meter. |
 | `Usage event remains queued` (`HTTP 401`) | Proxy key in `proxy.key` is invalid or revoked | Verify the key matches an active client key in **Clients** (follow [key rotation](#rotating-proxy-keys-or-moving-to-another-server-usage-only) if replacing it). |
 | `Usage event remains queued` (`HTTP 301`/`302`/`307`/`308`) | Reverse proxy is redirecting `POST /api/usage/events` | Point `--target` at the canonical HTTPS hostname; the relay intentionally does not follow redirects. |
 | `Could not queue a usage report` | Queue hit the 10,000-event cap during an outage, or `--data-dir` is unwritable/full | Restore connectivity to the server so the queue drains; verify `--data-dir` ownership (`RELAY_UID`/`RELAY_GID`) and free disk space. |
 | `Discarded usage event rejected by the server` (`400`/`413`/`422`) | Server rejected the payload (version mismatch or host clock more than 10 minutes ahead of server) | Synchronize system clocks (NTP) and keep relay and server versions aligned. |
-| Requests appear as **Unpriced** | Provider omitted cost and model/category lacks a rate, or Models.dev flags separate audio rates | Check server logs for pricing feed refresh errors, ensure one Models.dev refresh succeeds after upgrading, or add complete rates for the model in `PRICING_FILE`. |
+| Requests appear as **Unpriced** | Provider omitted cost and model/category lacks a rate, or Models.dev flags separate audio rates | Check server logs for pricing feed refresh errors or add complete rates for the model in `PRICING_FILE`. |
 | Background response completion tokens missing on original request | Creation (`POST /v1/responses`) and polling (`GET /v1/responses/<id>`) used different dashboard clients or mixed `proxy` and `relay` modes | Route creation and polling through the same dashboard client and mode. |

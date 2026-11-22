@@ -13,29 +13,27 @@ export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
 docker build -t llm-meter .
 docker run --rm -p 127.0.0.1:8080:8080 \
   -e DASHBOARD_TOKEN -e COOKIE_SECURE=false \
-  -v llm-proxy-data:/data llm-meter
+  -v llm-meter-data:/data llm-meter
 ```
 
 Open `http://localhost:8080` and enter the value of `DASHBOARD_TOKEN`. Go serves the bundled dashboard and proxy from the same container. The volume holds the SQLite database and survives container replacement. Keep the dashboard token stable across restarts. For remote access on a VPS or Pi, serve the container through an HTTPS ingress and leave `COOKIE_SECURE` at its default `true`.
 
 CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-meter`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-meter` in the `docker run` command.
 
-Upgrading from LLM Proxy? CI also publishes the existing `llm-proxy` and `llm-proxy-relay` image names. Keep your keys and data mounts when changing the image tag. For Codex and OpenCode with ChatGPT sign-in, change any client base URL or relay `--target` that ends in `/backend-api/codex` to end in `/codex`. [Upgrade instructions](docs/configuration.md#upgrading-from-llm-proxy)
-
 ## Connect a client
 
 1. Open **Clients**, create a client, and copy its proxy key when shown.
 2. Set the client's OpenAI base URL to `https://proxy.example.com/v1` (or `http://localhost:8080/v1` for local use).
-3. Send the proxy key in `X-LLM-Proxy-Key` alongside the client's usual upstream `Authorization` header. The proxy validates its own key and strips it before forwarding the request.
+3. Send the proxy key in `X-LLM-Meter-Key` alongside the client's usual upstream `Authorization` header. The proxy validates its own key and strips it before forwarding the request.
 
-For OpenCode, add these fields to the OpenAI provider in `opencode.jsonc` and set `LLM_PROXY_KEY` in its environment:
+For OpenCode, add these fields to the OpenAI provider in `opencode.jsonc` and set `LLM_METER_KEY` in its environment:
 
 ```jsonc
 {
   "providers": {
     "openai": {
       "settings": { "baseURL": "https://proxy.example.com/v1" },
-      "headers": { "X-LLM-Proxy-Key": "{env:LLM_PROXY_KEY}" }
+      "headers": { "X-LLM-Meter-Key": "{env:LLM_METER_KEY}" }
     }
   }
 }
@@ -45,7 +43,7 @@ If OpenCode's `openai` provider is signed in with ChatGPT, use `https://proxy.ex
 
 ### Signed-in Codex
 
-Create a separate client key for Codex. In the user `config.toml` read by the Codex process that T3 uses, select a provider that keeps Codex's existing sign-in and sends the proxy access header. Use a new session after changing the provider. Supply `LLM_PROXY_KEY` through the environment of that Codex process.
+Create a separate client key for Codex. In the user `config.toml` read by the Codex process that T3 uses, select a provider that keeps Codex's existing sign-in and sends the proxy access header. Use a new session after changing the provider. Supply `LLM_METER_KEY` through the environment of that Codex process.
 
 ```toml
 model_provider = "metered-codex"
@@ -56,7 +54,7 @@ base_url = "https://proxy.example.com/codex"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = true
-env_http_headers = { "X-LLM-Proxy-Key" = "LLM_PROXY_KEY" }
+env_http_headers = { "X-LLM-Meter-Key" = "LLM_METER_KEY" }
 ```
 
 The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route forwards to the OpenAI API. The dashboard shows remaining Codex allowance when the upstream reports a recent reading.
@@ -65,7 +63,7 @@ The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route 
 
 Create an Antigravity client in the dashboard and use `https://proxy.example.com/antigravity` as the Cloud Code Assist base URL. The proxy appends the native request path, such as `/v1internal:loadCodeAssist` or `/v1internal:streamGenerateContent`, to `ANTIGRAVITY_UPSTREAM` (default `https://daily-cloudcode-pa.googleapis.com`).
 
-Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Proxy-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs.
+Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Meter-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs.
 
 If your Antigravity client accepts only an endpoint override, [run the relay](#run-the-relay) on the same machine as the ACP process.
 
@@ -93,7 +91,7 @@ One relay serves all four supported providers on the same port. Set `--target` t
 | `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
 | `remote-proxy` (default) | Relay connects to LLM Meter, which forwards to the provider | Server meters the proxied request |
 
-Usage-only mode sends the model, token counts, outcome, and any reported costs or quotas. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`). Use a server version that supports usage ingestion before starting a `usage-only` relay.
+Usage-only mode sends the model, token counts, outcome, and any reported costs or quotas. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`).
 
 | Provider | Client base URL | HTTPS server path in `remote-proxy` mode |
 | --- | --- | --- |
@@ -104,7 +102,7 @@ Usage-only mode sends the model, token counts, outcome, and any reported costs o
 
 Point each client at its local base URL and use its usual provider authentication. The relay picks the provider from the request path and uses the provider's standard upstream in `usage-only` mode.
 
-To limit an instance to one route, set `--provider` to one of `antigravity`, `openai`, `codex`, or `opencode-go`. In `usage-only` mode, `--upstream` sets another trusted HTTPS provider base URL for that route. An upstream override without `--provider` keeps the original Antigravity scope. A `remote-proxy` target URL ending in one of the server paths in the table also limits the relay to that route, preserving existing commands such as `--target https://proxy.example.com/antigravity`.
+To limit an instance to one route, set `--provider` to one of `antigravity`, `openai`, `codex`, or `opencode-go`. In `usage-only` mode, pair `--upstream` with `--provider` to set a trusted HTTPS base URL for that provider.
 
 ### Relay with Docker
 
@@ -155,13 +153,13 @@ export RELAY_UID="$(id -u)" RELAY_GID="$(id -g)"
 docker compose up -d relay
 ```
 
-Add `--mode=usage-only` under `command` to send only usage reports to a server that supports ingestion. Keep the state directory mounted so pending reports survive container replacement. Drain pending reports before moving to a different usage server or key, then use a fresh state directory.
+Add `--mode=usage-only` under `command` to send only usage reports to the server. Keep the state directory mounted so pending reports survive container replacement. Drain pending reports before moving to a different usage server or key, then use a fresh state directory.
 
 Attach only trusted clients to the relay's Docker network because containers on that network can reach the relay directly. Use Docker Engine 28 or newer and keep the published port bound to `127.0.0.1`. [Docker bridge networking](https://docs.docker.com/engine/network/drivers/bridge/) · [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/#publishing-ports)
 
 ### Relay as a Go binary
 
-Build with `go build -o llm-meter-relay ./cmd/llm-proxy-relay`. The binary listens on `127.0.0.1:8765` by default.
+Build with `go build -o llm-meter-relay ./cmd/llm-meter-relay`. The binary listens on `127.0.0.1:8765` by default.
 
 ```sh
 ./llm-meter-relay --target https://proxy.example.com --key-file "$HOME/.config/llm-meter/relay/proxy.key"
@@ -175,7 +173,7 @@ The ledger saves provider-reported amounts, including zero, and uses local rates
 
 The proxy refreshes the public OpenCode Go and Models.dev price catalogs at startup and every 24 hours. It stores the last usable catalogs in SQLite, so a failed refresh or temporary outage leaves rates available. Each priced request retains the amount and rates recorded at the time of use. Rows display **Unpriced** when a required price is unknown or Models.dev lists separate audio rates that cannot be applied to the total token counts.
 
-Upgrading from an older catalog requires one successful Models.dev refresh to check for separate audio rates. The ledger also applies the published 2-hour and 8-hour discounts to eligible OpenAI background estimates when a completed response is retrieved.
+The ledger applies the published 2-hour and 8-hour discounts to eligible OpenAI background estimates when a completed response is retrieved.
 
 Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. Overrides take precedence over downloaded and built-in rates when estimating a cost. Include a rate for each token category used by the model. Use `0` for a category that is free. For example:
 

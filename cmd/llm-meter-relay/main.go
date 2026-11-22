@@ -43,8 +43,8 @@ func main() {
 	flag.StringVar(&opts.bind, "bind", "", "container socket address, e.g. 0.0.0.0:8765 with a loopback-only Docker port mapping")
 	flag.StringVar(&opts.mode, "mode", remoteProxyMode, "remote-proxy or usage-only")
 	flag.StringVar(&opts.provider, "provider", "", "restrict to antigravity, openai, codex, or opencode-go (default all)")
-	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Meter origin (remote-proxy also accepts a legacy provider route)")
-	flag.StringVar(&opts.upstream, "upstream", "", "direct HTTPS provider base URL override in usage-only mode (scopes to Antigravity if --provider is omitted)")
+	flag.StringVar(&opts.target, "target", "", "HTTPS LLM Meter origin")
+	flag.StringVar(&opts.upstream, "upstream", "", "HTTPS provider base URL override in usage-only mode with --provider")
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to the private proxy key file")
 	flag.StringVar(&opts.dataDir, "data-dir", "./data/relay", "persistent directory for this connection's pending usage in usage-only mode")
 	flag.Parse()
@@ -181,37 +181,18 @@ func configureRelay(opts options) (relayConfig, error) {
 		return relayConfig{}, errors.New("unknown --provider")
 	}
 	origin, err := parseHTTPS(opts.target)
-	if err != nil {
-		return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter URL without user info, query, or fragment")
+	if err != nil || strings.TrimSuffix(origin.EscapedPath(), "/") != "" {
+		return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter origin without a route, user info, query, or fragment")
 	}
-	path := strings.TrimSuffix(origin.EscapedPath(), "/")
 	var config relayConfig
 	switch opts.mode {
 	case remoteProxyMode:
 		if opts.upstream != "" {
 			return relayConfig{}, errors.New("--upstream requires --mode usage-only")
 		}
-		if path != "" {
-			// A target from the single-provider relay keeps its previous scope.
-			if selected == "" {
-				for name, provider := range providers {
-					if provider.prefix == path {
-						selected = name
-						break
-					}
-				}
-			}
-			if selected == "" || providers[selected].prefix != path {
-				return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter origin or a matching provider route")
-			}
-		}
 	case usageOnlyMode:
-		if path != "" {
-			return relayConfig{}, errors.New("--target must be an HTTPS LLM Meter origin in usage-only mode")
-		}
 		if opts.upstream != "" && selected == "" {
-			// Before multi-provider routing, an upstream override defaulted to Antigravity.
-			selected = "antigravity"
+			return relayConfig{}, errors.New("--upstream requires --provider")
 		}
 		usageTarget := *origin
 		usageTarget.Path, usageTarget.RawPath = usagereport.Path, ""

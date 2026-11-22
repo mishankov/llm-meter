@@ -104,7 +104,7 @@ func TestDashboardServesPrecompressedAssets(t *testing.T) {
 
 func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-LLM-Proxy-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
+		if r.Header.Get("X-LLM-Meter-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
 			t.Errorf("incorrect authorization handling for %s", r.URL.Path)
 		}
 		id, outputTokens := "resp_api", 30
@@ -162,7 +162,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 			t.Fatal(err)
 		}
 		if key != "" {
-			r.Header.Set("X-LLM-Proxy-Key", key)
+			r.Header.Set("X-LLM-Meter-Key", key)
 			r.Header.Set("Authorization", "Bearer fixture-upstream-token")
 		}
 		if body != "" {

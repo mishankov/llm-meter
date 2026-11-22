@@ -221,7 +221,7 @@ func createKey(ctx context.Context, db interface {
 }, clientID string, now time.Time) (Key, error) {
 	var random [32]byte
 	rand.Read(random[:])
-	token := "llmp_" + base64.RawURLEncoding.EncodeToString(random[:])
+	token := "llmm_" + base64.RawURLEncoding.EncodeToString(random[:])
 	digest := sha256.Sum256([]byte(token))
 	key := Key{ID: rand.Text(), Prefix: token[:13], CreatedAt: now, Token: token}
 	result, err := db.ExecContext(ctx, `INSERT INTO client_keys (id, client_id, digest, prefix, created_at)
@@ -250,7 +250,7 @@ func (s *Store) RevokeKey(ctx context.Context, clientID, keyID string, now time.
 }
 
 func (s *Store) AuthenticateKey(ctx context.Context, token string, now time.Time) (string, error) {
-	if len(token) != 48 || token[:5] != "llmp_" {
+	if len(token) != 48 || token[:5] != "llmm_" {
 		return "", sql.ErrNoRows
 	}
 	digest := sha256.Sum256([]byte(token))

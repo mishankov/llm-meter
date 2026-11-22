@@ -16,11 +16,10 @@ COPY --from=web /src/web/build ./web/build
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags embedui -trimpath -ldflags='-s -w' -o /llm-meter .
 
 FROM alpine:3.23
-RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 llmproxy && \
-    adduser -S -u 10001 -G llmproxy llmproxy && mkdir /data && chown llmproxy:llmproxy /data
+RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 llmmeter && \
+    adduser -S -u 10001 -G llmmeter llmmeter && mkdir /data && chown llmmeter:llmmeter /data
 COPY --from=build /llm-meter /usr/local/bin/llm-meter
-RUN ln -s llm-meter /usr/local/bin/llm-proxy
-USER llmproxy
+USER llmmeter
 ENV DATA_DIR=/data
 EXPOSE 8080
 VOLUME ["/data"]

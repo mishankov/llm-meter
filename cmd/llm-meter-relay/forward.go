@@ -12,7 +12,7 @@ import (
 	"github.com/mishankov/llm-meter/internal/proxy"
 )
 
-const keyHeader = "X-LLM-Proxy-Key"
+const keyHeader = "X-LLM-Meter-Key"
 
 const (
 	apiPrefix = "/v1"

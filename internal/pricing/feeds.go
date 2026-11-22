@@ -187,7 +187,7 @@ func Fetch(ctx context.Context, client *http.Client, feed Feed) (Snapshot, error
 		return result, err
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "llm-proxy/1.0")
+	request.Header.Set("User-Agent", "llm-meter/1.0")
 	response, err := client.Do(request)
 	if err != nil {
 		return result, err

@@ -500,7 +500,7 @@
       <p class="copy-status muted" aria-live="polite">
         {#if copyState === 'copied'}Key copied.{:else if copyState === 'manual'}Key selected. Use your system’s copy shortcut.{/if}
       </p>
-      <p class="muted">Send it in the <code>X-LLM-Proxy-Key</code> header.</p>
+      <p class="muted">Send it in the <code>X-LLM-Meter-Key</code> header.</p>
       <div class="dialog-actions key-dialog-actions">
         {#if copyState !== 'copied'}
           <AlertDialog

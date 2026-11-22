@@ -2,7 +2,6 @@
 .agents
 .env*
 data
-llm-proxy
 llm-meter
 llm-meter-relay
 web/node_modules

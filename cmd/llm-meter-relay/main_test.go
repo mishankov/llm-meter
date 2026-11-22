@@ -35,7 +35,7 @@ func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 		query  = "alt=sse&fixture=a%2Bb&label=a;b"
 		body   = `{"model":"fixture"}`
 		bearer = "Bearer fixture-google-token"
-		key    = "llmp_fixture"
+		key    = "llmm_fixture"
 		first  = "data: first\n\n"
 		last   = "data: last\n\n"
 	)
@@ -149,7 +149,7 @@ func TestRelayHidesUpstreamErrors(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "http://"+host+"/v1internal:loadCodeAssist", nil)
 	request.Header.Set("Authorization", "Bearer fixture")
 	response := httptest.NewRecorder()
-	antigravityRelay(host, target, "llmp_fixture", transport).ServeHTTP(response, request)
+	antigravityRelay(host, target, "llmm_fixture", transport).ServeHTTP(response, request)
 	if response.Code != http.StatusBadGateway || response.Body.String() != "LLM Meter unavailable\n" {
 		t.Fatalf("upstream error was not sanitized: status %d", response.Code)
 	}
@@ -175,20 +175,20 @@ func TestRelayConfiguration(t *testing.T) {
 		}
 	}
 	path := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(path, []byte("llmp_fixture\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("llmm_fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if key, err := readKey(path); err != nil || key != "llmp_fixture" {
+	if key, err := readKey(path); err != nil || key != "llmm_fixture" {
 		t.Fatalf("could not read the private key file: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("llmp_fixture\nsecond-line\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("llmm_fixture\nsecond-line\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readKey(path); err == nil {
 		t.Fatal("accepted a multiline key")
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.WriteFile(path, []byte("llmp_fixture\n"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("llmm_fixture\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(path, 0o644); err != nil {
@@ -204,16 +204,13 @@ func TestRelayDestinations(t *testing.T) {
 	for _, test := range []struct {
 		name, mode, provider, target, upstream, wantRoute string
 	}{
-		{"legacy Antigravity command", remoteProxyMode, "", "https://proxy.test/antigravity", "", "https://proxy.test/antigravity"},
-		{"Codex route", remoteProxyMode, "", "https://proxy.test/codex/", "", "https://proxy.test/codex"},
-		{"removed Codex route", remoteProxyMode, "", "https://proxy.test/backend-api/codex", "", ""},
-		{"remote with explicit provider", remoteProxyMode, "codex", "https://proxy.test", "", "https://proxy.test/codex"},
-		{"remote with explicit matching route", remoteProxyMode, "codex", "https://proxy.test/codex", "", "https://proxy.test/codex"},
+		{"remote target with route", remoteProxyMode, "", "https://proxy.test/antigravity", "", ""},
+		{"remote with explicit provider", remoteProxyMode, "codex", "https://proxy.test/", "", "https://proxy.test/codex"},
+		{"remote target with selected route", remoteProxyMode, "codex", "https://proxy.test/codex", "", ""},
 		{"usage with explicit provider", usageOnlyMode, "codex", "https://proxy.test/", "", providers["codex"].defaultUpstream},
 		{"custom upstream", usageOnlyMode, "codex", "https://proxy.test", "https://upstream.test/codex", "https://upstream.test/codex"},
-		{"remote with mismatched route", remoteProxyMode, "codex", "https://proxy.test/v1", "", ""},
 		{"remote with override", remoteProxyMode, "codex", "https://proxy.test", "https://upstream.test/codex", ""},
-		{"legacy Antigravity upstream override", usageOnlyMode, "", "https://proxy.test", "https://upstream.test", "https://upstream.test"},
+		{"custom upstream without a provider", usageOnlyMode, "", "https://proxy.test", "https://upstream.test", ""},
 		{"usage with proxy route", usageOnlyMode, "codex", "https://proxy.test/codex", "", ""},
 		{"usage with same upstream host", usageOnlyMode, "codex", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
 		{"usage with a default upstream on the proxy host", usageOnlyMode, "", "https://chatgpt.com", "", ""},
@@ -234,9 +231,6 @@ func TestRelayDestinations(t *testing.T) {
 			if test.mode == usageOnlyMode && (config.usageTarget == nil || config.usageTarget.String() != "https://proxy.test/api/usage/events") {
 				t.Fatalf("unexpected usage target %v", config.usageTarget)
 			}
-			if test.mode == usageOnlyMode && test.provider == "" && config.routes[0].provider != providers["antigravity"] {
-				t.Fatal("the legacy upstream override must scope to Antigravity")
-			}
 		})
 	}
 	if addr, err := listenAddress("127.0.0.1:8765", "0.0.0.0:8765"); err != nil || addr != "0.0.0.0:8765" {
@@ -251,7 +245,7 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 	const (
 		host   = "127.0.0.1:8765"
 		bearer = "Bearer provider-fixture"
-		key    = "llmp_relay-fixture"
+		key    = "llmm_relay-fixture"
 		body   = `{"model":"fixture","input":"only the provider sees this in usage-only mode"}`
 		usage  = `{"id":"resp_fixture","model":"fixture","usage":{"input_tokens":12,"output_tokens":2}}`
 		gemini = `{"response":{"responseId":"resp_fixture","modelVersion":"fixture","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":2}}}`
@@ -324,7 +318,7 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 
 func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 	const host = "127.0.0.1:8765"
-	const key = "llmp_fixture"
+	const key = "llmm_fixture"
 	const authorization = "Bearer provider-fixture"
 	requests := []struct {
 		provider, method, localPath, remotePath, directPath string

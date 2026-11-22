@@ -185,7 +185,7 @@ func (q *Queue) upload(ctx context.Context, payload []byte) error {
 		return errors.New("could not create usage upload request")
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-LLM-Proxy-Key", q.key)
+	request.Header.Set("X-LLM-Meter-Key", q.key)
 	response, err := q.client.Do(request)
 	if err != nil {
 		return errors.New("could not reach the usage server")

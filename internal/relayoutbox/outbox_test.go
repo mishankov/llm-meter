@@ -15,7 +15,7 @@ import (
 
 const (
 	uploadPath = "/api/usage/events"
-	fixtureKey = "llmp_fixture_usage_key"
+	fixtureKey = "llmm_fixture_usage_key"
 )
 
 func TestRunRetriesPersistedEventsInOrder(t *testing.T) {
@@ -26,7 +26,7 @@ func TestRunRetriesPersistedEventsInOrder(t *testing.T) {
 	var count atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != uploadPath ||
-			r.Header.Get("Content-Type") != "application/json" || r.Header.Get("X-LLM-Proxy-Key") != fixtureKey {
+			r.Header.Get("Content-Type") != "application/json" || r.Header.Get("X-LLM-Meter-Key") != fixtureKey {
 			t.Error("incorrect usage upload request")
 		}
 		payload, err := io.ReadAll(r.Body)

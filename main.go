@@ -70,7 +70,7 @@ func run() error {
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	store, err := ledger.Open(filepath.Join(dataDir, "llm-proxy.db"), catalog)
+	store, err := ledger.Open(filepath.Join(dataDir, "llm-meter.db"), catalog)
 	if err != nil {
 		return err
 	}
@@ -154,14 +154,14 @@ func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http
 
 func withClientKey(store *ledger.Store, next func(http.ResponseWriter, *http.Request, string), log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		keys := r.Header.Values("X-LLM-Proxy-Key")
+		keys := r.Header.Values("X-LLM-Meter-Key")
 		if len(keys) != 1 {
-			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Proxy-Key is required")
+			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Meter-Key is required")
 			return
 		}
 		clientID, err := store.AuthenticateKey(r.Context(), keys[0], time.Now().UTC())
 		if ledger.NotFound(err) {
-			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Proxy-Key is required")
+			proxyError(w, http.StatusUnauthorized, "A valid X-LLM-Meter-Key is required")
 			return
 		}
 		if err != nil {
@@ -169,7 +169,7 @@ func withClientKey(store *ledger.Store, next func(http.ResponseWriter, *http.Req
 			proxyError(w, http.StatusServiceUnavailable, "Proxy authentication unavailable")
 			return
 		}
-		r.Header.Del("X-LLM-Proxy-Key")
+		r.Header.Del("X-LLM-Meter-Key")
 		next(w, r, clientID)
 	})
 }

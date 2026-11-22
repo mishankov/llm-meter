@@ -46,7 +46,7 @@ func TestUsageReportsShareLedgerAndRetrySafely(t *testing.T) {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		if key != "" {
-			r.Header.Set("X-LLM-Proxy-Key", key)
+			r.Header.Set("X-LLM-Meter-Key", key)
 		}
 		w := httptest.NewRecorder()
 		app.ServeHTTP(w, r)
