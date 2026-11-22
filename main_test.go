@@ -25,6 +25,46 @@ import (
 	"github.com/mishankov/llm-meter/internal/pricing"
 )
 
+func TestDashboardServesPrerenderedPages(t *testing.T) {
+	handler := serveDashboard(fstest.MapFS{
+		"index.html":   {Data: []byte("<h1>Dashboard</h1>")},
+		"usage.html":   {Data: []byte("<h1>Usage</h1>")},
+		"clients.html": {Data: []byte("<h1>Clients</h1>")},
+	})
+
+	for _, test := range []struct {
+		method, path, body string
+		status             int
+		location           string
+	}{
+		{"GET", "/", "<h1>Dashboard</h1>", http.StatusOK, ""},
+		{"GET", "/usage?range=7d&source=api", "<h1>Usage</h1>", http.StatusOK, ""},
+		{"GET", "/clients?client=abc", "<h1>Clients</h1>", http.StatusOK, ""},
+		{"HEAD", "/clients?client=abc", "", http.StatusOK, ""},
+		{"GET", "/usage/?range=7d", "", http.StatusPermanentRedirect, "/usage?range=7d"},
+		{"GET", "/clients/?client=abc", "", http.StatusPermanentRedirect, "/clients?client=abc"},
+		{"GET", "/clients/unknown", "", http.StatusNotFound, ""},
+		{"GET", "/_app/immutable/missing.js", "", http.StatusNotFound, ""},
+		{"POST", "/usage", "", http.StatusMethodNotAllowed, ""},
+	} {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+			if response.Code != test.status || response.Header().Get("Location") != test.location {
+				t.Fatalf("status = %d, location = %q; want %d, %q", response.Code, response.Header().Get("Location"), test.status, test.location)
+			}
+			if test.status == http.StatusOK {
+				if response.Body.String() != test.body {
+					t.Errorf("body = %q, want %q", response.Body.String(), test.body)
+				}
+				if response.Header().Get("Cache-Control") != "no-cache" || !strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") {
+					t.Errorf("unexpected page headers: %v", response.Header())
+				}
+			}
+		})
+	}
+}
+
 func TestDashboardServesPrecompressedAssets(t *testing.T) {
 	const asset = "/_app/immutable/chunks/dashboard.js"
 	const legacyAsset = "/_app/immutable/chunks/legacy.js"

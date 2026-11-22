@@ -29,7 +29,7 @@
     draft?: string;
     renameDrafts: Map<string, string>;
     keyDialogOpen?: boolean;
-    navigate: (clientId?: string) => void;
+    navigate: (clientId?: string) => Promise<void>;
     viewUsage: (clientId: string, outcome?: RequestOutcome) => void;
     onUnauthorized: () => void;
   }
@@ -219,7 +219,7 @@
       });
       clients = [result.client, ...clients];
       draft = '';
-      navigate(result.client.id);
+      await navigate(result.client.id);
       await reveal(result.key);
     } catch (cause) {
       createError = mutationFailure(cause, 'Could not create the client', 'Check the refreshed client list before trying again. Your client name will be kept.');
@@ -327,7 +327,7 @@
       } else {
         clients = clients.filter((client) => client.id !== id);
         renameDrafts.delete(id);
-        if (active && clientId === id) navigate();
+        if (active && clientId === id) await navigate();
       }
       confirmOpen = false;
       await tick();
@@ -365,7 +365,7 @@
   }
 
   async function openClient(id: string, event: MouseEvent) {
-    navigate(id);
+    await navigate(id);
     void load(true);
     if (event.detail !== 0) return;
     await tick();

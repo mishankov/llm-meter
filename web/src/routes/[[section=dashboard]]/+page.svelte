@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { afterNavigate, goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { onMount, tick, untrack } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
@@ -8,11 +10,11 @@
   import { Button } from '@ui-sdk/svelte/button';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
-  import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../lib/api';
-  import favicon from '../lib/assets/favicon.png?no-inline';
-  import meterMark from '../lib/assets/llm-meter.png';
-  import { guardEnter } from '../lib/format';
-  import RecoveryNotice from '../lib/RecoveryNotice.svelte';
+  import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../../lib/api';
+  import favicon from '../../lib/assets/favicon.png?no-inline';
+  import meterMark from '../../lib/assets/llm-meter.png';
+  import { guardEnter } from '../../lib/format';
+  import RecoveryNotice from '../../lib/RecoveryNotice.svelte';
 
   const defaultFilters = { range: '24h', source: '', client: '', model: '', bucket: '', outcome: '' as RequestOutcome };
   type Filters = typeof defaultFilters;
@@ -41,7 +43,7 @@
   let chartMetric = $state<'cost' | 'tokens'>('tokens');
   let cursors = $state<string[]>(['']);
   let resetSnapshot = $state<{ filters: Filters; cursors: string[] } | null>(null);
-  let requestFocusHash = $state<string | null>(null);
+  let requestFocus = $state(false);
   let overviewResult = $state<{ data: Usage; query: string; updatedAt: string } | null>(null);
   let requestResult = $state<{ data: RequestPage; query: string } | null>(null);
   let loadingScope = $state<UsageScope | null>(null);
@@ -49,7 +51,7 @@
   let requestFailure = $state<ScopedProblem | null>(null);
   let request: AbortController | null = null;
   let refreshOnReturn = true;
-  const usageHref = $derived(usageHash(filters));
+  const usageHref = $derived(usageURL(filters));
   const overviewQuery = $derived(new URLSearchParams(
     Object.entries(filters).filter(([name, value]) => name !== 'bucket' && name !== 'outcome' && value)
   ).toString());
@@ -66,9 +68,21 @@
   const overviewError = $derived(overviewFailures.get(overviewQuery) ?? null);
   const requestError = $derived(requestFailure?.query === usageQuery ? requestFailure.problem : null);
 
+  afterNavigate(({ to }) => {
+    if (!to) return;
+    const legacy = legacyURL(to.url);
+    if (legacy) {
+      void goto(legacy, { replace: true, reset: false });
+      return;
+    }
+    requestFocus = false;
+    screen = to.params?.section === 'clients' ? 'clients' : 'usage';
+    clientId = screen === 'clients' ? to.url.searchParams.get('client') ?? '' : '';
+    if (screen === 'usage') readFilters(to.url.searchParams);
+  });
+
   onMount(() => {
     online = navigator.onLine;
-    readHash();
     void checkSession();
     const timer = window.setInterval(() => {
       if (canRefreshUsage() && cursors.length === 1) {
@@ -93,16 +107,15 @@
     untrack(() => void fetchUsage(overview, query, refreshOnReturn));
   });
 
-  function usageHash(values: Filters) {
+  function usageURL(values: Filters) {
     const query = new URLSearchParams();
     for (const name of Object.keys(defaultFilters) as Filter[]) {
       if (values[name] !== defaultFilters[name]) query.set(name, values[name]);
     }
-    return query.size ? '#usage?' + query.toString() : '#usage';
+    return query.size ? '/usage?' + query.toString() : '/usage';
   }
 
-  function readFilters(query: string) {
-    const params = new URLSearchParams(query);
+  function readFilters(params: URLSearchParams) {
     const range = params.get('range');
     const source = params.get('source');
     const outcome = params.get('outcome');
@@ -117,9 +130,9 @@
     const interval = (next.range === '24h' ? 1 : 24) * 3_600_000;
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(next.bucket) ||
       Date.parse(next.bucket) % interval !== 0) next.bucket = '';
-    const nextHash = usageHash(next);
-    if (nextHash !== usageHash(filters)) {
-      if (nextHash !== '#usage') resetSnapshot = null;
+    const nextURL = usageURL(next);
+    if (nextURL !== usageHref) {
+      if (nextURL !== '/usage') resetSnapshot = null;
       filters = next;
       cursors = [''];
     }
@@ -129,51 +142,55 @@
     return value && new TextEncoder().encode(value).length <= maxBytes ? value : '';
   }
 
-  function readHash() {
-    const hash = window.location.hash;
-    if (requestFocusHash !== hash) requestFocusHash = null;
-    const [path, query = ''] = hash.slice(1).split('?');
-    const [section, selected] = path.split('/');
-    screen = section === 'clients' ? 'clients' : 'usage';
-    clientId = screen === 'clients' && selected ? selected : '';
-    if (screen === 'usage') readFilters(query);
+  function legacyURL(url: URL) {
+    if (url.pathname !== '/') return;
+    const [path, query = ''] = url.hash.slice(1).split('?', 2);
+    if (path === 'usage') return query ? '/usage?' + query : '/usage';
+    if (path === 'clients') return '/clients';
+    const selected = /^clients\/([^/]+)$/.exec(path)?.[1];
+    if (selected) return '/clients?' + new URLSearchParams('client=' + selected);
+  }
+
+  function legacyHashChanged() {
+    const target = legacyURL(new URL(window.location.href));
+    // A browser-created fragment entry is outside SvelteKit's managed history.
+    if (target) window.location.replace(target);
   }
 
   function navigateClient(id?: string) {
-    const route = id ? '#clients/' + encodeURIComponent(id) : '#clients';
-    window.location.hash = route;
-    readHash();
+    const route = id ? '/clients?' + new URLSearchParams({ client: id }) : '/clients';
+    return goto(route, { reset: false });
   }
 
   function viewUsage(id: string, outcome: RequestOutcome = '') {
-    navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id, source: '', model: '', bucket: '', outcome }, outcome !== '');
+    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id, source: '', model: '', bucket: '', outcome }, outcome !== '');
   }
 
   function filtersChanged(name: Filter, value: string) {
     if (filters[name] === value) return;
-    navigateUsage({ ...filters, [name]: value, bucket: name === 'bucket' ? value : name === 'outcome' ? filters.bucket : '' });
+    void navigateUsage({ ...filters, [name]: value, bucket: name === 'bucket' ? value : name === 'outcome' ? filters.bucket : '' });
   }
 
-  function navigateUsage(values: Filters, focusRequests = false) {
-    cursors = [''];
-    const hash = usageHash(values);
-    requestFocusHash = focusRequests ? hash : null;
-    window.location.hash = hash;
-    readHash();
+  async function navigateUsage(values: Filters, focusRequests = false, cursorHistory = ['']) {
+    const route = usageURL(values);
+    if (page.url.pathname + page.url.search !== route) await goto(route, { reset: false });
+    if (page.url.pathname + page.url.search === route) {
+      cursors = cursorHistory;
+      requestFocus = focusRequests;
+    }
   }
 
   function resetFilters() {
-    if (usageHash(filters) === '#usage') return;
+    if (usageHref === '/usage') return;
     resetSnapshot = { filters: { ...filters }, cursors: [...cursors] };
-    navigateUsage(defaultFilters);
+    void navigateUsage(defaultFilters);
   }
 
   function undoFilters() {
     const previous = resetSnapshot;
     if (!previous) return;
     resetSnapshot = null;
-    navigateUsage(previous.filters);
-    cursors = previous.cursors;
+    void navigateUsage(previous.filters, false, previous.cursors);
   }
 
   function skipToContent(event: MouseEvent) {
@@ -213,7 +230,7 @@
     overviewResult = null;
     requestResult = null;
     resetSnapshot = null;
-    requestFocusHash = null;
+    requestFocus = false;
     overviewFailures.clear();
     requestFailure = null;
     cursors = [''];
@@ -339,7 +356,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href={favicon} />
 </svelte:head>
 
-<svelte:window onhashchange={readHash} ononline={connectionChanged} onoffline={connectionChanged} />
+<svelte:window onhashchange={legacyHashChanged} ononline={connectionChanged} onoffline={connectionChanged} />
 
 {#if session !== 'ready'}
   <main class="auth-page">
@@ -380,7 +397,7 @@
         <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined}>
           <ChartNoAxesCombinedIcon size={17} aria-hidden="true" /> Usage
         </a>
-        <a href="#clients" aria-current={screen === 'clients' ? 'page' : undefined}>
+        <a href="/clients" aria-current={screen === 'clients' ? 'page' : undefined}>
           <KeyRoundIcon size={17} aria-hidden="true" /> Clients
         </a>
       </nav>
@@ -395,7 +412,7 @@
     <main id="content" class="content" tabindex="-1">
       {#if authError}<RecoveryNotice problem={authError} />{/if}
       {#if screen === 'usage'}
-        {#await import('../lib/UsageView.svelte')}
+        {#await import('../../lib/UsageView.svelte')}
           <p class="muted" role="status">Opening usage…</p>
         {:then { default: UsageView }}
           <UsageView
@@ -415,8 +432,8 @@
             clearFilters={resetFilters}
             canUndoReset={resetSnapshot !== null}
             {undoFilters}
-            focusRequests={requestFocusHash !== null}
-            onRequestFocus={() => { requestFocusHash = null; }}
+            focusRequests={requestFocus}
+            onRequestFocus={() => { requestFocus = false; }}
             refresh={refreshUsage}
             {retryRequests}
             onPrevious={() => cursors = cursors.slice(0, -1)}
@@ -427,7 +444,7 @@
         {/await}
       {/if}
       {#if screen === 'clients' || keyDialogOpen}
-        {#await import('../lib/ClientsView.svelte')}
+        {#await import('../../lib/ClientsView.svelte')}
           <p class="muted" role="status">Opening clients…</p>
         {:then { default: ClientsView }}
           <ClientsView active={screen === 'clients'} {clientId} {loggingOut} bind:draft={clientDraft} {renameDrafts} bind:keyDialogOpen navigate={navigateClient} {viewUsage} onUnauthorized={() => lockSession(true)} />

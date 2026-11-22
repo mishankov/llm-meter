@@ -267,7 +267,7 @@
     {#if firstRun}
       <h2 id="empty-usage-title" tabindex="-1">No clients connected</h2>
       <p>Create a client to get a proxy key and set up your first request.</p>
-      <a class="primary-button" href="#clients" title="Connect a client (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>Connect a client</a>
+      <a class="primary-button" href="/clients" title="Connect a client (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>Connect a client</a>
     {:else}
       <h2 id="empty-usage-title" tabindex="-1">No requests in this view</h2>
       {#if bucket}{@render chartSelection()}{/if}
@@ -279,7 +279,7 @@
       {#if range !== '30d'}
         <Button class="secondary-button" onclick={() => update('range', '30d')} onkeydown={guardEnter}>Show last 30 days</Button>
       {/if}
-      {#if !scoped}<a class="secondary-button" href="#clients">View clients</a>{/if}
+      {#if !scoped}<a class="secondary-button" href="/clients">View clients</a>{/if}
     {/if}
   </section>
 {:else}

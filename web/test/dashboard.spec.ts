@@ -715,6 +715,7 @@ test('keeps client actions in view and restores focus after keyboard navigation'
   const manage = page.getByRole('button', { name: 'Manage client ' + name });
   await expect(manage).toBeInViewport({ ratio: 1 });
   await manage.press('Enter');
+  await expect(page).toHaveURL('/clients?client=open-code');
   await expect(page.getByRole('heading', { name })).toBeFocused();
   await page.getByRole('button', { name: 'Clients', exact: true }).press('Enter');
   await expect(manage).toBeFocused();
@@ -722,6 +723,10 @@ test('keeps client actions in view and restores focus after keyboard navigation'
   await expect(page.getByRole('heading', { name })).toBeFocused();
   await page.goBack();
   await expect(manage).toBeFocused();
+  await page.goForward();
+  await expect(page).toHaveURL('/clients?client=open-code');
+  await page.reload();
+  await expect(page.getByRole('heading', { name })).toBeVisible();
 });
 
 test('restores filter scope and pagination after undo and supports keyboard navigation', async ({ page }) => {
@@ -730,7 +735,7 @@ test('restores filter scope and pagination after undo and supports keyboard navi
   await page.getByRole('radio', { name: '7 days' }).click();
   await page.getByRole('combobox', { name: 'Source' }).click();
   await page.getByRole('option', { name: 'API providers' }).click();
-  await expect(page).toHaveURL(/#usage\?range=7d&source=api$/);
+  await expect(page).toHaveURL('/usage?range=7d&source=api');
   await expect(page.getByRole('row').filter({ has: page.getByText('OpenCode Go', { exact: true }) })).toBeVisible();
 
   await page.reload();
@@ -739,25 +744,58 @@ test('restores filter scope and pagination after undo and supports keyboard navi
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('link', { name: 'Skip to main content' }).press('Enter');
   await expect(page.getByRole('main')).toBeFocused();
-  await expect(page).toHaveURL(/#clients$/);
+  await expect(page).toHaveURL('/clients');
   await page.getByRole('link', { name: 'Usage', exact: true }).click();
-  await expect(page).toHaveURL(/#usage\?range=7d&source=api$/);
+  await expect(page).toHaveURL('/usage?range=7d&source=api');
   const next = page.getByRole('button', { name: 'Next requests' });
   await expect(next).toBeEnabled();
   await next.press('Enter');
   await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
   await page.getByRole('button', { name: 'Reset filters' }).press('Enter');
-  await expect(page).toHaveURL(/#usage$/);
+  await expect(page).toHaveURL('/usage');
   await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
   const undo = page.getByRole('button', { name: 'Undo reset' });
   await expect(undo).toBeFocused();
   await undo.press('Enter');
-  await expect(page).toHaveURL(/#usage\?range=7d&source=api$/);
+  await expect(page).toHaveURL('/usage?range=7d&source=api');
   await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
   await page.goBack();
   await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
+  await page.goForward();
+  await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
+  await expect(page.getByRole('combobox', { name: 'Source' })).toHaveText('API providers');
+});
+
+test('updates old bookmark URLs while preserving usage filters and the selected client', async ({ page }) => {
+  const client = { id: 'open+code', name: 'OpenCode', createdAt: initialStart, keys: [] };
+  const { usageQueries } = await mockAPI(page, { initialClients: [client] });
+  await page.goto('/#usage?range=7d&source=api&model=gpt-unpriced');
+  await expect(page).toHaveURL('/usage?range=7d&source=api&model=gpt-unpriced');
+  const token = page.getByLabel('Access token');
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
+  await expect.poll(() => usageQueries.at(-1)?.get('model')).toBe('gpt-unpriced');
+
+  await page.goto('/#clients/open%2Bcode');
+  await expect(page).toHaveURL('/clients?client=open%2Bcode');
+  await expect(page.getByRole('heading', { name: 'OpenCode' })).toBeVisible();
+});
+
+test('replaces an old bookmark opened from the loaded dashboard', async ({ page }) => {
+  await mockAPI(page);
+  await unlock(page);
+  await page.goto('/#clients');
+  await expect(page).toHaveURL('/clients', { timeout: 3000 });
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL('/');
+  await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL('/clients');
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
 });
 
 test('guides an empty dashboard to a client and protects the first key before copying', async ({ page }) => {
@@ -1029,7 +1067,7 @@ test('renames and archives a client by keyboard, preserving the draft and guardi
   await expect(confirmation.getByRole('alert')).toContainText('Could not archive the client');
   await expect(confirmArchive).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/#clients$/);
+  await expect(page).toHaveURL('/clients');
   await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeFocused();
   await expect(page.getByText('No clients yet.', { exact: false })).toBeVisible();
 });
