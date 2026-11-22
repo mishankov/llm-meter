@@ -64,6 +64,8 @@ async function mockAPI(page: Page, {
     if (url.pathname === '/api/usage' || url.pathname === '/api/usage/requests') {
       usageQueries.push(url.searchParams);
       usagePaths.push(url.pathname);
+      const filterClients = new Map(response.filters.clients.map((client) => [client.id, client]));
+      for (const { id, name } of clients) filterClients.set(id, { id, name });
       const data = empty ? {
         ...response,
         summary: { estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, requestCount: 0, pricedRequestCount: 0 },
@@ -73,12 +75,17 @@ async function mockAPI(page: Page, {
         ...response,
         groupedBuckets,
         summary: { ...response.summary, requestCount: response.summary.requestCount + extraRequests.length },
-        requests: [...response.requests, ...extraRequests]
+        requests: [...response.requests, ...extraRequests],
+        filters: {
+          models: [...new Set([...response.filters.models, ...extraRequests.map(({ model }) => model).filter(Boolean)])],
+          clients: [...filterClients.values()]
+        }
       };
       const cursor = url.searchParams.get('cursor');
       const bucket = url.searchParams.get('bucket');
-      const client = url.searchParams.get('client');
-      const source = url.searchParams.get('source');
+      const clientIds = url.searchParams.getAll('client').filter(Boolean);
+      const sources = url.searchParams.getAll('source').filter(Boolean);
+      const models = url.searchParams.getAll('model').filter(Boolean);
       const outcome = url.searchParams.get('outcome');
       const days = url.searchParams.get('range') === '30d' ? 31 : url.searchParams.get('range') === '7d' ? 8 : 0;
       const buckets = days && !empty ? Array.from({ length: days }, (_, index) => ({
@@ -88,13 +95,14 @@ async function mockAPI(page: Page, {
       const bucketStart = bucket ? Date.parse(bucket) : null;
       const requests = data.requests.filter((request) =>
         (bucketStart === null || (Date.parse(request.at) >= bucketStart && Date.parse(request.at) < bucketStart + (days ? 86_400_000 : 3_600_000))) &&
-        (!client || request.clientId === client) &&
-        (!source || request.source === source) &&
+        (!clientIds.length || clientIds.includes(request.clientId)) &&
+        (!sources.length || sources.includes(request.source)) &&
+        (!models.length || models.includes(request.model)) &&
         (outcome !== 'failed' || request.status === 0 || request.status >= 400) &&
         (outcome !== 'succeeded' || (request.status >= 200 && request.status < 300)) &&
         (!cursor || request.source === 'codex')
       );
-      const nextCursor = !empty && !cursor && !bucket && !client && !outcome ? 'test-cursor' : null;
+      const nextCursor = !empty && !cursor && !bucket && !clientIds.length && !outcome ? 'test-cursor' : null;
       const result = { requests, nextCursor };
       return route.fulfill({ json: url.pathname === '/api/usage' ? { ...data, buckets, ...result } : result });
     }
@@ -393,6 +401,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await expect(apiRequest).toBeVisible();
   await page.getByRole('combobox', { name: 'Source' }).click();
   await page.getByRole('option', { name: 'Codex subscription' }).click();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('status').filter({ hasText: 'Loading usage…' })).toBeVisible();
   await expect(apiRequest).not.toBeVisible();
   finishLoading();
@@ -729,19 +738,186 @@ test('keeps client actions in view and restores focus after keyboard navigation'
   await expect(page.getByRole('heading', { name })).toBeVisible();
 });
 
+test('combines multiple usage filters and restores their selections from the URL', async ({ page }) => {
+  const client = { id: 'work+shop', name: 'Workshop', createdAt: initialStart, keys: [] };
+  const { usageQueries } = await mockAPI(page, {
+    initialClients: [client],
+    extraRequests: [{ ...response.requests[1], id: 5, clientId: client.id, client: client.name }]
+  });
+  await unlock(page);
+
+  const sourceFilter = page.getByRole('combobox', { name: 'Source' });
+  const sourceSearch = page.getByRole('combobox', { name: 'Search sources' });
+  await sourceFilter.press('Enter');
+  await expect(sourceSearch).toBeFocused();
+  await sourceSearch.pressSequentially('API');
+  await sourceSearch.press('Space');
+  await expect(sourceSearch).toHaveValue('API ');
+  await expect(page.getByRole('option', { name: 'API providers' })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'Codex subscription' })).toHaveCount(0);
+  await page.evaluate(async () => {
+    const toggleOption = () => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', code: 'Enter', bubbles: true, cancelable: true
+    }));
+    toggleOption();
+    await Promise.resolve();
+    toggleOption();
+  });
+  await page.keyboard.press('Escape');
+  await expect(sourceFilter).toBeFocused();
+  await expect(page).toHaveURL('/usage');
+  await expect(sourceFilter).toHaveText('All sources');
+
+  for (const { label, searchLabel, first, last } of [
+    { label: 'Source', searchLabel: 'Search sources', first: 'API providers', last: 'Codex subscription' },
+    { label: 'Client', searchLabel: 'Search clients', first: 'OpenCode', last: 'Workshop' },
+    { label: 'Model', searchLabel: 'Search models', first: 'gpt-api', last: 'gpt-codex' }
+  ]) {
+    const filter = page.getByRole('combobox', { name: label, exact: true });
+    const control = page.locator('.filter-controls').filter({ has: filter });
+    const search = page.getByRole('combobox', { name: searchLabel });
+    const list = page.getByRole('listbox');
+    await filter.press('Enter');
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue('');
+    await expect(list).toHaveAttribute('aria-multiselectable', 'true');
+    if (label === 'Model') {
+      await search.fill('no-such-model');
+      await expect(page.getByText('No matches found.')).toBeVisible();
+      await expect(list.getByRole('option')).toHaveCount(0);
+    }
+    const firstOption = page.getByRole('option', { name: first, exact: true });
+    const lastOption = page.getByRole('option', { name: last, exact: true });
+    await search.fill(first);
+    await expect(firstOption).toBeVisible();
+    await expect(lastOption).toHaveCount(0);
+    await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', repeat: true });
+    await expect(firstOption).toHaveAttribute('aria-selected', 'false');
+    await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
+    await expect(firstOption).toHaveAttribute('aria-selected', 'false');
+    await search.press('Enter');
+    await expect(firstOption).toHaveAttribute('aria-selected', 'true');
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue(first);
+    await search.fill(last);
+    await expect(lastOption).toBeVisible();
+    await expect(firstOption).toHaveCount(0);
+    await search.press('ArrowDown');
+    await search.press('Enter');
+    await expect(lastOption).toHaveAttribute('aria-selected', 'true');
+    await expect(search).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(search).toBeHidden();
+    await expect(filter).toBeFocused();
+    for (const selection of [first, last]) {
+      await expect(control.getByText(selection, { exact: true })).toBeVisible();
+      await expect(control.getByRole('button', { name: `Remove ${selection}`, exact: true })).toBeVisible();
+    }
+    await expect(control.getByRole('button', { name: `Clear ${label.toLowerCase()} filter` })).toBeVisible();
+
+    await filter.press('Enter');
+    await expect(search).toHaveValue('');
+    await expect(firstOption).toHaveAttribute('aria-selected', 'true');
+    await expect(lastOption).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Escape');
+  }
+
+  const scope = (params: URLSearchParams) => ({
+    sources: params.getAll('source').sort(),
+    clients: params.getAll('client').sort(),
+    models: params.getAll('model').sort()
+  });
+  const currentScope = () => scope(new URL(page.url()).searchParams);
+  const apiScope = () => {
+    const latest = usageQueries.at(-1);
+    return latest && scope(latest);
+  };
+  const selected = { sources: ['api', 'codex'], clients: ['open-code', 'work+shop'], models: ['gpt-api', 'gpt-codex'] };
+  const requests = page.getByRole('region', { name: 'Requests' });
+  await expect.poll(currentScope).toEqual(selected);
+  await expect.poll(apiScope).toEqual(selected);
+  await expect(requests.getByRole('button', { name: /Details for gpt-api/ })).toBeVisible();
+  await expect(requests.getByRole('button', { name: /Details for gpt-codex/ })).toHaveCount(1);
+  await expect(requests.getByRole('button', { name: /Details for gpt-unpriced/ })).toHaveCount(0);
+
+  await page.reload();
+  const model = page.getByRole('combobox', { name: 'Model', exact: true });
+  const modelControl = page.locator('.filter-controls').filter({ has: model });
+  const modelChips = modelControl.getByRole('button', { name: /^Remove / });
+  const clientFilter = page.getByRole('combobox', { name: 'Client', exact: true });
+  const clientControl = page.locator('.filter-controls').filter({ has: clientFilter });
+  const source = page.getByRole('combobox', { name: 'Source', exact: true });
+  const sourceControl = page.locator('.filter-controls').filter({ has: source });
+  await expect(sourceControl.getByRole('button', { name: /^Remove / })).toHaveCount(2);
+  await expect(clientControl.getByRole('button', { name: /^Remove / })).toHaveCount(2);
+  await expect(modelChips).toHaveCount(2);
+  const clear = modelControl.getByRole('button', { name: 'Clear model filter' });
+  await expect(clear).toHaveAttribute('aria-keyshortcuts', 'Enter Space');
+  await clear.press('Enter');
+  await expect(model).toBeFocused();
+  await expect(model).toHaveText('All models');
+  await expect(modelChips).toHaveCount(0);
+  const cleared = { ...selected, models: [] };
+  await expect.poll(currentScope).toEqual(cleared);
+
+  await page.goBack();
+  await expect(modelChips).toHaveCount(2);
+  await expect.poll(currentScope).toEqual(selected);
+  await page.goForward();
+  await expect(modelChips).toHaveCount(0);
+  await expect.poll(currentScope).toEqual(cleared);
+  await page.goBack();
+  await expect(modelChips).toHaveCount(2);
+  await page.getByRole('button', { name: 'Reset filters' }).press('Enter');
+  await expect(page).toHaveURL('/usage');
+  await page.getByRole('button', { name: 'Undo reset' }).press('Enter');
+  await expect.poll(currentScope).toEqual(selected);
+  await expect.poll(apiScope).toEqual(selected);
+
+  const removeOpenCode = clientControl.getByRole('button', { name: 'Remove OpenCode', exact: true });
+  const removeWorkshop = clientControl.getByRole('button', { name: 'Remove Workshop', exact: true });
+  await source.focus();
+  for (const next of [removeOpenCode, removeWorkshop, clientControl.getByRole('button', { name: 'Clear client filter' }), clientFilter]) {
+    await page.keyboard.press('Tab');
+    await expect(next).toBeFocused();
+  }
+  await clientFilter.press('Enter');
+  await page.getByRole('combobox', { name: 'Search clients' }).press('Tab');
+  await expect(modelChips.first()).toBeFocused();
+  await expect(removeOpenCode).toHaveAttribute('aria-keyshortcuts', 'Enter Space');
+  await removeOpenCode.click();
+  await expect(removeOpenCode).toHaveCount(0);
+  await expect(removeWorkshop).toBeFocused();
+  await expect.poll(currentScope).toEqual({ ...selected, clients: ['work+shop'] });
+  await page.keyboard.press('Space');
+  await expect(removeWorkshop).toHaveCount(0);
+  await expect(clientFilter).toBeFocused();
+  await expect(clientFilter).toHaveText('All clients');
+  await expect.poll(currentScope).toEqual({ ...selected, clients: [] });
+
+  await page.goto('/usage?client=old-a&client=old-b');
+  await page.getByRole('combobox', { name: 'Client' }).press('Enter');
+  await expect(page.getByRole('option', { name: 'Unknown client (old-a)' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('option', { name: 'Unknown client (old-b)' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('option', { name: 'Unknown client (old-a)' }).click();
+  await expect(page).toHaveURL('/usage?client=old-b');
+});
+
 test('restores filter scope and pagination after undo and supports keyboard navigation', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
   await page.getByRole('radio', { name: '7 days' }).click();
   await page.getByRole('combobox', { name: 'Source' }).click();
   await page.getByRole('option', { name: 'API providers' }).click();
+  await page.keyboard.press('Escape');
   await expect(page).toHaveURL('/usage?range=7d&source=api');
   await expect(page.getByRole('row').filter({ has: page.getByText('OpenCode Go', { exact: true }) })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
-  await expect(page.getByRole('combobox', { name: 'Source' })).toHaveText('API providers');
+  await expect(page.getByRole('button', { name: 'Remove API providers' })).toBeVisible();
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Skip to main content' }).press('Enter');
   await expect(page.getByRole('main')).toBeFocused();
   await expect(page).toHaveURL('/clients');
@@ -765,7 +941,7 @@ test('restores filter scope and pagination after undo and supports keyboard navi
   await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
   await page.goForward();
   await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
-  await expect(page.getByRole('combobox', { name: 'Source' })).toHaveText('API providers');
+  await expect(page.getByRole('button', { name: 'Remove API providers' })).toBeVisible();
 });
 
 test('updates old bookmark URLs while preserving usage filters and the selected client', async ({ page }) => {
@@ -905,13 +1081,18 @@ test.describe('coarse touch input', () => {
     await dateRange.tap();
     const chart = page.getByRole('region', { name: 'Tokens over time' });
     const window = chart.getByRole('button').nth(10);
+    const source = page.getByRole('combobox', { name: 'Source' });
 
     for (const target of [
       page.getByRole('button', { name: 'Lock dashboard' }),
       page.getByRole('button', { name: 'Refresh usage' }),
+      source,
+      page.getByRole('combobox', { name: 'Client' }),
+      page.getByRole('combobox', { name: 'Model' }),
       dateRange,
       window
     ]) {
+      await expect(target).toBeVisible();
       const box = (await target.boundingBox())!;
       expect(box.width).toBeGreaterThanOrEqual(44);
       expect(box.height).toBeGreaterThanOrEqual(44);
@@ -920,6 +1101,15 @@ test.describe('coarse touch input', () => {
     await window.tap();
     await expect(window).toHaveAttribute('aria-pressed', 'true');
     await expect(page).toHaveURL(/bucket=2026-11-30/);
+    await source.tap();
+    await page.getByRole('option', { name: 'API providers' }).tap();
+    await page.keyboard.press('Escape');
+    for (const target of [source, page.getByRole('button', { name: 'Remove API providers' }), page.getByRole('button', { name: 'Clear source filter' })]) {
+      await expect(target).toBeVisible();
+      const box = (await target.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
   });
 });

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -250,7 +251,7 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	values := r.URL.Query()
 	f := ledger.Filter{
 		End: now, Interval: time.Hour,
-		Source: values.Get("source"), Client: values.Get("client"), Model: values.Get("model"),
+		Sources: selectedValues(values["source"]), Clients: selectedValues(values["client"]), Models: selectedValues(values["model"]),
 		Outcome: values.Get("outcome"),
 	}
 	switch values.Get("range") {
@@ -265,7 +266,7 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	default:
 		return f, errors.New("Use a 24-hour, 7-day or 30-day range")
 	}
-	if f.Source != "" && f.Source != "api" && f.Source != "codex" {
+	if slices.ContainsFunc(f.Sources, func(source string) bool { return source != "api" && source != "codex" }) {
 		return f, errors.New("Invalid usage source")
 	}
 	switch f.Outcome {
@@ -273,7 +274,8 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	default:
 		return f, errors.New("Invalid request outcome")
 	}
-	if len(f.Client) > 100 || len(f.Model) > 500 {
+	if slices.ContainsFunc(f.Clients, func(client string) bool { return len(client) > 100 }) ||
+		slices.ContainsFunc(f.Models, func(model string) bool { return len(model) > 500 }) {
 		return f, errors.New("Invalid client or model filter")
 	}
 	if value := values.Get("bucket"); value != "" {
@@ -286,6 +288,10 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	cursor, err := ledger.ParseCursor(values.Get("cursor"))
 	f.Cursor = cursor
 	return f, err
+}
+
+func selectedValues(values []string) []string {
+	return slices.DeleteFunc(values, func(value string) bool { return value == "" })
 }
 
 func decode(w http.ResponseWriter, r *http.Request, value any) bool {

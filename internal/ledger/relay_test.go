@@ -43,7 +43,7 @@ func TestRelayRecordRollsBackIdempotencyAndAllowancesOnFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	filter := Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Client: client.ID}
+	filter := Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}}
 	dashboard, err := store.Dashboard(ctx, filter)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestRelayBackgroundUpdatesInAnyOrder(t *testing.T) {
 				if err := store.RecordRelay(ctx, client.ID, "later charge", costOnly); err != nil {
 					t.Fatal(err)
 				}
-				dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Client: client.ID})
+				dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
 				if err != nil {
 					t.Fatal(err)
 				}

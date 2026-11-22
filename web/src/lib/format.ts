@@ -78,8 +78,8 @@ export function dismissShortcut(event: KeyboardEvent) {
     (target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable], [role="dialog"]')));
 }
 
-export function guardEnter(event: KeyboardEvent) {
-  const activates = event.key === 'Enter' || (event.key === ' ' && event.currentTarget instanceof HTMLButtonElement);
+export function guardEnter(event: KeyboardEvent, spaceActivates = event.currentTarget instanceof HTMLButtonElement) {
+  const activates = event.key === 'Enter' || (spaceActivates && event.key === ' ');
   if (activates && (event.repeat || event.isComposing || event.keyCode === 229)) {
     event.preventDefault();
   }
