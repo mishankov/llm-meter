@@ -192,8 +192,20 @@ func serveDashboard(ui fs.FS) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-		if r.URL.Path == "/" {
+		switch r.URL.Path {
+		case "/usage/", "/clients/":
+			target := *r.URL
+			target.Path = strings.TrimSuffix(target.Path, "/")
+			target.RawPath = ""
+			http.Redirect(w, r, target.RequestURI(), http.StatusPermanentRedirect)
+			return
+		case "/", "/usage", "/clients":
 			w.Header().Set("Cache-Control", "no-cache")
+			if r.URL.Path != "/" {
+				r = r.Clone(r.Context())
+				r.URL.Path += ".html"
+				r.URL.RawPath = ""
+			}
 			files.ServeHTTP(w, r)
 			return
 		}
