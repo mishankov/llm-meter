@@ -876,6 +876,14 @@ test('combines multiple usage filters and restores their selections from the URL
 
   const removeOpenCode = clientControl.getByRole('button', { name: 'Remove OpenCode', exact: true });
   const removeWorkshop = clientControl.getByRole('button', { name: 'Remove Workshop', exact: true });
+  await source.focus();
+  for (const next of [removeOpenCode, removeWorkshop, clientControl.getByRole('button', { name: 'Clear client filter' }), clientFilter]) {
+    await page.keyboard.press('Tab');
+    await expect(next).toBeFocused();
+  }
+  await clientFilter.press('Enter');
+  await page.getByRole('combobox', { name: 'Search clients' }).press('Tab');
+  await expect(modelChips.first()).toBeFocused();
   await expect(removeOpenCode).toHaveAttribute('aria-keyshortcuts', 'Enter Space');
   await removeOpenCode.click();
   await expect(removeOpenCode).toHaveCount(0);
@@ -1073,13 +1081,18 @@ test.describe('coarse touch input', () => {
     await dateRange.tap();
     const chart = page.getByRole('region', { name: 'Tokens over time' });
     const window = chart.getByRole('button').nth(10);
+    const source = page.getByRole('combobox', { name: 'Source' });
 
     for (const target of [
       page.getByRole('button', { name: 'Lock dashboard' }),
       page.getByRole('button', { name: 'Refresh usage' }),
+      source,
+      page.getByRole('combobox', { name: 'Client' }),
+      page.getByRole('combobox', { name: 'Model' }),
       dateRange,
       window
     ]) {
+      await expect(target).toBeVisible();
       const box = (await target.boundingBox())!;
       expect(box.width).toBeGreaterThanOrEqual(44);
       expect(box.height).toBeGreaterThanOrEqual(44);
@@ -1088,6 +1101,15 @@ test.describe('coarse touch input', () => {
     await window.tap();
     await expect(window).toHaveAttribute('aria-pressed', 'true');
     await expect(page).toHaveURL(/bucket=2026-11-30/);
+    await source.tap();
+    await page.getByRole('option', { name: 'API providers' }).tap();
+    await page.keyboard.press('Escape');
+    for (const target of [source, page.getByRole('button', { name: 'Remove API providers' }), page.getByRole('button', { name: 'Clear source filter' })]) {
+      await expect(target).toBeVisible();
+      const box = (await target.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
   });
 });

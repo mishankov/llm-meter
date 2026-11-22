@@ -64,11 +64,8 @@
 
 <Select multiple={props.multiple} value={props.value} items={props.items} controller={props.multiple ? selection : undefined}
   placeholder={props.multiple ? props.placeholder : undefined} disabled={props.multiple && !props.items.length} onValueChange={changeValue}>
-  <div class="filter-controls" class:multiple={props.multiple} class:has-selections={selected.length > 0} bind:this={control}>
-    <SelectTrigger class="filter-trigger" aria-label={props.label} onkeydown={guardEnter}>
-      <SelectValue class={selected.length ? 'sr-only' : undefined} />
-      <ChevronDownIcon size={14} aria-hidden="true" />
-    </SelectTrigger>
+  <div class="filter-controls" class:multiple={props.multiple} class:has-selections={selected.length > 0} bind:this={control}
+    role={props.multiple ? 'group' : undefined} aria-label={props.multiple ? props.label : undefined}>
     {#if selected.length}
       <div class="filter-chips">
         {#each selected as { value, label } (value)}
@@ -86,6 +83,10 @@
         <XIcon size={16} aria-hidden="true" />
       </SelectClear>
     {/if}
+    <SelectTrigger class="filter-trigger" aria-label={props.label} onkeydown={guardEnter}>
+      {#if !selected.length}<SelectValue />{/if}
+      <ChevronDownIcon size={14} aria-hidden="true" />
+    </SelectTrigger>
   </div>
   <SelectContent class={props.multiple ? 'select-content filter-search-popup' : 'select-content'}
     anchor={props.multiple ? control : undefined} onkeydowncapture={guardOptionKey}>
@@ -181,7 +182,7 @@
   }
   .filter-chip :global(.filter-chip-remove:hover) { background: var(--option-highlighted); }
   @media (pointer: coarse) {
-    .has-selections :global(.filter-trigger), .filter-chip :global(.filter-chip-remove) {
+    .multiple :global(.filter-trigger), .filter-chip :global(.filter-chip-remove) {
       min-inline-size: var(--touch-target);
       min-block-size: var(--touch-target);
     }
