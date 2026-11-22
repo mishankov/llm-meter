@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,8 +19,8 @@ import (
 
 func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	const generationPath = "/v1internal:streamGenerateContent"
-	const requestBody = `{"model":"requested-model"}`
-	const firstEvents = `data: {"response":{"responseId":"generation-1","modelVersion":"gemini-test"}}` + "\n\n" +
+	const requestBody = `{"model":"gemini-3.5-flash-lite"}`
+	const firstEvents = `data: {"response":{"responseId":"generation-1","modelVersion":"gemini-4-neon"}}` + "\n\n" +
 		`data: {"response":{"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20}}}` + "\n\n"
 	const lastEvent = `data: {"traceId":"shared-trace","response":{"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":20,"candidatesTokenCount":5,"thoughtsTokenCount":2}}}` + "\n\n"
 	const accountResponse = `{"usageMetadata":{"promptTokenCount":999}}`
@@ -59,7 +60,20 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	}))
 	defer upstream.Close()
 	base, _ := url.Parse(upstream.URL)
-	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), pricing.Catalog{})
+	priceFeed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"google":{"models":{
+			"gemini-4-neon":{"cost":{"input":3,"input_audio":3,"cache_read":0.15,"output":15}},
+			"gemini-3.5-flash-lite":{"cost":{"input":0.3,"cache_read":0.03,"output":2.5}}
+		}}}`)
+	}))
+	defer priceFeed.Close()
+	snapshot, err := pricing.Fetch(t.Context(), priceFeed.Client(), pricing.Feed{Name: "models.dev", URL: priceFeed.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog pricing.Catalog
+	catalog.SetSnapshot(snapshot)
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,10 +142,19 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	if dashboard.Summary.RequestCount != 5 || dashboard.Summary.InputTokens != 130 || dashboard.Summary.CachedInputTokens != 25 || dashboard.Summary.OutputTokens != 10 {
 		t.Fatalf("incorrect Antigravity totals: %+v", dashboard.Summary)
 	}
-	for i, model := range []string{"requested-model", "gemini-test"} {
+	for i, expected := range []struct {
+		model string
+		cost  float64
+	}{
+		{"gemini-3.5-flash-lite", .00001515},
+		{"gemini-4-neon", .000348},
+	} {
 		request := dashboard.Requests[i]
-		if request.Provider != "antigravity" || request.Client != client.Name || request.Model != model || !request.UsageAvailable {
+		if request.Provider != "google" || request.Client != client.Name || request.Model != expected.model || !request.UsageAvailable {
 			t.Fatalf("incorrect Antigravity request attribution: %+v", request)
+		}
+		if request.PriceSource != "models.dev" || request.Cost == nil || math.Abs(*request.Cost-expected.cost) > 1e-12 {
+			t.Fatalf("incorrect pricing for %s: %+v", expected.model, request)
 		}
 	}
 }

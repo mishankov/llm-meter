@@ -51,7 +51,7 @@ func (m *httpMeter) observeEvent(message wireMessage) {
 		m.usage.mergeRateLimits(message.limits())
 	}
 	// Antigravity can report a response ID before it reports token usage.
-	m.usage.applyMessage(message, m.captureUsage && (m.usage.Provider == antigravityProvider || message.reportsUsage()))
+	m.usage.applyMessage(message, m.captureUsage && (IsAntigravityEndpoint(m.usage.Endpoint) || message.reportsUsage()))
 	if message.Response != nil && message.Response.ID != "" {
 		m.usage.ResponseID = message.Response.ID
 	}
@@ -262,7 +262,7 @@ func (u *Usage) applyMessagesUsage(tokens *wireUsage) {
 
 func (u *Usage) geminiUsageAvailable() bool {
 	switch u.Provider {
-	case "google", "opencode", "opencode-go", antigravityProvider:
+	case "google", "opencode", "opencode-go":
 		return true
 	default:
 		return false

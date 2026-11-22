@@ -80,11 +80,11 @@ exec "/absolute/path/to/antigravity" "$@"
 
 Set the last line to your installed Antigravity executable, make the launcher executable with `chmod +x`, and start a fresh Antigravity session in T3 using your existing Google sign-in. You can confirm flag support on your runtime with `antigravity acp --help`.
 
-The dashboard shows requests as **Antigravity** under the client that owns the proxy key. Generation responses contribute token counts when Google reports them.
+The dashboard shows **Google** as the provider for requests through Antigravity. Generation responses contribute token counts when Google reports them. Eligible requests use Google's Gemini API rates to estimate usage value.
 
 ## Run the relay
 
-One relay serves all four supported providers on the same port. Set `--target` to the LLM Meter server's HTTPS origin, such as `https://proxy.example.com`, and supply one proxy key file. Requests across all four routes are attributed to the dashboard client that owns the key and retain their individual provider labels.
+One relay serves all four supported routes on the same port. Set `--target` to the LLM Meter server's HTTPS origin, such as `https://proxy.example.com`, and supply one proxy key file. Requests across all four routes are attributed to the dashboard client that owns the key and retain their individual provider labels.
 
 | Mode | Model traffic | Usage |
 | --- | --- | --- |

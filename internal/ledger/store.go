@@ -310,8 +310,13 @@ func (s *Store) RecordRelay(ctx context.Context, clientID, eventID string, usage
 	usage.ClientID = clientID
 	if usage.ResponseID != "" {
 		// Uploaded identifiers can only correlate responses reported for this
-		// client and provider, independently of IDs from the remote proxy.
-		usage.ResponseID = "relay:" + clientID + ":" + usage.Provider + ":" + usage.ResponseID
+		// client and namespace, independently of IDs from the remote proxy.
+		namespace := usage.Provider
+		if proxy.IsAntigravityEndpoint(usage.Endpoint) {
+			// Replays must match IDs recorded before the provider was named Google.
+			namespace = "antigravity"
+		}
+		usage.ResponseID = "relay:" + clientID + ":" + namespace + ":" + usage.ResponseID
 	}
 	return s.record(ctx, usage, eventID)
 }
@@ -364,11 +369,12 @@ func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage
 		}
 	}
 	pricingAt := at
-	if usage.Provider == "antigravity" && usage.HasUsage && !usage.UsageUpdate && usage.ResponseID != "" && usage.Model == "" {
+	if proxy.IsAntigravityEndpoint(usage.Endpoint) && usage.HasUsage && !usage.UsageUpdate && usage.ResponseID != "" && usage.Model == "" {
 		var originalTime int64
 		var originalTier string
 		err := tx.QueryRowContext(ctx, `SELECT time, model, service_tier FROM requests
-            WHERE source = ? AND response_id = ? AND provider = 'antigravity' AND usage_available = 1
+            WHERE source = ? AND response_id = ? AND usage_available = 1
+                AND (endpoint = '/antigravity' OR endpoint GLOB '/antigravity/*')
                 AND measurement_source = ?`,
 			usage.Source, usage.ResponseID, measurementSource).Scan(&originalTime, &usage.Model, &originalTier)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -423,7 +429,8 @@ func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage
             cache_write_12h_rate = excluded.cache_write_12h_rate, output_rate = excluded.output_rate,
             price_source = excluded.price_source, reported_cost = excluded.reported_cost,
             reported_list_cost = excluded.reported_list_cost, reported_allowance = excluded.reported_allowance
-        WHERE requests.provider = 'antigravity' AND excluded.provider = 'antigravity'
+        WHERE (requests.endpoint = '/antigravity' OR requests.endpoint GLOB '/antigravity/*')
+            AND (excluded.endpoint = '/antigravity' OR excluded.endpoint GLOB '/antigravity/*')
             AND requests.measurement_source = excluded.measurement_source
             AND requests.usage_available = 1 AND excluded.usage_available = 1
             AND excluded.input_tokens >= requests.input_tokens AND excluded.cached_input_tokens >= requests.cached_input_tokens

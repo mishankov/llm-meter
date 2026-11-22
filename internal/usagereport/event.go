@@ -63,7 +63,7 @@ var (
 	eventID    = regexp.MustCompile(`^[A-Z2-7]{26}$`)
 	idHash     = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@+~-]{0,255}$`)
-	providers  = []string{"antigravity", "codex", "openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
+	providers  = []string{"codex", "openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
 	tiers      = []string{"auto", "default", "standard", "scale", "batch", "flex", "fast", "priority", "ultrafast", "unknown"}
 	methods    = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, "OTHER"}
 )
@@ -82,6 +82,10 @@ func NewEvent(usage proxy.Usage) (Event, error) {
 		HasCacheWriteSplit: usage.HasCacheWriteSplit, UsageUpdate: usage.UsageUpdate, HasUsage: usage.HasUsage,
 		ReportedCost: usage.ReportedCost, ReportedListCost: usage.ReportedListCost, ReportedAllowance: usage.ReportedAllowance,
 		ReportedCostEstimated: usage.ReportedCostEstimated,
+	}
+	// Keep the original wire value so a new relay can still report to older servers.
+	if e.Provider == "google" && proxy.IsAntigravityEndpoint(e.Endpoint) {
+		e.Provider = "antigravity"
 	}
 	if identifier.MatchString(usage.Model) {
 		e.Model = usage.Model
@@ -161,10 +165,10 @@ func validProvider(endpoint, provider string) bool {
 		return provider == "codex"
 	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
 		return provider == "opencode-go"
-	case strings.HasPrefix(endpoint, proxy.AntigravityPrefix):
-		return provider == "antigravity"
+	case proxy.IsAntigravityEndpoint(endpoint):
+		return provider == "google" || provider == "antigravity"
 	default:
-		return provider == "" || (provider != "codex" && provider != "antigravity" && slices.Contains(providers, provider))
+		return provider == "" || (provider != "codex" && slices.Contains(providers, provider))
 	}
 }
 
@@ -178,11 +182,15 @@ func serviceTier(value string) string {
 
 func (e Event) Usage() proxy.Usage {
 	source := "api"
+	provider := e.Provider
 	if strings.HasPrefix(e.Endpoint, proxy.CodexPrefix) {
 		source = "codex"
 	}
+	if proxy.IsAntigravityEndpoint(e.Endpoint) {
+		provider = "google"
+	}
 	usage := proxy.Usage{
-		At: e.At, Source: source, Provider: e.Provider, Model: e.Model, Endpoint: e.Endpoint, Method: e.Method, Status: e.Status,
+		At: e.At, Source: source, Provider: provider, Model: e.Model, Endpoint: e.Endpoint, Method: e.Method, Status: e.Status,
 		ResponseID: e.ResponseIDHash, ServiceTier: e.ServiceTier, CompletionWindow: e.CompletionWindow, CacheRetention: e.CacheRetention,
 		InputTokens: e.InputTokens, CachedInputTokens: e.CachedInputTokens, CacheWriteTokens: e.CacheWriteTokens,
 		CacheWrite12hTokens: e.CacheWrite12hTokens, OutputTokens: e.OutputTokens,

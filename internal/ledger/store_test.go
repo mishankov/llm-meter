@@ -25,13 +25,17 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 	for _, test := range []struct {
 		name                      string
 		firstOutput, replayOutput int64
+		legacy                    bool
+		relay                     bool
 	}{
-		{name: "partial then complete", firstOutput: 0, replayOutput: 7},
+		{name: "legacy partial then complete", firstOutput: 0, replayOutput: 7, legacy: true},
+		{name: "legacy relay partial then complete", firstOutput: 0, replayOutput: 7, legacy: true, relay: true},
 		{name: "complete then partial", firstOutput: 7, replayOutput: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := t.Context()
-			store, err := Open(":memory:", catalog)
+			path := filepath.Join(t.TempDir(), "usage.sqlite")
+			store, err := Open(path, catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,14 +49,44 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			usage := proxy.Usage{At: at, Source: "api", Provider: "antigravity", Model: model, Status: 200, Method: "POST",
+			usage := proxy.Usage{At: at, Source: "api", Provider: "google", Model: model, Status: 200, Method: "POST",
+				Endpoint:   "/antigravity/v1internal:streamGenerateContent",
 				ResponseID: "antigravity:fixture", ClientID: origin.ID, HasUsage: true, InputTokens: 100, CachedInputTokens: 20, OutputTokens: test.firstOutput}
-			if err := store.Record(ctx, usage); err != nil {
+			if test.relay {
+				legacyUsage := usage
+				legacyUsage.Provider, legacyUsage.ResponseID = "antigravity", "fixture-hash"
+				if err := store.RecordRelay(ctx, origin.ID, "first-event", legacyUsage); err != nil {
+					t.Fatal(err)
+				}
+				var responseID string
+				wantID := "relay:" + origin.ID + ":antigravity:fixture-hash"
+				if err := store.db.QueryRowContext(ctx, "SELECT response_id FROM requests").Scan(&responseID); err != nil || responseID != wantID {
+					t.Fatalf("legacy response ID = %q, want %q (error %v)", responseID, wantID, err)
+				}
+			} else if err := store.Record(ctx, usage); err != nil {
 				t.Fatal(err)
+			}
+			if test.legacy {
+				if _, err := store.db.ExecContext(ctx, "UPDATE requests SET provider = 'antigravity'"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				store, err = Open(path, catalog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
 			}
 			usage.At, usage.ClientID, usage.OutputTokens = at.Add(time.Minute), replayer.ID, test.replayOutput
 			usage.Model = ""
-			if err := store.Record(ctx, usage); err != nil {
+			if test.relay {
+				usage.ResponseID = "fixture-hash"
+				if err := store.RecordRelay(ctx, origin.ID, "replay-event", usage); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := store.Record(ctx, usage); err != nil {
 				t.Fatal(err)
 			}
 			page, err := store.Requests(ctx, Filter{Start: at, End: at.Add(time.Hour)})
@@ -66,7 +100,7 @@ func TestAntigravityReplayRetainsCompleteUsageAndOriginalClient(t *testing.T) {
 			if request.ClientID != origin.ID || !request.At.Equal(at) || request.InputTokens != 100 || request.CachedInputTokens != 20 || request.OutputTokens != 7 {
 				t.Fatalf("incorrect replayed request: %+v", request)
 			}
-			if request.Model != model || request.PriceSource != "override" || request.Rates == nil || request.Rates.Output != 4 ||
+			if request.Provider != "google" || request.Model != model || request.PriceSource != "override" || request.Rates == nil || request.Rates.Output != 4 ||
 				request.Cost == nil || math.Abs(*request.Cost-0.000208) > 1e-12 {
 				t.Fatalf("incorrect pricing for replayed request: %+v", request)
 			}

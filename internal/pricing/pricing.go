@@ -114,11 +114,22 @@ func (c Catalog) ForUsage(model, tier string, at time.Time, input, cached, write
 }
 
 func (c Catalog) ForProviderUsage(provider, model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64, string) {
+	return c.forProviderUsage(provider, "", model, tier, at, input, cached, writes, writes12h, output)
+}
+
+func (c Catalog) ForAntigravityUsage(model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64, string) {
+	return c.forProviderUsage("google", "antigravity", model, tier, at, input, cached, writes, writes12h, output)
+}
+
+func (c Catalog) forProviderUsage(provider, legacyOverrideProvider, model, tier string, at time.Time, input, cached, writes, writes12h, output int64) (*Rates, *float64, string) {
 	if input < 0 || cached < 0 || writes < 0 || writes12h < 0 || writes12h > writes || output < 0 || cached > input || writes > input-cached {
 		return nil, nil, ""
 	}
 	counts := tokenCounts{input - cached - writes, cached, writes - writes12h, writes12h, output}
 	override, found := c.overrides[provider+"/"+model]
+	if !found && legacyOverrideProvider != "" {
+		override, found = c.overrides[legacyOverrideProvider+"/"+model]
+	}
 	if !found {
 		override, found = c.overrides[model]
 	}

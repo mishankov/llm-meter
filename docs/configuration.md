@@ -158,7 +158,7 @@ Use Go `1.25+` and Node.js `24`.
 The server checks these sources in order when recording a request's cost in USD.
 
 1. **Provider-reported amounts** (including `0`): exact reported cost, provider estimate, or provider list cost. For OpenCode Go, list value and allowance use are recorded alongside any reported charge.
-2. **`PRICING_FILE` overrides**: checked first as `"<provider>/<model>"` (for example `"openai/my-model"`), then as `"<model>"`.
+2. **`PRICING_FILE` overrides**: checked first as `"<provider>/<model>"` (for example `"openai/my-model"`), then as `"<model>"`. For Antigravity requests, the order is `"google/<model>"`, the legacy `"antigravity/<model>"`, then `"<model>"`.
 3. **Downloaded catalogs**: refreshed at startup and every 24 hours from OpenCode Go (`https://opencode.ai/inference/go/v1/models`) and Models.dev (`https://models.dev/api.json?type=all`), and cached in SQLite (`pricing_snapshots`) so temporary feed outages do not lose rates.
 4. **Built-in OpenAI rates**: standard text rates, long-context (>272,000 input tokens) multipliers, service-tier multipliers (`batch`, `flex`, `fast`, `priority`, `ultrafast`), and 2-hour (`0.7x`) / 8-hour (`0.6x`) background completion discounts on eligible OpenAI models when not using a `PRICING_FILE` override.
 
@@ -202,7 +202,7 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 **Key scope:**
 
 - One proxy key authenticates across **all four proxy routes** (`/v1`, `/codex`, `/opencode-go`, `/antigravity`) **and** the usage ingestion endpoint (`POST /api/usage/events`).
-- All requests using keys belonging to the same dashboard client are grouped under that client, while retaining their individual provider labels (`openai`, `codex`, `opencode-go`, `antigravity`, etc.).
+- All requests using keys belonging to the same dashboard client are grouped under that client. Provider labels include `openai`, `codex`, `opencode-go`, and `google` for Antigravity.
 - Create **one client** per workstation/relay if you want one combined client view, or **separate clients** (with separate keys, and separate relay instances if using the relay) if you want per-tool or per-provider attribution in **Clients** and **Usage**.
 - **Background responses (`background: true`):** Keep both the initial `POST /v1/responses` and follow-up `GET /v1/responses/<id>` polls on the **same dashboard client and measurement mode** (`proxy` vs `relay`) so the server can correlate completion usage onto the originating request.
 
@@ -494,7 +494,7 @@ exec "/absolute/path/to/antigravity" "$@"
 4. In T3 Code, set **Settings → Providers → Antigravity → Binary path** to the launcher script on the environment that runs Antigravity.
 5. Start a fresh Antigravity session using your existing Google sign-in.
 
-The dashboard labels these requests as **Antigravity** under the client owning the proxy key and records token counts whenever Google reports them.
+The dashboard shows **Google** as the provider under the client owning the proxy key and records token counts whenever Google reports them. The request details show the Antigravity endpoint.
 
 ---
 
