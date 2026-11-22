@@ -67,7 +67,7 @@ async function mockAPI(page: Page, {
       const data = empty ? {
         ...response,
         summary: { estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, requestCount: 0, pricedRequestCount: 0 },
-        buckets: [], groups: { models: [], clients: [] }, requests: [], allowance: [],
+        buckets: [], groups: { models: [], clients: [] }, requests: [],
         filters: { models: [], clients: clients.map(({ id, name }) => ({ id, name })) }
       } : {
         ...response,
@@ -143,6 +143,7 @@ test('filters requests from a chart and inspects and pages through them with the
   await expect(metric.getByText('2 of 4 requests priced', { exact: true })).toBeVisible();
   const requests = page.getByRole('region', { name: 'Requests' });
   await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex allowance', exact: true })).toHaveCount(0);
   await requests.getByRole('button', { name: 'Show 1 more request' }).press('Enter');
   await expect(requests.getByText('Google', { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(requests.getByText('Unpriced', { exact: true })).toHaveCount(2);
@@ -763,6 +764,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await mockAPI(page, { empty: true });
   await unlock(page);
   await expect(page.getByRole('heading', { name: 'No clients connected' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex allowance', exact: true })).toHaveCount(0);
   await page.getByRole('link', { name: 'Connect a client' }).press('Enter');
   const create = page.getByRole('button', { name: 'New client' });
   await expect(create).toBeEnabled();
