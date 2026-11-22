@@ -470,7 +470,6 @@ supports_websockets = true
 ```
 
 - WebSockets (`supports_websockets = true`) are metered in direct, `remote-proxy`, and `usage-only` modes.
-- The dashboard displays remaining Codex allowance windows whenever the upstream reports recent rate-limit headers or WebSocket `codex.rate_limits` events.
 
 ### 5.3 Signed-in Antigravity and T3 Code launcher
 

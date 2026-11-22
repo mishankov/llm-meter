@@ -27,7 +27,7 @@ LLM Meter tracks tokens, costs, and provider allowances across OpenAI-compatible
 ## Capabilities and Constraints
 
 - Dashboard estimates are shown in USD. The ledger preserves provider-reported amounts, including zero, and uses recorded rates for estimates where applicable. Requests with insufficient pricing data appear as **Unpriced**.
-- OpenCode Go list value and allowance use are distinct from the reported charge. The dashboard shows Codex allowance when a recent upstream reading is available.
+- OpenCode Go list value and allowance use are distinct from the reported charge.
 - The full proxy key is shown only at issuance. The proxy validates the key and removes its header before forwarding the request upstream.
 
 ## Product Principles

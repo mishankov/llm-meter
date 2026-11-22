@@ -57,7 +57,7 @@ supports_websockets = true
 env_http_headers = { "X-LLM-Meter-Key" = "LLM_METER_KEY" }
 ```
 
-The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route forwards to the OpenAI API. The dashboard shows remaining Codex allowance when the upstream reports a recent reading.
+The Codex route forwards to the ChatGPT Codex backend. The ordinary `/v1` route forwards to the OpenAI API.
 
 ### Signed-in Antigravity
 

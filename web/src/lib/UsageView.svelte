@@ -1,11 +1,9 @@
 <script lang="ts">
-  import Clock3Icon from '@lucide/svelte/icons/clock-3';
   import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '@ui-sdk/svelte/button';
-  import { Meter, MeterIndicator, MeterTrack } from '@ui-sdk/svelte/meter';
   import { SegmentedControl, SegmentedControlItem } from '@ui-sdk/svelte/segmented-control';
-  import type { Allowance, DashboardProblem, RequestOutcome, Usage, UsageGroup } from './api';
+  import type { DashboardProblem, RequestOutcome, Usage, UsageGroup } from './api';
   import { compactCount, count, formatDateTime, formatTime, formatTimeWindow, formatUTCDay, guardEnter, money, partialPricing, tokens, unpricedBucket } from './format';
   import Filter from './Filter.svelte';
   import RequestList from './RequestList.svelte';
@@ -191,24 +189,6 @@
   {/if}
 {/snippet}
 
-{#snippet allowanceSection(windows: Allowance[])}
-  <section class="allowance-section" aria-labelledby="allowance-title">
-    <header class="section-head">
-      <h2 id="allowance-title">Codex allowance</h2>
-      <Clock3Icon size={16} aria-hidden="true" />
-    </header>
-    {#each windows as allowance (allowance.id)}
-      <div class="allowance-row">
-        <div class="allowance-heading"><strong>{allowance.label}</strong><span>{Math.round(allowance.remainingPercent)}% left</span></div>
-        <Meter value={allowance.remainingPercent} aria-label={allowance.label + ' remaining'} class="allowance-meter">
-          <MeterTrack class="allowance-track"><MeterIndicator class="allowance-indicator" /></MeterTrack>
-        </Meter>
-        {#if allowance.resetsAt}<span class="muted">Resets {formatDateTime(allowance.resetsAt)}</span>{/if}
-      </div>
-    {/each}
-  </section>
-{/snippet}
-
 {#snippet chartSelection()}
   <div class="chart-selection" class:has-selection={Boolean(bucket)}>
     <span aria-live="polite">{bucketLabel ? `Requests for ${bucketLabel}` : ''}</span>
@@ -302,7 +282,6 @@
       {#if !scoped}<a class="secondary-button" href="#clients">View clients</a>{/if}
     {/if}
   </section>
-  {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
 {:else}
   <div class="metrics">
     <section class="metric" aria-label="Usage value">
@@ -366,8 +345,6 @@
     </div>
   </section>
 
-  {#if data.allowance.length}{@render allowanceSection(data.allowance)}{/if}
-
   <RequestList
     requests={requestPage?.requests} {bucketLabel} {loading} {canPrevious} canNext={Boolean(requestPage?.nextCursor)}
     {outcome} onOutcomeChange={(value) => update('outcome', value)} {pageNumber} error={requestError} retry={retryRequests}
@@ -380,7 +357,7 @@
   .update-line { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-block-start: 4px; }
   .update-line p { display: flex; align-items: center; gap: 6px; margin: 0; }
   .update-line :global(.refresh-button) { background: transparent; border-color: transparent; }
-  .metrics, .timeline, .breakdown, .allowance-section { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
+  .metrics, .timeline, .breakdown { display: grid; border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   .filters { align-items: flex-end; }
   .filters :global(.requests-jump) { margin-inline-start: auto; }
   .filter-field { display: grid; gap: 4px; min-inline-size: 0; }
@@ -438,13 +415,6 @@
   .breakdown-panel :global(.breakdown-filter:hover) { background: var(--hover); }
   .breakdown-panel :global(.breakdown-filter[aria-pressed=true]) { box-shadow: inset 0 0 0 1px var(--selected-border); }
   .breakdown-note { margin: 7px 0 0; font-size: 12px; }
-  .allowance-section .section-head :global(svg) { color: var(--muted); }
-  .allowance-row { margin-block-end: 14px; display: grid; gap: 5px; font-size: 12px; }
-  .allowance-heading { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; gap: 8px; }
-  .allowance-heading strong { font-weight: 540; }
-  .allowance-heading span { color: var(--codex-light); white-space: nowrap; }
-  :global(.allowance-track) { background: var(--line); border-radius: 4px; overflow: hidden; block-size: 6px; }
-  :global(.allowance-indicator) { display: block; block-size: 100%; background: var(--codex); width: var(--meter-value, 0%); }
   @media (pointer: coarse) {
     .breakdown-panel :global(.breakdown-filter) { min-block-size: var(--touch-target); }
   }
@@ -463,8 +433,6 @@
     }
     .legend :is(i[data-series], .group-swatch) { forced-color-adjust: none; }
     .legend .group-swatch { border: 1px solid CanvasText; }
-    :global(.allowance-track) { border: 1px solid CanvasText; }
-    :global(.allowance-indicator) { forced-color-adjust: none; background: CanvasText; }
     .breakdown-panel :global(.breakdown-filter[aria-pressed=true]) { outline: 1px solid Highlight; }
   }
   @media (max-width: 670px) {
