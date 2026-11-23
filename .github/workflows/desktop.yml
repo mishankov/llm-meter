@@ -1,0 +1,41 @@
+name: macOS relay
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+      - run: wails3 task package
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: npm run check --prefix frontend
+      - run: npx playwright install webkit
+        working-directory: desktop/frontend
+      - run: npm test --prefix frontend

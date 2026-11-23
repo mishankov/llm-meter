@@ -9,3 +9,4 @@ web/build
 web/.svelte-kit
 web/playwright-report
 web/test-results
+desktop
