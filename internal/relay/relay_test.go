@@ -544,6 +544,71 @@ func TestConnectionIDAndProviders(t *testing.T) {
 	}
 }
 
+func TestTelemetryRelayOnlyAcceptsLocalLogExports(t *testing.T) {
+	config := Config{Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
+		Key: "fixture-key", DataDir: t.TempDir()}
+	for _, invalid := range []Config{
+		{Mode: ModeTelemetry, Target: config.Target, Provider: "openai"},
+		{Mode: ModeTelemetry, Target: config.Target, Upstream: "https://provider.test"},
+	} {
+		if _, err := configureRelay(invalid); err == nil {
+			t.Fatalf("accepted a model routing option in telemetry mode: %+v", invalid)
+		}
+	}
+	inst, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := inst.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, test := range []struct {
+		name, method, path, host string
+		headers                  http.Header
+		status                   int
+	}{
+		{name: "local export", method: http.MethodPost, path: "/v1/logs", status: http.StatusOK},
+		{name: "model traffic", method: http.MethodPost, path: "/v1/messages", status: http.StatusNotFound},
+		{name: "path suffix", method: http.MethodPost, path: "/v1/logs/", status: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: "/v1/logs", status: http.StatusMethodNotAllowed},
+		{name: "wrong host", method: http.MethodPost, path: "/v1/logs", host: "example.test", status: http.StatusForbidden},
+		{name: "browser origin", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
+		{name: "fetch metadata", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequestWithContext(ctx, test.method, "http://"+inst.Status().ListenAddr+test.path,
+				strings.NewReader(`{"resourceLogs":[]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Host = test.host
+			for name, values := range test.headers {
+				request.Header[name] = values
+			}
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != test.status {
+				t.Fatalf("response status %d, want %d", response.StatusCode, test.status)
+			}
+		})
+	}
+	status := inst.Status()
+	if status.RequestsTotal != 1 || len(status.Routes) != 0 || status.Outbox == nil || status.Outbox.Pending != 0 {
+		t.Fatalf("unexpected telemetry relay status: %+v", status)
+	}
+}
+
 func TestDrainFinishesInFlightUsageAndCanResumeOffline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()

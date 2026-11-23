@@ -16,7 +16,7 @@ Give operators one place to inspect model usage across connected clients. An ope
 
 ## Positioning
 
-LLM Meter tracks tokens, costs, and provider allowances across OpenAI-compatible clients, signed-in Codex and Antigravity sessions, and OpenCode Go. The server can meter traffic as a reverse proxy, or a local relay can send usage metadata while passing model traffic directly to the provider. A client key attributes usage while the client keeps its existing upstream credentials.
+LLM Meter tracks tokens, costs, and provider allowances across OpenAI-compatible clients, signed-in Codex and Antigravity sessions, and OpenCode Go. The server can meter traffic as a reverse proxy, or a local relay can send usage metadata while passing model traffic directly to the provider. The relay can also collect usage from Claude Code's OpenTelemetry exporter while Claude Code connects directly to Anthropic. A client key attributes usage while the client keeps its existing upstream credentials.
 
 ## Operating Context
 

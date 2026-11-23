@@ -274,13 +274,61 @@ func (q *Queue) Enqueue(ctx context.Context, payload []byte) error {
 		q.publishLocked()
 		return ErrFull
 	}
-	q.status.Pending++
+	q.enqueuedLocked(1)
+	return nil
+}
+
+// EnqueueBatch persists all payloads in order or leaves the queue unchanged.
+// A capacity error leaves the batch with the caller for retry.
+func (q *Queue) EnqueueBatch(ctx context.Context, payloads [][]byte) error {
+	if len(payloads) == 0 {
+		return nil
+	}
+	if len(payloads) > maxEvents {
+		return ErrFull
+	}
+	for _, payload := range payloads {
+		if len(payload) == 0 || len(payload) > maxEventSize {
+			return errors.New("usage event has invalid size")
+		}
+	}
+	q.mu.Lock()
+	if err := q.persistBatch(ctx, payloads); err != nil {
+		q.mu.Unlock()
+		return err
+	}
+	q.enqueuedLocked(len(payloads))
+	return nil
+}
+
+func (q *Queue) persistBatch(ctx context.Context, payloads [][]byte) error {
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var pending int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&pending); err != nil {
+		return err
+	}
+	if pending+len(payloads) > maxEvents {
+		return ErrFull
+	}
+	for _, payload := range payloads {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO events (payload) VALUES (?)`, payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (q *Queue) enqueuedLocked(count int) {
+	q.status.Pending += count
 	q.publishLocked()
 	select {
 	case q.ready <- struct{}{}:
 	default:
 	}
-	return nil
 }
 
 // Run delivers events in order. A caller should run one worker and wait for it

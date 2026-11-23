@@ -84,12 +84,7 @@ func (config relayConfig) handler(host, key string, record func(proxy.Usage), tr
 }
 
 func guard(host string, onRequest func(), handlers ...providerHandler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Host != host && r.Host+":80" != host) ||
-			len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
+	return guardClient(host, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
 			http.NotFound(w, r)
 			return
@@ -115,6 +110,17 @@ func guard(host string, onRequest func(), handlers ...providerHandler) http.Hand
 			return
 		}
 		http.NotFound(w, r)
+	}))
+}
+
+func guardClient(host string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.Host != host && r.Host+":80" != host) ||
+			len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

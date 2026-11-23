@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	Path         = "/api/usage/events"
-	MaxBodyBytes = 16 << 10
+	Path               = "/api/usage/events"
+	MaxBodyBytes       = 16 << 10
+	ClaudeCodeEndpoint = "/claude-code/api-request"
 )
 
 // Event carries metering metadata. The collector derives the client identity
@@ -161,6 +162,8 @@ func (limit RateLimit) valid() bool {
 
 func validProvider(endpoint, provider string) bool {
 	switch {
+	case endpoint == ClaudeCodeEndpoint:
+		return provider == "anthropic"
 	case strings.HasPrefix(endpoint, proxy.CodexPrefix):
 		return provider == "codex"
 	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
@@ -215,6 +218,9 @@ func knownValue(value string, values []string) string {
 // data. Only known operation names and fixed route templates cross the wire.
 func endpointName(path string) string {
 	path, _, _ = strings.Cut(path, "?")
+	if path == ClaudeCodeEndpoint {
+		return path
+	}
 	for _, prefix := range [...]string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {
 		suffix, ok := strings.CutPrefix(path, prefix)
 		if !ok || (suffix != "" && !strings.HasPrefix(suffix, "/")) {

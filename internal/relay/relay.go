@@ -1,4 +1,4 @@
-// Package relay runs the local loopback LLM Meter relay in remote-proxy or usage-only mode.
+// Package relay runs the local LLM Meter proxy and telemetry collector.
 package relay
 
 import (
@@ -17,6 +17,7 @@ import (
 
 	"github.com/mishankov/llm-meter/internal/proxy"
 	"github.com/mishankov/llm-meter/internal/relayoutbox"
+	"github.com/mishankov/llm-meter/internal/telemetry"
 	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
@@ -162,12 +163,33 @@ func (i *Instance) Start() error {
 		if i.onLog != nil {
 			i.queue.SetWarningLogger(func(message string) { i.log("warn", message) })
 		}
-		record = i.usageRecorder(i.queue)
+		if i.cfg.Mode == ModeUsageOnly {
+			record = i.usageRecorder(i.queue)
+		}
 	}
-	handler := i.config.handler(host, i.cfg.Key, record, i.transport, func() {
+	onRequest := func() {
 		i.requestsTotal.Add(1)
 		i.emitStatus()
-	})
+	}
+	var handler http.Handler
+	if i.cfg.Mode == ModeTelemetry {
+		logs := telemetry.LogsHandler(i.queue.EnqueueBatch)
+		handler = guardClient(host, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.EscapedPath() != "/v1/logs" {
+				http.NotFound(w, r)
+				return
+			}
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", http.MethodPost)
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			onRequest()
+			logs.ServeHTTP(w, r)
+		}))
+	} else {
+		handler = i.config.handler(host, i.cfg.Key, record, i.transport, onRequest)
+	}
 	httpCtx, cancel := context.WithCancel(context.Background())
 	i.stopHTTP = cancel
 	i.listenAddr = host
@@ -264,7 +286,7 @@ func (i *Instance) shutdown(ctx context.Context, drain bool) error {
 	}
 }
 
-// DrainPending uploads an offline usage-only queue before switching its configuration.
+// DrainPending uploads an offline usage queue before switching its configuration.
 // No listener is opened, so new client traffic cannot refill the queue.
 func DrainPending(ctx context.Context, cfg Config) error {
 	inst, err := New(cfg)
@@ -272,7 +294,7 @@ func DrainPending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	if inst.config.usageTarget == nil {
-		return errors.New("draining a usage queue requires usage-only mode")
+		return errors.New("draining a usage queue requires usage-only or telemetry mode")
 	}
 	queue, err := relayoutbox.Open(inst.cfg.DataDir, inst.config.usageTarget, inst.cfg.Key)
 	if err != nil {
@@ -327,7 +349,7 @@ func (i *Instance) Status() Status {
 	}
 }
 
-// RetryUploads triggers an immediate outbox upload attempt if running in usage-only mode.
+// RetryUploads triggers an immediate attempt if a usage outbox is open.
 func (i *Instance) RetryUploads() {
 	i.mu.Lock()
 	queue := i.queue

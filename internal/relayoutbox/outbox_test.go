@@ -186,6 +186,53 @@ func TestOutboxBounds(t *testing.T) {
 	}
 }
 
+func TestEnqueueBatchIsAtomicAndKeepsRetryableEventsWithTheCaller(t *testing.T) {
+	endpoint := &url.URL{Scheme: "https", Host: "proxy.test", Path: uploadPath}
+	queue, err := Open(t.TempDir(), endpoint, fixtureKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	ctx := t.Context()
+	if err := queue.EnqueueBatch(ctx, [][]byte{[]byte("valid"), nil}); err == nil {
+		t.Fatal("batch containing an invalid event was accepted")
+	}
+	if count := queuedEvents(t, queue); count != 0 {
+		t.Fatalf("invalid batch queued %d events", count)
+	}
+	if _, err := queue.db.Exec(`WITH RECURSIVE ids(n) AS (
+		SELECT 1 UNION ALL SELECT n + 1 FROM ids WHERE n < ?
+	) INSERT INTO events (payload) SELECT X'7b7d' FROM ids`, maxEvents-1); err != nil {
+		t.Fatal(err)
+	}
+	payloads := [][]byte{[]byte("first"), []byte("second")}
+	if err := queue.EnqueueBatch(ctx, payloads); !errors.Is(err, ErrFull) {
+		t.Fatalf("enqueue near capacity: %v", err)
+	}
+	if count := queuedEvents(t, queue); count != maxEvents-1 {
+		t.Fatalf("rejected batch left %d queued events", count)
+	}
+	if dropped := queue.Status().Dropped; dropped != 0 {
+		t.Fatalf("retryable refusal was counted as %d dropped events", dropped)
+	}
+	if _, err := queue.db.Exec(`DELETE FROM events`); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.EnqueueBatch(ctx, payloads); err != nil {
+		t.Fatal(err)
+	}
+	var first, last string
+	if err := queue.db.QueryRow(`SELECT payload FROM events ORDER BY id LIMIT 1`).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.db.QueryRow(`SELECT payload FROM events ORDER BY id DESC LIMIT 1`).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	if first != "first" || last != "second" || queue.Status().Pending != 2 {
+		t.Fatalf("wrong queue contents: first %q, last %q, pending %d", first, last, queue.Status().Pending)
+	}
+}
+
 func TestQueueRemainsBoundToItsConnection(t *testing.T) {
 	endpoint := &url.URL{Scheme: "https", Host: "proxy.test", Path: uploadPath}
 	directory := t.TempDir()
