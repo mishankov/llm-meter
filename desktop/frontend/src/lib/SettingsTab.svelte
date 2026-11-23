@@ -490,8 +490,8 @@
   }
 
   :global(.radio-btn) {
-    inline-size: 15px;
-    block-size: 15px;
+    inline-size: 16px;
+    block-size: 16px;
     border-radius: 50%;
     border: 1px solid var(--control-border);
     background: var(--bg);
@@ -507,14 +507,16 @@
   }
 
   :global(.radio-dot) {
-    inline-size: 7px;
-    block-size: 7px;
+    display: block;
+    inline-size: 8px;
+    block-size: 8px;
     border-radius: 50%;
     background: var(--accent);
   }
 
   .mode-title {
     font-size: 12.5px;
+    line-height: 1.25;
     font-weight: 600;
   }
 

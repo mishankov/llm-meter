@@ -93,7 +93,7 @@
           Upload kept reports
         </Button>
       </div>
-      <p class="muted">Send pending reports to their original server using the saved key.</p>
+      <p class="muted card-note">Send pending reports to their original server using the saved key.</p>
     </section>
   {/if}
   {#if !snapshot.configured}
@@ -137,7 +137,7 @@
         </div>
       </div>
 
-      {#if tested}<p class="banner banner-success" role="status">{tested}</p>{/if}
+      {#if tested}<div class="banner banner-success card-banner" role="status">{tested}</div>{/if}
       <dl class="metrics">
         <div>
           <dt>State</dt>
@@ -285,6 +285,16 @@
     font-size: 13.5px;
     font-weight: 620;
     margin: 0;
+  }
+
+  .card-note {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .card-banner {
+    margin-bottom: 12px;
   }
 
   .inline-actions {

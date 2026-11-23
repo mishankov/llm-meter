@@ -64,7 +64,7 @@
 
   .logs-head {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
   }
@@ -104,7 +104,7 @@
 
   .log-row {
     display: grid;
-    grid-template-columns: 74px 48px minmax(0, 1fr);
+    grid-template-columns: max-content 38px minmax(0, 1fr);
     gap: 8px;
     align-items: baseline;
     line-height: 1.45;

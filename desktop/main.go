@@ -24,6 +24,9 @@ var trayIcon []byte
 //go:embed icons/tray-alert-template.png
 var trayAlertIcon []byte
 
+//go:embed frontend/src/assets/llm-meter.png
+var appIcon []byte
+
 const eventSnapshotUpdated = "relay:snapshot"
 
 func init() {
@@ -45,6 +48,7 @@ func main() {
 	var window *application.WebviewWindow
 	var createWindow sync.Once
 	openWindow := func(settings bool) {
+		setDockIconVisible(true, appIcon)
 		createWindow.Do(func() {
 			url := "/"
 			if settings {
@@ -56,14 +60,16 @@ func main() {
 				URL: url,
 				Mac: application.MacWindow{
 					TitleBar:                application.MacTitleBarHiddenInset,
-					InvisibleTitleBarHeight: 42,
+					InvisibleTitleBarHeight: 52,
 				},
 			})
 			window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 				window.Hide()
+				setDockIconVisible(false, nil)
 				e.Cancel()
 			})
 		})
+		window.UnMinimise()
 		window.Show().Focus()
 		if settings {
 			window.ExecJS("window.dispatchEvent(new Event('relay-open-settings'))")
@@ -73,6 +79,7 @@ func main() {
 	app = application.New(application.Options{
 		Name:        "LLM Meter Relay",
 		Description: "Local macOS menu-bar relay for LLM Meter",
+		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(service),
 		},
@@ -111,6 +118,9 @@ func main() {
 		case changed <- struct{}{}:
 		default:
 		}
+	})
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(_ *application.ApplicationEvent) {
+		openWindow(false)
 	})
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(_ *application.ApplicationEvent) {
 		go func() {

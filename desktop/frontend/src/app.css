@@ -116,14 +116,20 @@ code, pre {
   justify-content: center;
   gap: 7px;
   border: 1px solid var(--control-border);
-  min-height: 32px;
+  min-height: 34px;
   padding: 0 12px;
   border-radius: 6px;
   background: var(--surface);
   font-weight: 540;
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
   white-space: nowrap;
+}
+
+button svg {
+  display: block;
+  flex: none;
 }
 
 .secondary-button:hover:not(:disabled),
@@ -257,15 +263,15 @@ code, pre {
 
 .checkbox-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 9px;
   cursor: pointer;
   font-size: 12.5px;
+  line-height: 1.35;
 }
 
 .checkbox-box {
   flex: none;
-  margin-top: 1px;
   inline-size: 16px;
   block-size: 16px;
   border-radius: 4px;
@@ -276,6 +282,12 @@ code, pre {
   justify-content: center;
   padding: 0;
   cursor: pointer;
+}
+
+.checkbox-box [data-slot="checkbox-indicator"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .checkbox-box[data-checked] {

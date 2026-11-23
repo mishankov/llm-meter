@@ -152,7 +152,7 @@
         {/if}
 
         {#if actionConfirmation}
-          <div class="banner banner-success" role="status">{actionConfirmation}</div>
+          <div class="banner banner-success top-err" role="status">{actionConfirmation}</div>
         {/if}
 
         <TabsPanel value="status">
@@ -205,8 +205,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    height: 46px;
-    padding: 0 16px 0 84px;
+    height: 52px;
+    padding: 0 16px 0 96px;
     background: var(--sidebar);
     border-bottom: 1px solid var(--line);
   }
@@ -227,14 +227,18 @@
   .brand-name {
     font-weight: 630;
     font-size: 13.5px;
+    line-height: 1;
     letter-spacing: -0.015em;
     white-space: nowrap;
   }
 
   .status-pill {
+    display: inline-flex;
+    align-items: center;
     font-size: 11px;
+    line-height: 1;
     font-weight: 560;
-    padding: 2px 8px;
+    padding: 4px 8px;
     border-radius: 999px;
     background: var(--surface-raised);
     border: 1px solid var(--line);
@@ -294,8 +298,16 @@
     background: transparent;
     color: var(--muted);
     font-size: 12.5px;
+    line-height: 1;
     font-weight: 530;
     cursor: pointer;
+  }
+
+  :global(.tab-btn [data-slot="tabs-tab-icon"]) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
   }
 
   :global(.tab-btn:hover) {

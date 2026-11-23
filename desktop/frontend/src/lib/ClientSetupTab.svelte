@@ -189,7 +189,7 @@ supports_websockets = true`;
       <span class="field-label">Local base URL</span>
       <div class="url-row">
         <code class="url-box">{baseUrl}</code>
-        <Button class="secondary-button compact-button" onclick={() => copy("url", baseUrl)}>
+        <Button class="secondary-button" onclick={() => copy("url", baseUrl)}>
           <CopyIcon size={12} aria-hidden="true" />
           {copiedKey === "url" ? "Copied" : "Copy URL"}
         </Button>
@@ -301,6 +301,9 @@ supports_websockets = true`;
 
   .url-box {
     flex: 1;
+    min-height: 34px;
+    display: flex;
+    align-items: center;
     padding: 7px 10px;
     border-radius: 6px;
     background: var(--bg);
