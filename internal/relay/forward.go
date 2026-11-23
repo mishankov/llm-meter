@@ -1,4 +1,4 @@
-package main
+package relay
 
 import (
 	"io"
@@ -18,15 +18,38 @@ const (
 	apiPrefix = "/v1"
 )
 
-type connectionProvider struct {
-	prefix, defaultUpstream string
+// ProviderSpec describes a provider route served by the local relay.
+type ProviderSpec struct {
+	Name            string `json:"name"`
+	Prefix          string `json:"prefix"`
+	DefaultUpstream string `json:"defaultUpstream"`
 }
 
+type connectionProvider struct {
+	name, prefix, defaultUpstream string
+}
+
+var providerOrder = []string{"antigravity", "openai", "codex", "opencode-go"}
+
 var providers = map[string]connectionProvider{
-	"antigravity": {proxy.AntigravityPrefix, "https://daily-cloudcode-pa.googleapis.com"},
-	"openai":      {apiPrefix, "https://api.openai.com/v1"},
-	"codex":       {proxy.CodexPrefix, "https://chatgpt.com/backend-api/codex"},
-	"opencode-go": {proxy.OpenCodeGoPrefix, "https://opencode.ai/inference/go"},
+	"antigravity": {"antigravity", proxy.AntigravityPrefix, "https://daily-cloudcode-pa.googleapis.com"},
+	"openai":      {"openai", apiPrefix, "https://api.openai.com/v1"},
+	"codex":       {"codex", proxy.CodexPrefix, "https://chatgpt.com/backend-api/codex"},
+	"opencode-go": {"opencode-go", proxy.OpenCodeGoPrefix, "https://opencode.ai/inference/go"},
+}
+
+// Providers returns all supported relay providers in deterministic order.
+func Providers() []ProviderSpec {
+	out := make([]ProviderSpec, 0, len(providerOrder))
+	for _, name := range providerOrder {
+		p := providers[name]
+		out = append(out, ProviderSpec{
+			Name:            p.name,
+			Prefix:          p.prefix,
+			DefaultUpstream: p.defaultUpstream,
+		})
+	}
+	return out
 }
 
 var cloudCodeRPC = regexp.MustCompile(`^/v1internal:[a-zA-Z][a-zA-Z0-9]*$`)
@@ -46,7 +69,7 @@ type providerHandler struct {
 	forward  http.Handler
 }
 
-func (config relayConfig) handler(host, key string, record func(proxy.Usage), transport http.RoundTripper) http.Handler {
+func (config relayConfig) handler(host, key string, record func(proxy.Usage), transport http.RoundTripper, onRequest func()) http.Handler {
 	handlers := make([]providerHandler, 0, len(config.routes))
 	for _, route := range config.routes {
 		var forward http.Handler
@@ -57,10 +80,10 @@ func (config relayConfig) handler(host, key string, record func(proxy.Usage), tr
 		}
 		handlers = append(handlers, providerHandler{route.provider, forward})
 	}
-	return guard(host, handlers...)
+	return guard(host, onRequest, handlers...)
 }
 
-func guard(host string, handlers ...providerHandler) http.Handler {
+func guard(host string, onRequest func(), handlers ...providerHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (r.Host != host && r.Host+":80" != host) ||
 			len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 {
@@ -84,6 +107,9 @@ func guard(host string, handlers ...providerHandler) http.Handler {
 					http.Error(w, "Provider authorization is required", http.StatusUnauthorized)
 					return
 				}
+			}
+			if onRequest != nil {
+				onRequest()
 			}
 			handler.forward.ServeHTTP(w, r)
 			return

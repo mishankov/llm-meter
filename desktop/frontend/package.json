@@ -1,0 +1,30 @@
+{
+  "name": "llm-meter-relay-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vite build --minify false --mode development",
+    "build": "vite build --mode production",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@lucide/svelte": "^1.77.0",
+    "@ui-sdk/core": "0.1.0-beta.13",
+    "@ui-sdk/svelte": "0.1.0-beta.13",
+    "@wailsio/runtime": "3.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "svelte": "^5.59.0",
+    "svelte-check": "^4.4.8",
+    "tslib": "^2.6.2",
+    "typescript": "^5.8.3",
+    "vite": "^8.3.8"
+  }
+}

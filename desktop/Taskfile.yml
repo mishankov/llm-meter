@@ -1,0 +1,63 @@
+version: '3'
+
+vars:
+  APP_NAME: llm-meter-relay-app
+  BUNDLE: bin/LLM Meter Relay.app
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '12.0'
+  CGO_CFLAGS: '-mmacosx-version-min=12.0'
+  CGO_LDFLAGS: '-mmacosx-version-min=12.0'
+
+tasks:
+  frontend:deps:
+    dir: frontend
+    sources: [package.json, package-lock.json]
+    generates: [node_modules/.package-lock.json]
+    cmds: [npm ci]
+
+  bindings:
+    desc: Regenerate the TypeScript bindings after changing the Go service
+    cmds:
+      - mkdir -p frontend/dist
+      - touch frontend/dist/.gitkeep
+      - wails3 generate bindings -clean=true -ts -i
+
+  build:
+    desc: Compile the desktop frontend and macOS executable
+    platforms: [darwin]
+    deps: [frontend:deps]
+    cmds:
+      - npm run build --prefix frontend
+      - go build {{if ne .DEV "true"}}-tags production -trimpath{{end}} -o bin/{{.APP_NAME}} .
+
+  package:
+    desc: Build an ad-hoc signed macOS app
+    platforms: [darwin]
+    cmds:
+      - task: build
+      - mkdir -p "{{.BUNDLE}}/Contents/MacOS" "{{.BUNDLE}}/Contents/Resources"
+      - cp bin/{{.APP_NAME}} "{{.BUNDLE}}/Contents/MacOS/"
+      - cp build/darwin/Info.plist "{{.BUNDLE}}/Contents/"
+      - wails3 generate icons -input frontend/src/assets/llm-meter.png -windowsfilename= -macfilename "{{.BUNDLE}}/Contents/Resources/icons.icns"
+      - codesign --force --sign - "{{.BUNDLE}}"
+      - codesign --verify --deep --strict "{{.BUNDLE}}"
+
+  package:dmg:
+    desc: Package the macOS app in a disk image
+    platforms: [darwin]
+    cmds:
+      - task: package
+      - hdiutil create -ov -format UDZO -volname "LLM Meter Relay" -srcfolder "{{.BUNDLE}}" "bin/LLM Meter Relay.dmg"
+
+  dev:frontend:
+    dir: frontend
+    deps: [frontend:deps]
+    cmds: ['npm run dev -- --port {{.VITE_PORT}} --strictPort']
+
+  run:
+    cmds: ['bin/{{.APP_NAME}}']
+
+  dev:
+    cmds: ['wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}']

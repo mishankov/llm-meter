@@ -104,6 +104,10 @@ Point each client at its local base URL and use its usual provider authenticatio
 
 To limit an instance to one route, set `--provider` to one of `antigravity`, `openai`, `codex`, or `opencode-go`. In `usage-only` mode, pair `--upstream` with `--provider` to set a trusted HTTPS base URL for that provider.
 
+### Relay on macOS
+
+The [menu bar app](desktop/README.md) runs the relay locally, shows pending usage uploads, and provides setup snippets for each client.
+
 ### Relay with Docker
 
 The relay image is `ghcr.io/mishankov/llm-meter-relay`, with the same Linux platforms and tag scheme as the server. Authenticate to GHCR if the package is private. You can also build it from the checkout with `docker build -f Dockerfile.relay -t llm-meter-relay .` and substitute that image name below.

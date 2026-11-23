@@ -199,6 +199,12 @@ func TestQueueRemainsBoundToItsConnection(t *testing.T) {
 	if err := queue.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if count, err := PendingCount(directory); err != nil || count != 1 {
+		t.Fatalf("PendingCount = %d, %v; want 1, nil", count, err)
+	}
+	if count, err := PendingCount(t.TempDir()); err != nil || count != 0 {
+		t.Fatalf("PendingCount on empty dir = %d, %v; want 0, nil", count, err)
+	}
 	if wrong, err := Open(directory, endpoint, "different-key"); err == nil {
 		wrong.Close()
 		t.Fatal("another key can access this connection's pending events")
@@ -207,6 +213,94 @@ func TestQueueRemainsBoundToItsConnection(t *testing.T) {
 	if wrong, err := Open(directory, other, fixtureKey); err == nil {
 		wrong.Close()
 		t.Fatal("another server can receive this connection's pending events")
+	}
+}
+
+func TestStatusRetryNowAndWaitEmpty(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	queue := openTestQueue(t, t.TempDir(), server)
+	defer queue.Close()
+
+	failed := make(chan Status, 8)
+	queue.SetObserver(func(s Status) {
+		if s.LastHTTPCode == http.StatusUnauthorized {
+			select {
+			case failed <- s:
+			default:
+			}
+		}
+	})
+
+	if err := queue.Enqueue(t.Context(), []byte(`{"id":"retry-me"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if st := queue.Status(); st.Pending != 1 {
+		t.Fatalf("pending = %d, want 1", st.Pending)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		queue.Run(ctx)
+	}()
+	defer func() {
+		stop()
+		<-done
+	}()
+
+	select {
+	case st := <-failed:
+		if st.LastHTTPCode != http.StatusUnauthorized || st.NextRetryAt.IsZero() {
+			t.Fatalf("unexpected retry status: %+v", st)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for failed upload status")
+	}
+
+	// Switch server to healthy and wake backoff immediately via WaitEmpty (calls RetryNow).
+	fail.Store(false)
+	drainCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := queue.WaitEmpty(drainCtx); err != nil {
+		t.Fatalf("WaitEmpty failed: %v", err)
+	}
+	st := queue.Status()
+	if st.Pending != 0 || st.LastError != "" || st.LastHTTPCode != 0 || st.LastSuccessAt.IsZero() {
+		t.Fatalf("unexpected drained status: %+v", st)
+	}
+}
+
+func TestDrainReportsDiscardedEvents(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer server.Close()
+	queue := openTestQueue(t, t.TempDir(), server)
+	defer queue.Close()
+	for range 2 {
+		if err := queue.Enqueue(t.Context(), []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := queue.deliverNext(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := queue.DrainResult(0, queue.WaitEmpty(t.Context())); err == nil || err.Error() != "usage reports discarded during drain: 2" {
+		t.Fatalf("drain after rejections returned %v", err)
+	}
+	if err := queue.DrainResult(queue.Status().Dropped, nil); err != nil {
+		t.Fatalf("a later drain counted earlier rejections: %v", err)
 	}
 }
 
