@@ -1,17 +1,18 @@
 ---
-name: full-send
-description: Trigger this if the user says 'full send'.
+name: ship-pr
+description: Trigger this when the user explicitly asks to "ship PR" (or clearly authorizes unattended delivery through merge).
 ---
 
-# Full Send
+# Ship PR
 
 If the user triggered this, it's because they are not watching this thread, and
 they want you to complete the work end-to-end autonomously. Your updates and
 your final message go unread until long after you stop. You own the work from
 its current state to a merged PR.
 
-If the user did not explicitly request "full send" in some clear way, do not
-assume full autonomy. If they did, everything below applies.
+If the user did not explicitly request "ship PR" (or clearly authorize
+unattended delivery through merge), do not assume full autonomy. If they did,
+everything below applies.
 
 The user grants you permission to:
 
@@ -21,7 +22,7 @@ The user grants you permission to:
 
 ## Testing permission
 
-A "full send" request is the permission. If a project file or other
+A "ship PR" request is the permission. If a project file or other
 instruction says to ask before a test method, or to leave testing to the
 user, this request replaces that rule for this task.
 
@@ -44,9 +45,9 @@ one appears.
 
 1. **Finish the change.** Complete the goal from the user's request with the
    smallest change that works. Fix the case that happened, not every case
-   that could. If you are on the default branch, create a branch first. When
-   starting implementation, follow the skill update step in
-   [implement](../implement/SKILL.md#check-for-skill-updates).
+   that could. If you are on the default branch, create a branch first. If
+   thread-start updates have not run in this thread yet, follow
+   [start-thread](../start-thread/SKILL.md).
 2. **Prove it.** Get proof for every change you made. See "Proof".
 3. **Get feedback.** Use [review-loop](../review-loop/SKILL.md) to verify changes.
 4. **File the PR** with [file-pr](../file-pr/SKILL.md). Rebase onto the latest
