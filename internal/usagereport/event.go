@@ -18,9 +18,13 @@ import (
 )
 
 const (
-	Path               = "/api/usage/events"
-	MaxBodyBytes       = 16 << 10
-	ClaudeCodeEndpoint = "/claude-code/api-request"
+	Path                      = "/api/usage/events"
+	MaxBodyBytes              = 16 << 10
+	ClaudeCodeEndpoint        = "/claude-code/api-request"
+	CodexTelemetryEndpoint    = "/codex/telemetry"
+	GeminiTelemetryEndpoint   = "/gemini-cli/api-request"
+	CopilotTelemetryEndpoint  = "/copilot/chat"
+	OpenCodeTelemetryEndpoint = "/opencode/telemetry"
 )
 
 // Event carries metering metadata. The collector derives the client identity
@@ -164,6 +168,12 @@ func validProvider(endpoint, provider string) bool {
 	switch {
 	case endpoint == ClaudeCodeEndpoint:
 		return provider == "anthropic"
+	case endpoint == GeminiTelemetryEndpoint:
+		return provider == "google"
+	case endpoint == CodexTelemetryEndpoint:
+		return provider == "codex" || provider == ""
+	case endpoint == CopilotTelemetryEndpoint:
+		return provider == "github-copilot"
 	case strings.HasPrefix(endpoint, proxy.CodexPrefix):
 		return provider == "codex"
 	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
@@ -186,7 +196,7 @@ func serviceTier(value string) string {
 func (e Event) Usage() proxy.Usage {
 	source := "api"
 	provider := e.Provider
-	if strings.HasPrefix(e.Endpoint, proxy.CodexPrefix) {
+	if e.Provider == "codex" {
 		source = "codex"
 	}
 	if proxy.IsAntigravityEndpoint(e.Endpoint) {
@@ -218,7 +228,8 @@ func knownValue(value string, values []string) string {
 // data. Only known operation names and fixed route templates cross the wire.
 func endpointName(path string) string {
 	path, _, _ = strings.Cut(path, "?")
-	if path == ClaudeCodeEndpoint {
+	switch path {
+	case ClaudeCodeEndpoint, CodexTelemetryEndpoint, GeminiTelemetryEndpoint, CopilotTelemetryEndpoint, OpenCodeTelemetryEndpoint:
 		return path
 	}
 	for _, prefix := range [...]string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {

@@ -1,8 +1,6 @@
 package telemetry
 
 import (
-	"crypto/sha256"
-	"encoding/base32"
 	"errors"
 	"fmt"
 	"math"
@@ -18,10 +16,7 @@ import (
 
 const claudeRequestEvent = "claude_code.api_request"
 
-var (
-	errInvalidClaudeUsage = errors.New("invalid Claude Code usage")
-	eventIDEncoding       = base32.StdEncoding.WithPadding(base32.NoPadding)
-)
+var errInvalidClaudeUsage = errors.New("invalid Claude Code usage")
 
 func claudeCodeUsage(record *logspb.LogRecord) (usagereport.Event, bool, error) {
 	if record.GetEventName() != claudeRequestEvent && record.GetBody().GetStringValue() != claudeRequestEvent {
@@ -36,10 +31,10 @@ func claudeCodeUsage(record *logspb.LogRecord) (usagereport.Event, bool, error) 
 	if record.GetTimeUnixNano() == 0 {
 		at, _ = time.Parse(time.RFC3339Nano, fields["event.timestamp"].GetStringValue())
 	}
-	input, validInput := claudeTokenCount(fields["input_tokens"])
-	output, validOutput := claudeTokenCount(fields["output_tokens"])
-	read, validRead := claudeTokenCount(fields["cache_read_tokens"])
-	write, validWrite := claudeTokenCount(fields["cache_creation_tokens"])
+	input, validInput := tokenCount(fields["input_tokens"])
+	output, validOutput := tokenCount(fields["output_tokens"])
+	read, validRead := tokenCount(fields["cache_read_tokens"])
+	write, validWrite := tokenCount(fields["cache_creation_tokens"])
 	if !validInput || !validOutput || (fields["cache_read_tokens"] != nil && !validRead) ||
 		(fields["cache_creation_tokens"] != nil && !validWrite) {
 		return usagereport.Event{}, true, errInvalidClaudeUsage
@@ -76,34 +71,12 @@ func claudeCodeUsage(record *logspb.LogRecord) (usagereport.Event, bool, error) 
 	requestID := fields["request_id"].GetStringValue()
 	identity := "request:" + requestID
 	if requestID == "" {
-		sequence, _ := claudeInteger(fields["event.sequence"])
+		sequence, _ := integerAttribute(fields["event.sequence"])
 		identity = fmt.Sprintf("event:%q:%d:%d:%q",
 			fields["session.id"].GetStringValue(), at.UnixNano(), sequence, event.Model)
 	}
-	digest := sha256.Sum256([]byte(claudeRequestEvent + "\x00" + identity))
-	event.ID = eventIDEncoding.EncodeToString(digest[:16])
+	event.ID = stableEventID(claudeRequestEvent, identity)
 	return event, true, nil
-}
-
-func claudeTokenCount(value *commonpb.AnyValue) (int64, bool) {
-	count, ok := claudeInteger(value)
-	if !ok || count < 0 || count > 1<<40 {
-		return 0, false
-	}
-	return count, true
-}
-
-func claudeInteger(value *commonpb.AnyValue) (int64, bool) {
-	switch number := value.GetValue().(type) {
-	case *commonpb.AnyValue_IntValue:
-		return number.IntValue, true
-	case *commonpb.AnyValue_StringValue:
-		// Older Claude Code releases exported numeric attributes as strings.
-		parsed, err := strconv.ParseInt(number.StringValue, 10, 64)
-		return parsed, err == nil
-	default:
-		return 0, false
-	}
 }
 
 func claudeCostEstimate(fields map[string]*commonpb.AnyValue) *float64 {
@@ -120,7 +93,7 @@ func claudeCostEstimate(fields map[string]*commonpb.AnyValue) *float64 {
 			return nil
 		}
 	default:
-		micros, ok := claudeInteger(fields["cost_usd_micros"])
+		micros, ok := integerAttribute(fields["cost_usd_micros"])
 		if !ok {
 			return nil
 		}

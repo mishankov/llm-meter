@@ -115,7 +115,11 @@ func guard(host string, onRequest func(), handlers ...providerHandler) http.Hand
 
 func guardClient(host string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Host != host && r.Host+":80" != host) ||
+		defaultPort := ":80"
+		if r.TLS != nil {
+			defaultPort = ":443"
+		}
+		if (r.Host != host && r.Host+defaultPort != host) ||
 			len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return

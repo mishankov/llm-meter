@@ -39,6 +39,8 @@ type Config struct {
 	Upstream string
 	Key      string
 	DataDir  string
+	TLSCert  string
+	TLSKey   string
 }
 
 // Validate checks cfg without opening files, sockets, or databases.
@@ -173,6 +175,9 @@ func parseTargetOrigin(raw string) (*url.URL, error) {
 }
 
 func configureRelay(cfg Config) (relayConfig, error) {
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") || (cfg.TLSCert != "" && cfg.Mode != ModeTelemetry) {
+		return relayConfig{}, errors.New("--tls-cert and --tls-key must be used together in telemetry mode")
+	}
 	selected := cfg.Provider
 	if _, ok := providers[selected]; selected != "" && !ok {
 		return relayConfig{}, errors.New("unknown --provider")

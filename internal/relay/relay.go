@@ -3,6 +3,7 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,6 +140,17 @@ func (i *Instance) Start() error {
 		return errors.New("relay instance already started")
 	}
 	i.started = true
+	var tlsConfig *tls.Config
+	scheme := "http"
+	if i.cfg.TLSCert != "" {
+		pair, err := tls.LoadX509KeyPair(i.cfg.TLSCert, i.cfg.TLSKey)
+		if err != nil {
+			i.mu.Unlock()
+			return i.finish(fmt.Errorf("load telemetry TLS certificate: %w", err))
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
+		scheme = "https"
+	}
 	listener, err := net.Listen("tcp", i.bindAddr)
 	if err != nil {
 		i.mu.Unlock()
@@ -147,6 +159,9 @@ func (i *Instance) Start() error {
 	host := listener.Addr().String()
 	if i.cfg.Bind != "" {
 		host = i.cfg.Listen
+	}
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
 	}
 
 	var record func(proxy.Usage)
@@ -173,20 +188,7 @@ func (i *Instance) Start() error {
 	}
 	var handler http.Handler
 	if i.cfg.Mode == ModeTelemetry {
-		logs := telemetry.LogsHandler(i.queue.EnqueueBatch)
-		handler = guardClient(host, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.EscapedPath() != "/v1/logs" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.Method != http.MethodPost {
-				w.Header().Set("Allow", http.MethodPost)
-				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			onRequest()
-			logs.ServeHTTP(w, r)
-		}))
+		handler = guardClient(host, telemetry.Handler(i.queue.EnqueueBatch, onRequest))
 	} else {
 		handler = i.config.handler(host, i.cfg.Key, record, i.transport, onRequest)
 	}
@@ -197,7 +199,7 @@ func (i *Instance) Start() error {
 	i.mu.Unlock()
 
 	go i.run(httpCtx, listener, handler)
-	i.log("info", fmt.Sprintf("Listening on http://%s (%s)", host, i.cfg.Mode))
+	i.log("info", fmt.Sprintf("Listening on %s://%s (%s)", scheme, host, i.cfg.Mode))
 	i.emitStatus()
 	return nil
 }

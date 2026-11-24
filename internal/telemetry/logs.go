@@ -4,14 +4,16 @@ package telemetry
 import (
 	"compress/gzip"
 	"context"
-	"encoding/json"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 
-	"github.com/mishankov/llm-meter/internal/usagereport"
 	logscollector "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	metricscollector "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	tracecollector "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,19 +23,46 @@ import (
 const (
 	mediaProtobuf = "application/x-protobuf"
 	mediaJSON     = "application/json"
-	maxLogBytes   = 4 << 20
-	maxLogRecords = 2048
+	maxOTLPBytes  = 4 << 20
+	maxUsageBatch = 2048
 )
 
-// LogsHandler acknowledges an OTLP/HTTP batch after its usage events are persisted.
-func LogsHandler(enqueue func(context.Context, [][]byte) error) http.Handler {
+type enqueueBatch func(context.Context, [][]byte) error
+
+// Handler receives OTLP/HTTP logs, traces, and metrics. It takes usage from one
+// signal per harness and acknowledges metrics for exporters that also send them.
+func Handler(enqueue func(context.Context, [][]byte) error, onRequest func()) http.Handler {
+	routes := map[string]http.Handler{
+		"/v1/logs":    receiveOTLP(enqueue, &logscollector.ExportLogsServiceRequest{}, logsToUsage),
+		"/v1/traces":  receiveOTLP(enqueue, &tracecollector.ExportTraceServiceRequest{}, tracesToUsage),
+		"/v1/metrics": receiveOTLP(enqueue, &metricscollector.ExportMetricsServiceRequest{}, discardMetrics),
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler, ok := routes[r.URL.EscapedPath()]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if onRequest != nil {
+			onRequest()
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
+func receiveOTLP[T proto.Message](enqueue enqueueBatch, schema T, convert func(T, bool) (usageBatch, proto.Message)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		format, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || (format != mediaJSON && format != mediaProtobuf) {
 			http.Error(w, "Expected OTLP JSON or protobuf", http.StatusUnsupportedMediaType)
 			return
 		}
-		body := http.MaxBytesReader(w, r.Body, maxLogBytes)
+		body := http.MaxBytesReader(w, r.Body, maxOTLPBytes)
 		var reader io.Reader = body
 		switch r.Header.Get("Content-Encoding") {
 		case "", "identity":
@@ -49,74 +78,115 @@ func LogsHandler(enqueue func(context.Context, [][]byte) error) http.Handler {
 			writeStatus(w, format, http.StatusUnsupportedMediaType, codes.InvalidArgument, "Unsupported OTLP content encoding")
 			return
 		}
-		data, err := io.ReadAll(io.LimitReader(reader, maxLogBytes+1))
+		data, err := io.ReadAll(io.LimitReader(reader, maxOTLPBytes+1))
 		if err != nil {
 			writeReadError(w, format, err)
 			return
 		}
-		if len(data) > maxLogBytes {
+		if len(data) > maxOTLPBytes {
 			writeStatus(w, format, http.StatusRequestEntityTooLarge, codes.ResourceExhausted, "OTLP request is too large")
 			return
 		}
-		var batch logscollector.ExportLogsServiceRequest
-		if format == mediaJSON {
-			// Trace and span IDs are never used. Their fixed-length hexadecimal
-			// encodings also decode as protobuf JSON bytes.
-			err = (protojson.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 64}).Unmarshal(data, &batch)
+		request := schema.ProtoReflect().New().Interface().(T)
+		fromJSON := format == mediaJSON
+		if fromJSON {
+			err = (protojson.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 64}).Unmarshal(data, request)
 		} else {
-			err = (proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 64}).Unmarshal(data, &batch)
+			err = (proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 64}).Unmarshal(data, request)
 		}
 		if err != nil {
-			writeStatus(w, format, http.StatusBadRequest, codes.InvalidArgument, "Invalid OTLP log request")
+			writeStatus(w, format, http.StatusBadRequest, codes.InvalidArgument, "Invalid OTLP request")
 			return
 		}
-		payloads, rejected, tooMany := usagePayloads(&batch)
-		if tooMany {
-			writeStatus(w, format, http.StatusRequestEntityTooLarge, codes.ResourceExhausted, "Too many OTLP log records")
+		batch, response := convert(request, fromJSON)
+		if batch.records > maxUsageBatch {
+			writeStatus(w, format, http.StatusRequestEntityTooLarge, codes.ResourceExhausted, "Too many OTLP records")
 			return
 		}
-		if len(payloads) > 0 && enqueue(r.Context(), payloads) != nil {
+		if len(batch.payloads) > 0 && enqueue(r.Context(), batch.payloads) != nil {
 			writeStatus(w, format, http.StatusServiceUnavailable, codes.Unavailable, "Could not persist usage")
 			return
-		}
-		response := &logscollector.ExportLogsServiceResponse{}
-		if rejected > 0 {
-			response.PartialSuccess = &logscollector.ExportLogsPartialSuccess{
-				RejectedLogRecords: rejected,
-				ErrorMessage:       "Claude Code usage records had invalid or missing fields",
-			}
 		}
 		writeOTLP(w, format, http.StatusOK, response)
 	})
 }
 
-func usagePayloads(batch *logscollector.ExportLogsServiceRequest) (payloads [][]byte, rejected int64, tooMany bool) {
-	count := 0
-	for _, resource := range batch.GetResourceLogs() {
+func logsToUsage(request *logscollector.ExportLogsServiceRequest, _ bool) (usageBatch, proto.Message) {
+	var batch usageBatch
+	response := &logscollector.ExportLogsServiceResponse{}
+	for _, resource := range request.GetResourceLogs() {
 		for _, scope := range resource.GetScopeLogs() {
-			count += len(scope.GetLogRecords())
-			if count > maxLogRecords {
-				return nil, 0, true
+			batch.records += len(scope.GetLogRecords())
+			if batch.records > maxUsageBatch {
+				return batch, response
 			}
 			for _, record := range scope.GetLogRecords() {
 				event, matched, err := claudeCodeUsage(record)
 				if !matched {
-					continue
+					event, matched, err = codexUsage(resource.GetResource(), record)
 				}
-				if err != nil {
-					rejected++
-					continue
+				if !matched {
+					event, matched, err = geminiUsage(resource.GetResource(), record)
 				}
-				payload, err := json.Marshal(event)
-				if err != nil || len(payload) > usagereport.MaxBodyBytes {
-					rejected++
-					continue
-				}
-				payloads = append(payloads, payload)
+				batch.add(event, matched, err)
 			}
 		}
 	}
-	return payloads, rejected, false
+	if batch.rejected > 0 {
+		response.PartialSuccess = &logscollector.ExportLogsPartialSuccess{
+			RejectedLogRecords: batch.rejected,
+			ErrorMessage:       "Usage records had invalid or missing fields",
+		}
+	}
+	return batch, response
+}
+
+func tracesToUsage(request *tracecollector.ExportTraceServiceRequest, fromJSON bool) (usageBatch, proto.Message) {
+	var batch usageBatch
+	response := &tracecollector.ExportTraceServiceResponse{}
+	for _, resource := range request.GetResourceSpans() {
+		for _, scope := range resource.GetScopeSpans() {
+			batch.records += len(scope.GetSpans())
+			if batch.records > maxUsageBatch {
+				return batch, response
+			}
+			for _, span := range scope.GetSpans() {
+				if span == nil {
+					continue
+				}
+				if fromJSON {
+					span.TraceId = otlpJSONID(span.GetTraceId(), 16)
+					span.SpanId = otlpJSONID(span.GetSpanId(), 8)
+				}
+				event, matched, err := copilotUsage(resource.GetResource(), scope.GetScope(), span)
+				if !matched {
+					event, matched, err = openCodeUsage(resource.GetResource(), span)
+				}
+				batch.add(event, matched, err)
+			}
+		}
+	}
+	if batch.rejected > 0 {
+		response.PartialSuccess = &tracecollector.ExportTracePartialSuccess{
+			RejectedSpans: batch.rejected,
+			ErrorMessage:  "Usage spans had invalid or missing fields",
+		}
+	}
+	return batch, response
+}
+
+// Protobuf JSON decodes bytes as base64, while OTLP JSON encodes trace and span
+// IDs as hex. Recover the original text, then decode its hex representation.
+func otlpJSONID(id []byte, size int) []byte {
+	decoded, err := hex.DecodeString(base64.RawStdEncoding.EncodeToString(id))
+	if err != nil || len(decoded) != size {
+		return nil
+	}
+	return decoded
+}
+
+func discardMetrics(_ *metricscollector.ExportMetricsServiceRequest, _ bool) (usageBatch, proto.Message) {
+	return usageBatch{}, &metricscollector.ExportMetricsServiceResponse{}
 }
 
 func writeReadError(w http.ResponseWriter, format string, err error) {

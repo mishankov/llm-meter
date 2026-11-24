@@ -27,6 +27,8 @@ func main() {
 	flag.StringVar(&opts.Upstream, "upstream", "", "HTTPS provider base URL override in usage-only mode with --provider")
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to the private proxy key file")
 	flag.StringVar(&opts.DataDir, "data-dir", "./data/relay", "persistent directory for pending usage in usage-only or telemetry mode")
+	flag.StringVar(&opts.TLSCert, "tls-cert", "", "PEM server certificate for the local HTTPS telemetry listener")
+	flag.StringVar(&opts.TLSKey, "tls-key", "", "PEM private key for the local HTTPS telemetry listener")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		log.Fatal("unexpected positional arguments")

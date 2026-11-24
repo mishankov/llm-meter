@@ -2,7 +2,7 @@
 
 # LLM Meter
 
-LLM Meter is a self-hosted dashboard for tracking tokens, costs, and provider allowances. Meter requests from OpenAI-compatible clients, Codex, OpenCode Go, and Antigravity through a proxy or collect usage from Claude Code's built-in OpenTelemetry exporter.
+LLM Meter is a self-hosted dashboard for tracking tokens, costs, and provider allowances. Meter requests from OpenAI-compatible clients, Codex, OpenCode Go, and Antigravity through a proxy, or collect usage through OpenTelemetry from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode.
 
 See the [Configuration Guide](docs/configuration.md) for deployment options, client examples, durable queue behavior, upgrades, and troubleshooting.
 
@@ -82,9 +82,9 @@ Set the last line to your installed Antigravity executable, make the launcher ex
 
 The dashboard shows **Google** as the provider for requests through Antigravity. Generation responses contribute token counts when Google reports them. Eligible requests use Google's Gemini API rates to estimate usage value.
 
-### Claude Code
+### OpenTelemetry
 
-Run a local relay in `telemetry` mode and point Claude Code's built-in OpenTelemetry logs exporter at it. Claude Code keeps its native sign-in and makes model requests directly to Anthropic. The dashboard records models, tokens, cache usage, and Claude Code's cost estimates when available. See [Claude Code setup](docs/configuration.md#54-claude-code-opentelemetry).
+Run a local relay in `telemetry` mode and point each harness's built-in OpenTelemetry exporter at it. Model requests and sign-in stay with the harness's configured provider. The dashboard records model and token usage, including cache counts where available, and shows estimated costs. See [OpenTelemetry setup for each harness](docs/configuration.md#54-opentelemetry).
 
 ## Run the relay
 
@@ -94,7 +94,7 @@ The relay serves all four proxy routes on the same port in `remote-proxy` and `u
 | --- | --- | --- |
 | `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
 | `remote-proxy` (default) | Relay connects to LLM Meter, which forwards to the provider | Server meters the proxied request |
-| `telemetry` | Claude Code connects to Anthropic directly | Relay reads OpenTelemetry logs and uploads usage metadata |
+| `telemetry` | Harness connects to its model provider directly | Relay extracts usage from OpenTelemetry logs and traces |
 
 Usage-only mode sends the model, token counts, outcome, and any reported costs or quotas. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`).
 

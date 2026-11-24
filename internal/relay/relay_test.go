@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -544,12 +546,14 @@ func TestConnectionIDAndProviders(t *testing.T) {
 	}
 }
 
-func TestTelemetryRelayOnlyAcceptsLocalLogExports(t *testing.T) {
+func TestTelemetryRelayOnlyAcceptsLocalOTLPExports(t *testing.T) {
 	config := Config{Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
 		Key: "fixture-key", DataDir: t.TempDir()}
 	for _, invalid := range []Config{
 		{Mode: ModeTelemetry, Target: config.Target, Provider: "openai"},
 		{Mode: ModeTelemetry, Target: config.Target, Upstream: "https://provider.test"},
+		{Mode: ModeTelemetry, Target: config.Target, TLSCert: "cert.pem"},
+		{Mode: ModeUsageOnly, Target: config.Target, TLSCert: "cert.pem", TLSKey: "key.pem"},
 	} {
 		if _, err := configureRelay(invalid); err == nil {
 			t.Fatalf("accepted a model routing option in telemetry mode: %+v", invalid)
@@ -575,6 +579,8 @@ func TestTelemetryRelayOnlyAcceptsLocalLogExports(t *testing.T) {
 		status                   int
 	}{
 		{name: "local export", method: http.MethodPost, path: "/v1/logs", status: http.StatusOK},
+		{name: "trace export", method: http.MethodPost, path: "/v1/traces", status: http.StatusOK},
+		{name: "metric export", method: http.MethodPost, path: "/v1/metrics", status: http.StatusOK},
 		{name: "model traffic", method: http.MethodPost, path: "/v1/messages", status: http.StatusNotFound},
 		{name: "path suffix", method: http.MethodPost, path: "/v1/logs/", status: http.StatusNotFound},
 		{name: "wrong method", method: http.MethodGet, path: "/v1/logs", status: http.StatusMethodNotAllowed},
@@ -584,7 +590,7 @@ func TestTelemetryRelayOnlyAcceptsLocalLogExports(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, err := http.NewRequestWithContext(ctx, test.method, "http://"+inst.Status().ListenAddr+test.path,
-				strings.NewReader(`{"resourceLogs":[]}`))
+				strings.NewReader("{}"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -604,8 +610,67 @@ func TestTelemetryRelayOnlyAcceptsLocalLogExports(t *testing.T) {
 		})
 	}
 	status := inst.Status()
-	if status.RequestsTotal != 1 || len(status.Routes) != 0 || status.Outbox == nil || status.Outbox.Pending != 0 {
+	if status.RequestsTotal != 3 || len(status.Routes) != 0 || status.Outbox == nil || status.Outbox.Pending != 0 {
 		t.Fatalf("unexpected telemetry relay status: %+v", status)
+	}
+}
+
+func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
+	fixture := httptest.NewTLSServer(http.NotFoundHandler())
+	defer fixture.Close()
+	cert := fixture.TLS.Certificates[0]
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := New(Config{
+		Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
+		Key: "fixture-key", DataDir: dir, TLSCert: certFile, TLSKey: keyFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := inst.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/v1/traces", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := fixture.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.TLS == nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("expected trusted HTTPS OTLP, got %v", response.Status)
+	}
+}
+
+func TestRelayGuardAcceptsDefaultHTTPSPort(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/v1/traces", nil)
+	response := httptest.NewRecorder()
+	guardClient("127.0.0.1:443", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("request without explicit default port returned %d", response.Code)
 	}
 }
 
