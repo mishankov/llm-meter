@@ -9,6 +9,18 @@
       "commit": "81a945db15560a2e2f052fbda05749f37cf62993",
       "sha256": "9eb07bedda3a56a5fcf8d0a3d5100d367d506db41ef66e4501bafe1db1d96ca3"
     },
+    "diagnosing-bugs": {
+      "commit": "d1478fcb140db0b93c0c8df17bcfd311844749d0",
+      "sha256": "27996fbfd3bc12867b009413e21f82fd1665cc55b96d15ba1a3942ec3d4a9a65",
+      "release": "v1.3.2",
+      "source": {
+        "repository": "https://github.com/mattpocock/skills.git",
+        "path": "skills/engineering/diagnosing-bugs",
+        "include": [
+          "LICENSE"
+        ]
+      }
+    },
     "file-pr": {
       "commit": "35218d54b036d049a333a168770e8d96c81c9a83",
       "sha256": "c759cf059047669fbbc5ea0be443f5db6f89c289353b086dcf5b1c4bdc1c20f5"
@@ -31,8 +43,8 @@
       }
     },
     "implement": {
-      "commit": "35218d54b036d049a333a168770e8d96c81c9a83",
-      "sha256": "1d2e0e7b322785c04f140a56c9d3c704c6bd34b20fc71ccb879b0633a49543d9"
+      "commit": "e81d1ab413a52a0fcdf53cc071834e1829a0118e",
+      "sha256": "bee626ed983a8241afc6adba521884cbc85fe326696eef309526ba63585dcd48"
     },
     "implement-ui": {
       "commit": "431a25319aaacd7f806bb50cb374698748ce8a85",
@@ -47,12 +59,12 @@
       "sha256": "8bafac1ec7182ffeb906dfdf3f21b5ee7963c4336be787469be76405216f6e26"
     },
     "review-loop": {
-      "commit": "431a25319aaacd7f806bb50cb374698748ce8a85",
-      "sha256": "8808683662e4db347202ebafc57d84a8b4a31d61d68930607a50daff16b53d03"
+      "commit": "e81d1ab413a52a0fcdf53cc071834e1829a0118e",
+      "sha256": "87666d9d99d95e8c09355d952dc9b5ee0830a4e4cae4ff405ee804f7ae0eff65"
     },
     "review-panel": {
-      "commit": "35218d54b036d049a333a168770e8d96c81c9a83",
-      "sha256": "3a82a9cb4429557507866c32913a9cbbfbca35474b4c2665d81f51ae4fd61808"
+      "commit": "e81d1ab413a52a0fcdf53cc071834e1829a0118e",
+      "sha256": "e12108c02e4e3fec7e832f7725dd4799f0154e7a80f54c0339be89712b65cb2f"
     },
     "ship-pr": {
       "commit": "35218d54b036d049a333a168770e8d96c81c9a83",
@@ -63,8 +75,8 @@
       "sha256": "e1351a0f5677b429615236e5c67a8ae9c32a270dd1aa7df0077087dddb8abbee"
     },
     "start-thread": {
-      "commit": "35218d54b036d049a333a168770e8d96c81c9a83",
-      "sha256": "24df3b8a4965a8134543d9e5a3246237fc43873c7e76f0e287e36e2056a1140b"
+      "commit": "e81d1ab413a52a0fcdf53cc071834e1829a0118e",
+      "sha256": "2c4c9a2a92f0575ab7db3e6ee73f53f5de14cc606b09f820655cac32870cc476"
     }
   }
 }
