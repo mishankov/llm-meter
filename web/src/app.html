@@ -3,7 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta id="light-theme-color" name="theme-color" content="#f8f9fc" media="not all" />
     <meta name="theme-color" content="#111317" />
+    <script>
+      try {
+        const theme = localStorage.getItem('llm-meter-theme');
+        if (theme === 'light' || theme === 'system') {
+          document.documentElement.dataset.theme = theme;
+          document.getElementById('light-theme-color').media = theme === 'light' ? 'all' : '(prefers-color-scheme: light)';
+        }
+      } catch {
+        // Storage may be blocked by the browser.
+      }
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
