@@ -46,14 +46,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	codex, err := upstream("CODEX_UPSTREAM", "https://chatgpt.com/backend-api/codex")
-	if err != nil {
-		return err
-	}
-	opencodeGo, err := upstream("OPENCODE_GO_UPSTREAM", "https://opencode.ai/inference/go")
-	if err != nil {
-		return err
-	}
 	antigravity, err := upstream("ANTIGRAVITY_UPSTREAM", "https://daily-cloudcode-pa.googleapis.com")
 	if err != nil {
 		return err
@@ -78,7 +70,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              valueOrDefault("LISTEN_ADDR", ":8080"),
-		Handler:           routes(store, ui, api, codex, opencodeGo, antigravity, dashboardToken, secureCookie, slog.Default()),
+		Handler:           routes(store, ui, api, antigravity, dashboardToken, secureCookie, slog.Default()),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -105,7 +97,7 @@ func run() error {
 	}
 }
 
-func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
+func routes(store *ledger.Store, ui fs.FS, api, antigravity *url.URL, dashboardToken string, secureCookie bool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", dashboard.New(store, dashboardToken, secureCookie, log))
 	mux.Handle("POST "+usagereport.Path, withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
@@ -129,11 +121,9 @@ func routes(store *ledger.Store, ui fs.FS, api, codex, opencodeGo, antigravity *
 			log.Error("record request usage", "error", err)
 		}
 	}
-	proxyAccess := withProxyKey(store, proxy.New(api, codex, opencodeGo, record), log)
-	for _, prefix := range []string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix} {
-		mux.Handle(prefix, proxyAccess)
-		mux.Handle(prefix+"/", proxyAccess)
-	}
+	proxyAccess := withProxyKey(store, proxy.New(api, record), log)
+	mux.Handle("/v1", proxyAccess)
+	mux.Handle("/v1/", proxyAccess)
 	if antigravity != nil {
 		antigravityAccess := withProxyKey(store, proxy.NewAntigravity(*antigravity, record), log)
 		mux.Handle(proxy.AntigravityPrefix, antigravityAccess)

@@ -36,7 +36,7 @@ func TestClaudeCodeTelemetryReachesLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := routes(store, fstest.MapFS{}, nil, nil, nil, nil, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler))
+	handler := routes(store, fstest.MapFS{}, nil, nil, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler))
 	uploaded := make(chan int, 2)
 	meter := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		payload, err := io.ReadAll(r.Body)

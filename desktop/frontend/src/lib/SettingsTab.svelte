@@ -88,11 +88,9 @@
   }
 
   const providerOptions = [
-    { value: "", label: "All 4 providers (recommended)" },
+    { value: "", label: "Both proxy routes (recommended)" },
     { value: "antigravity", label: "Antigravity only" },
     { value: "openai", label: "OpenAI-compatible (/v1) only" },
-    { value: "codex", label: "Signed-in Codex (/codex) only" },
-    { value: "opencode-go", label: "OpenCode Go (/opencode-go) only" },
   ];
 
   const modeChoices = [

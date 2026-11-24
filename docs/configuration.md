@@ -21,17 +21,17 @@ All setups feed the same dashboard ledger and use dashboard client proxy keys (`
 | --- | --- | --- | --- | --- | --- |
 | **Direct client-to-server** | Client → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Yes | No | `proxy` |
 | **Relay (`remote-proxy`, default)** | Client → Local Relay → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Relay supplies it | Optional for switching to `usage-only` | `proxy` |
-| **Relay (`usage-only`)** | Client → Local Relay → Provider. Relay reports to LLM Meter. | Usage metadata only (model, canonical route, status, tokens, costs, quotas) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
+| **Relay (`usage-only`)** | Client → Local Relay → Provider. Relay reports to LLM Meter. | Usage metadata only (model, canonical route, status, tokens, and costs) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
 | **Relay (`telemetry`)** | Harness → Model Provider. The harness exports telemetry to the local relay. | Usage metadata (model, tokens, and available cost estimates) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
 
 ### When to pick each setup
 
-- **Choose direct client-to-server** when your client can send custom headers (OpenAI SDKs, OpenCode, signed-in Codex) and you want central routing and server-side `*_UPSTREAM` overrides without running a local relay process.
-- **Choose relay in `remote-proxy` mode** when a client only supports an endpoint override without custom headers (for example, Antigravity ACP), or when you want all tools on a workstation to point at `http://127.0.0.1:8765` with one local key file while still routing traffic through your LLM Meter server.
-- **Choose relay in `usage-only` mode** when you want prompts, responses, and provider credentials to stay between your machine and the model provider while still tracking spend, tokens, and Codex quotas in your central LLM Meter dashboard.
-- **Choose relay in `telemetry` mode** to meter supported harnesses through their [OpenTelemetry exporters](#54-opentelemetry).
+- **Choose direct client-to-server** for generic OpenAI-compatible clients or Antigravity clients that can send custom headers. It supports server-side upstream overrides without a local relay process.
+- **Choose relay in `remote-proxy` mode** to route generic OpenAI-compatible clients or Antigravity through the server when those clients can set an endpoint but cannot send the LLM Meter header.
+- **Choose relay in `usage-only` mode** to forward requests from generic OpenAI-compatible clients or Antigravity directly to the provider from your machine and upload usage metadata to the dashboard.
+- **Choose relay in `telemetry` mode** to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode through their [OpenTelemetry exporters](#53-opentelemetry).
 
-In `usage-only` mode, the server authenticates uploads with the dashboard client's proxy key and trusts that client to report its own usage. Prompt and response content and provider credentials travel between the client, relay, and provider. Uploads contain canonical route templates such as `/v1/responses/:id`, hashed response IDs, token counts, request outcomes, reported costs, and quota readings.
+In `usage-only` mode, the server authenticates uploads with the dashboard client's proxy key and trusts that client to report its own usage. Prompt and response content and provider credentials travel between the client, relay, and provider. Uploads contain canonical route templates such as `/v1/responses/:id`, hashed response IDs, token counts, request outcomes, and reported costs.
 
 ---
 
@@ -90,8 +90,6 @@ services:
       # Optional: uncomment to override upstream base URLs or custom model rates.
       # PRICING_FILE: /config/pricing.json
       # OPENAI_UPSTREAM: https://api.openai.com/v1
-      # CODEX_UPSTREAM: https://chatgpt.com/backend-api/codex
-      # OPENCODE_GO_UPSTREAM: https://opencode.ai/inference/go
       # ANTIGRAVITY_UPSTREAM: https://daily-cloudcode-pa.googleapis.com
     volumes:
       - llm-meter-data:/data
@@ -144,22 +142,19 @@ Use Go `1.25+` and Node.js `24`.
 | `DATA_DIR` | `./data` (`/data` in Docker) | No | Stores `llm-meter.db` (SQLite in WAL mode). The server creates a missing directory with mode `0700`. |
 | `PRICING_FILE` | _(unset)_ | No | Path to a JSON file of per-model rate overrides in USD per million tokens. |
 | `OPENAI_UPSTREAM` | `https://api.openai.com/v1` | No | HTTP/HTTPS base URL for `/v1` requests. Must omit userinfo, query, and fragment. |
-| `CODEX_UPSTREAM` | `https://chatgpt.com/backend-api/codex` | No | HTTP/HTTPS base URL for `/codex` requests. Must omit userinfo, query, and fragment. |
-| `OPENCODE_GO_UPSTREAM` | `https://opencode.ai/inference/go` | No | HTTP/HTTPS base URL for `/opencode-go` requests. Must omit userinfo, query, and fragment. |
 | `ANTIGRAVITY_UPSTREAM` | `https://daily-cloudcode-pa.googleapis.com` | No | HTTP/HTTPS base URL for `/antigravity` requests. Must omit userinfo, query, and fragment. |
 | `DASHBOARD_DIR` | `web/build` | No | Path to static dashboard assets containing `index.html`. Used **only** when built without `-tags embedui`; ignored in Docker and `-tags embedui` binaries. |
 
 #### Upstream override behavior
 
 - **`OPENAI_UPSTREAM` provider detection:** When you point `OPENAI_UPSTREAM` at another OpenAI-compatible host, LLM Meter infers the provider label for pricing lookup from known hostnames: `api.openai.com` (`openai`), `openrouter.ai` (`openrouter`), `opencode.ai/inference/go` (`opencode-go`), `opencode.ai/inference` (`opencode`), `api.anthropic.com` (`anthropic`), `api.deepseek.com` (`deepseek`), `api.groq.com` (`groq`), `api.mistral.ai` (`mistral`), `api.x.ai` (`xai`), and `generativelanguage.googleapis.com` (`google`). Unknown hosts are recorded without a provider label and can be priced via `PRICING_FILE`.
-- **`OPENCODE_GO_UPSTREAM` protocol routing:** LLM Meter automatically maps `/opencode-go` subpaths onto OpenCode Go's backend prefixes: `/models` and `/usage` → `/v1`, `/messages*` → `/anthropic/v1`, `/models/<id>:<action>` → `/google/v1beta`, and all other paths → `/openai/v1`.
 - **In `usage-only` mode:** Set `--provider` and `--upstream` on the relay to override the base URL used for direct provider requests. [Provider scoping](#46-provider-scoping-and-https---upstream-overrides)
 
 ### Pricing feeds and `PRICING_FILE`
 
 The server checks these sources in order when recording a request's cost in USD.
 
-1. **Provider-reported amounts** (including `0`): exact reported cost, provider estimate, or provider list cost. For OpenCode Go, list value and allowance use are recorded alongside any reported charge.
+1. **Provider-reported amounts** (including `0`): exact reported cost, provider estimate, or provider list cost. Historical OpenCode Go records retain any reported charge, list value, and allowance use.
 2. **`PRICING_FILE` overrides**: checked first as `"<provider>/<model>"` (for example `"openai/my-model"`), then as `"<model>"`. For Antigravity requests, the order is `"google/<model>"`, the legacy `"antigravity/<model>"`, then `"<model>"`.
 3. **Downloaded catalogs**: refreshed at startup and every 24 hours from OpenCode Go (`https://opencode.ai/inference/go/v1/models`) and Models.dev (`https://models.dev/api.json?type=all`), and cached in SQLite (`pricing_snapshots`) so temporary feed outages do not lose rates.
 4. **Built-in OpenAI rates**: standard text rates, long-context (>272,000 input tokens) multipliers, service-tier multipliers (`batch`, `flex`, `fast`, `priority`, `ultrafast`), and 2-hour (`0.7x`) / 8-hour (`0.6x`) background completion discounts on eligible OpenAI models when not using a `PRICING_FILE` override.
@@ -203,7 +198,7 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 
 **Key scope:**
 
-- One proxy key authenticates across **all four proxy routes** (`/v1`, `/codex`, `/opencode-go`, `/antigravity`) **and** the usage ingestion endpoint (`POST /api/usage/events`).
+- One proxy key authenticates for both proxy routes (`/v1` and `/antigravity`) and the usage ingestion endpoint (`POST /api/usage/events`).
 - All requests using keys belonging to the same dashboard client are grouped under that client. Provider labels include `openai`, `codex`, `opencode-go`, and `google` for Antigravity.
 - Create **one client** per workstation/relay if you want one combined client view, or **separate clients** (with separate keys, and separate relay instances if using the relay) if you want per-tool or per-provider attribution in **Clients** and **Usage**.
 - **Background responses (`background: true`):** Keep both the initial `POST /v1/responses` and follow-up `GET /v1/responses/<id>` polls on the **same dashboard client and measurement mode** (`proxy` vs `relay`) so the server can correlate completion usage onto the originating request.
@@ -217,13 +212,11 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 | **Via relay (`usage-only`)** | Client's normal upstream auth only (no `X-LLM-Meter-Key` needed) | Relay requires provider auth, strips any inbound `X-LLM-Meter-Key`, forwards directly over HTTPS to the provider, and sends `--key-file` only in `X-LLM-Meter-Key` to `POST /api/usage/events`. |
 | **Via relay (`telemetry`)** | The harness sends OpenTelemetry to the local receiver and authenticates directly with its model provider. | Relay filters usage and uses the `--key-file` key to authenticate uploads to `POST /api/usage/events`. |
 
-### All four client base paths
+### Proxy client base paths
 
 | Provider | Direct to LLM Meter server | Via local relay (`127.0.0.1:8765`) | Server path (`remote-proxy`) | Provider auth accepted by relay | Default upstream |
 | --- | --- | --- | --- | --- | --- |
 | **OpenAI-compatible** (`openai`) | `https://proxy.example.com/v1` | `http://127.0.0.1:8765/v1` | `/v1` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://api.openai.com/v1` |
-| **Signed-in Codex** (`codex`) | `https://proxy.example.com/codex` | `http://127.0.0.1:8765/codex` | `/codex` | `Authorization` (ChatGPT sign-in) or API key headers above | `https://chatgpt.com/backend-api/codex` |
-| **OpenCode Go** (`opencode-go`) | `https://proxy.example.com/opencode-go` | `http://127.0.0.1:8765/opencode-go` | `/opencode-go` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://opencode.ai/inference/go` |
 | **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765` | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
 
 > **Note on Antigravity's local relay URL:** Point Antigravity at the relay root `http://127.0.0.1:8765` (without `/antigravity`). The relay matches Cloud Code RPC paths (`/v1internal:<Method>`) and rewrites them to `/antigravity/v1internal:<Method>` in `remote-proxy` mode or sends `/v1internal:<Method>` directly to the Antigravity upstream in `usage-only` mode.
@@ -234,7 +227,7 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 
 ## 4. Run the Local Relay
 
-A relay instance listens at `http://127.0.0.1:8765` by default. The two proxy modes serve all four provider routes by default. The `telemetry` mode accepts OTLP/HTTP requests from supported harnesses. Set `--target` to your LLM Meter server's HTTPS origin (`https://proxy.example.com`) and point `--key-file` at a private file containing one dashboard client key.
+A relay instance listens at `http://127.0.0.1:8765` by default. The two proxy modes serve the OpenAI-compatible and Antigravity routes by default. The `telemetry` mode accepts OTLP/HTTP requests from supported harnesses. Set `--target` to your LLM Meter server's HTTPS origin (`https://proxy.example.com`) and point `--key-file` at a private file containing one dashboard client key.
 
 ### 4.1 Prepare the key file and state directory
 
@@ -298,7 +291,7 @@ docker compose up -d relay
 ```
 
 - **To switch this service to `usage-only` mode**, add `- --mode=usage-only` under `command` and re-run `docker compose up -d relay`.
-- **For OpenTelemetry**, use `- --mode=telemetry` under `command` and follow [the exporter setup](#54-opentelemetry). For a local HTTPS listener, mount the TLS certificate and private key read-only and point the two TLS flags at their container paths.
+- **For OpenTelemetry**, use `- --mode=telemetry` under `command` and follow [the exporter setup](#53-opentelemetry). For a local HTTPS listener, mount the TLS certificate and private key read-only and point the two TLS flags at their container paths.
 - **Keep `/data` mounted** in `usage-only` and `telemetry` modes so queued usage reports survive container recreation.
 
 ### 4.3 Equivalent native Go binary commands
@@ -309,7 +302,7 @@ Build the relay binary.
 go build -o llm-meter-relay ./cmd/llm-meter-relay
 ```
 
-- Run the relay for all four providers on `127.0.0.1:8765` in the default `remote-proxy` mode.
+- Run the relay for both proxy routes on `127.0.0.1:8765` in the default `remote-proxy` mode.
 
   ```sh
   ./llm-meter-relay \
@@ -331,20 +324,20 @@ go build -o llm-meter-relay ./cmd/llm-meter-relay
 
 `--mode`, `--key-file`, and `--data-dir` apply to an entire relay instance. Run additional instances on separate loopback ports. Give each `usage-only` or `telemetry` instance its own `--data-dir`. Common reasons to run more than one instance:
 
-- **Mixed modes** on the same machine — for example, `usage-only` for signed-in Codex/Antigravity on `127.0.0.1:8765` and `remote-proxy` for OpenAI-compatible tools on `127.0.0.1:8766`.
+- **Mixed modes** on the same machine — for example, `usage-only` for signed-in Antigravity on `127.0.0.1:8765` and `remote-proxy` for OpenAI-compatible tools on `127.0.0.1:8766`.
 - **Separate dashboard clients** — different `--key-file` files so each tool or provider appears under its own client name in the dashboard.
 - **Per-provider `--upstream` override** in `usage-only` mode — since `--upstream` scopes an instance to one provider.
 
 These commands run two isolated native instances. Run each in its own terminal.
 
 ```sh
-# Instance 1: usage-only for Codex + Antigravity on 127.0.0.1:8765
+# Instance 1: usage-only for Antigravity on 127.0.0.1:8765
 ./llm-meter-relay \
   --mode usage-only \
   --listen 127.0.0.1:8765 \
   --target https://proxy.example.com \
-  --key-file "$HOME/.config/llm-meter/codex-ag.key" \
-  --data-dir "$HOME/.config/llm-meter/codex-ag-data"
+  --key-file "$HOME/.config/llm-meter/antigravity.key" \
+  --data-dir "$HOME/.config/llm-meter/antigravity-data"
 
 # Instance 2: remote-proxy for OpenAI-compatible tools on 127.0.0.1:8766
 ./llm-meter-relay \
@@ -365,7 +358,7 @@ Positional arguments are rejected; pass all options as flags.
 | `--target` | _(none)_ | Yes | HTTPS LLM Meter origin, without a route, user info, query, or fragment. |
 | `--key-file` | _(none)_ | Yes | Path to a private regular file containing a single proxy key (max 4,096 bytes, one line, printable ASCII, no whitespace). Must be owner-only (`0600`/`0400`) on Linux/macOS. |
 | `--mode` | `remote-proxy` | No | `remote-proxy`, `usage-only`, or `telemetry`. |
-| `--provider` | `""` (all 4 proxy routes) | No | Restrict a proxy mode to one route: `antigravity`, `openai`, `codex`, or `opencode-go`. Omit in `telemetry` mode. |
+| `--provider` | `""` (both proxy routes) | No | Restrict a proxy mode to `antigravity` or `openai`. Omit in `telemetry` mode. |
 | `--upstream` | `""` | No | Direct HTTPS provider base URL override (no user info, query, or fragment). Requires `--mode usage-only` and `--provider`. Hostname must differ from `--target`. |
 | `--listen` | `127.0.0.1:8765` | No | Client-facing loopback IP and port (`127.0.0.1:<port>` or `[::1]:<port>`). Enforced against the incoming HTTP `Host` header. |
 | `--bind` | `""` | No | Container socket address. When set, must be `0.0.0.0:<nonzero-port>` paired with a fixed non-zero loopback `--listen`. |
@@ -376,9 +369,9 @@ Positional arguments are rejected; pass all options as flags.
 
 | Goal | Flags | Resulting routes & destination |
 | --- | --- | --- |
-| All 4 providers via LLM Meter (default) | `--target https://proxy.example.com` | All 4 routes → `https://proxy.example.com/{antigravity,v1,codex,opencode-go}` |
-| All 4 providers, direct to standard upstreams | `--mode usage-only --target https://proxy.example.com` | All 4 routes → each provider's default upstream; usage → `https://proxy.example.com/api/usage/events` |
-| Single provider via LLM Meter | `--provider codex --target https://proxy.example.com` | `codex` only → `https://proxy.example.com/codex` |
+| Both routes via LLM Meter (default) | `--target https://proxy.example.com` | Both routes → `https://proxy.example.com/{antigravity,v1}` |
+| Both routes, direct to standard upstreams | `--mode usage-only --target https://proxy.example.com` | Model traffic goes to each provider's default upstream. Usage uploads go to `https://proxy.example.com/api/usage/events`. |
+| Single provider via LLM Meter | `--provider antigravity --target https://proxy.example.com` | Antigravity only → `https://proxy.example.com/antigravity` |
 | Single provider, custom HTTPS upstream (`usage-only`) | `--mode usage-only --provider openai --target https://proxy.example.com --upstream https://openrouter.ai/api/v1` | `openai` only → `https://openrouter.ai/api/v1`; usage → `https://proxy.example.com/api/usage/events` |
 
 ---
@@ -389,95 +382,16 @@ Positional arguments are rejected; pass all options as flags.
 
 | Client | Direct to server | Via local relay (`127.0.0.1:8765`) | Upstream credentials |
 | --- | --- | --- | --- |
-| **OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Meter-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
-| **OpenCode (`openai`, API key)** | `settings.baseURL: "https://proxy.example.com/v1"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/v1"` (no `headers`) | Saved OpenAI API key |
-| **OpenCode (`openai`, ChatGPT sign-in)** | `settings.baseURL: "https://proxy.example.com/codex"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/codex"` (no `headers`) | Saved ChatGPT sign-in |
-| **OpenCode Go (`opencode-go`)** | `settings.baseURL: "https://proxy.example.com/opencode-go"` + `headers` | `settings.baseURL: "http://127.0.0.1:8765/opencode-go"` (no `headers`) | Saved OpenCode Go credentials |
-| **Signed-in Codex** | `base_url = "https://proxy.example.com/codex"` + `env_http_headers` | `base_url = "http://127.0.0.1:8765/codex"` (omit `env_http_headers`) | Existing ChatGPT sign-in (`requires_openai_auth = true`) |
+| **Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode** | Model requests go directly to the configured provider | [OpenTelemetry exporter](#53-opentelemetry) points to the local relay | Existing provider credentials |
+| **Generic OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Meter-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
 | **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Meter-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
-| **OpenTelemetry harnesses** | Model requests go directly to the configured provider | [OpenTelemetry exporter](#54-opentelemetry) points to the local relay | Existing provider credentials |
 
-### 5.1 OpenAI-compatible clients and OpenCode / OpenCode Go
-
-#### Generic OpenAI-compatible clients
+### 5.1 Generic OpenAI-compatible clients
 
 - **Direct:** Set the OpenAI base URL to `https://proxy.example.com/v1` (or `http://localhost:8080/v1` for local testing) and attach `X-LLM-Meter-Key: <your-proxy-key>` alongside your normal `Authorization: Bearer <provider-api-key>` header.
 - **Via relay:** Set the OpenAI base URL to `http://127.0.0.1:8765/v1` and keep your normal `Authorization` (or `X-API-Key` / `Api-Key` / `X-Goog-Api-Key`) header. Do not add `X-LLM-Meter-Key`.
 
-#### OpenCode (`opencode.jsonc`)
-
-These examples use OpenCode v2 provider settings. [OpenCode provider configuration](https://opencode.ai/docs/providers/)
-
-For direct requests, set `LLM_METER_KEY` in OpenCode's environment.
-
-```jsonc
-{
-  "providers": {
-    "openai": {
-      // Use /v1 with an OpenAI API key, or /codex with ChatGPT sign-in.
-      "settings": { "baseURL": "https://proxy.example.com/v1" },
-      "headers": { "X-LLM-Meter-Key": "{env:LLM_METER_KEY}" }
-    },
-    "opencode-go": {
-      "settings": { "baseURL": "https://proxy.example.com/opencode-go" },
-      "headers": { "X-LLM-Meter-Key": "{env:LLM_METER_KEY}" }
-    }
-  }
-}
-```
-
-For requests through the local relay, set the local base URLs. The relay supplies the proxy key.
-
-```jsonc
-{
-  "providers": {
-    "openai": {
-      // Use /v1 with an OpenAI API key, or /codex with ChatGPT sign-in.
-      "settings": { "baseURL": "http://127.0.0.1:8765/v1" }
-    },
-    "opencode-go": {
-      "settings": { "baseURL": "http://127.0.0.1:8765/opencode-go" }
-    }
-  }
-}
-```
-
-OpenCode continues using its saved upstream credentials for each provider.
-
-### 5.2 Signed-in Codex
-
-Edit the user `config.toml` read by the Codex process, including the process that T3 launches, then start a fresh session. [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
-
-For direct requests, supply `LLM_METER_KEY` in the Codex process environment.
-
-```toml
-model_provider = "metered-codex"
-
-[model_providers.metered-codex]
-name = "OpenAI"
-base_url = "https://proxy.example.com/codex"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = true
-env_http_headers = { "X-LLM-Meter-Key" = "LLM_METER_KEY" }
-```
-
-For requests through the local relay, select its local base URL. The relay supplies the proxy key.
-
-```toml
-model_provider = "metered-codex"
-
-[model_providers.metered-codex]
-name = "OpenAI"
-base_url = "http://127.0.0.1:8765/codex"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = true
-```
-
-- WebSockets (`supports_websockets = true`) are metered in direct, `remote-proxy`, and `usage-only` modes.
-
-### 5.3 Signed-in Antigravity and T3 Code launcher
+### 5.2 Signed-in Antigravity and T3 Code launcher
 
 Keep Antigravity signed in to Google and keep both Google's token and your proxy key out of URLs, command arguments, and logs.
 
@@ -501,11 +415,11 @@ exec "/absolute/path/to/antigravity" "$@"
 
 The dashboard shows **Google** as the provider under the client owning the proxy key and records token counts whenever Google reports them. The request details show the Antigravity endpoint. Continue to use this relay setup for Antigravity CLI and ACP. Google's documented OpenTelemetry tracing applies to the Antigravity SDK. [Antigravity settings](https://antigravity.google/docs/settings?tab=cli), [Antigravity SDK changelog](https://antigravity.google/docs/changelog)
 
-### 5.4 OpenTelemetry
+### 5.3 OpenTelemetry
 
 Update both the server and relay before enabling telemetry. Run the relay on the same machine as the harness, using a private key file prepared in [section 4.1](#41-prepare-the-key-file-and-state-directory). Omit `--provider` and `--upstream` from the telemetry relay command.
 
-If the harness already sends model requests through LLM Meter, restore its native provider endpoint and remove the `X-LLM-Meter-Key` model request header before enabling telemetry. For Codex, restore the original `model_provider` selection. For OpenCode, remove the meter-specific `settings.baseURL` and header override. Keep your provider sign-in and point only the OpenTelemetry exporter at the telemetry listener. This prevents proxy and telemetry reports from counting the same request twice.
+If you previously metered Codex or OpenCode through a proxy, follow the [migration steps](#migrating-from-the-codex-and-opencode-go-proxy-routes) before enabling telemetry.
 
 ```sh
 ./llm-meter-relay \
@@ -519,7 +433,7 @@ If you already run the Claude Code telemetry relay, reuse its current `--data-di
 
 The receiver accepts OTLP over HTTP or HTTPS, with JSON or protobuf payloads, at `POST /v1/logs` and `POST /v1/traces`. It acknowledges and discards `POST /v1/metrics`. Harnesses can share the same receiver when they use its configured transport. Every report from an instance is attributed to the dashboard client that owns its key. For separate attribution, use a second loopback port, key, and data directory.
 
-After a successful model request, look under **Usage** for that client. Exporters may batch reports. The relay queues model names, token counts, cache counts where available, and Claude Code's reported cost estimates. Other costs are estimated from the ledger's rates when available. The receiver discards other telemetry including content fields, and the dashboard gets usage estimates without plan quotas, Copilot AI units, or actual billing.
+After a successful model request, look under **Usage** for that client. Exporters may batch reports. The relay queues model names, token counts, cache counts where available, and Claude Code's reported cost estimates. Other costs are estimated from the ledger's rates when available. The receiver discards other telemetry including content fields.
 
 #### Claude Code
 
@@ -665,7 +579,7 @@ The relay enforces strict checks when opening `--key-file`:
 
 ### 6.4 Durable queue, retry behavior, and graceful shutdown
 
-- The relay queues metered HTTP requests, WebSocket usage, quota observations, and OpenTelemetry usage reports in `usage-outbox.db`. Each event has a stable ID and a 16 KiB size limit.
+- The relay queues metered HTTP requests, WebSocket usage, and OpenTelemetry usage reports in `usage-outbox.db`. Each event has a stable ID and a 16 KiB size limit.
 - **Queue capacity:** Up to **10,000** pending events. When the queue fills, `usage-only` drops new reports with log message `Could not queue a usage report`. In `telemetry` mode, the local receiver returns `503` so the exporter can retry the batch. Model requests can continue in either mode.
 - **Ordered delivery & deduplication:** A single background worker uploads events strictly in FIFO order via `POST https://<target>/api/usage/events` with `X-LLM-Meter-Key` and a 10-second timeout. The server returns `204 No Content` and deduplicates retries atomically by `(client_id, event_id)`, so retries never double-count.
 - The uploader sends requests to the configured HTTPS URL. A redirect response leaves the event queued for retry at that URL.
@@ -677,6 +591,16 @@ The relay enforces strict checks when opening `--key-file`:
 ---
 
 ## 7. Lifecycle, Upgrades, and Key Rotation
+
+### Migrating from the Codex and OpenCode Go proxy routes
+
+The dedicated `/codex` and `/opencode-go` proxy routes and their `CODEX_UPSTREAM` and `OPENCODE_GO_UPSTREAM` settings have been removed. Use [OpenTelemetry](#53-opentelemetry) for Codex and OpenCode.
+
+1. Pause new requests on the old proxy setup. If you used a usage-only relay, [drain its pending reports](#check-for-pending-reports) while the old server still runs.
+2. Restore your native provider endpoint and keep your provider sign-in. For Codex, restore your original `model_provider` selection. In OpenCode, remove the meter-specific `settings.baseURL` and `X-LLM-Meter-Key` header overrides. Remove any LLM Meter header overrides in Codex as well.
+3. Upgrade the server and relay. If the relay command uses `--provider=codex` or `--provider=opencode-go`, replace that instance with a telemetry relay. Point only the harness's OpenTelemetry exporter at the relay. Use a separate loopback port if another proxy relay is already running there.
+
+The switch drops live Codex quota and reset tracking and OpenCode Go billed charges and allowance usage. The existing database keeps previously recorded usage and provider-reported values.
 
 ### Upgrading the LLM Meter server
 
@@ -767,8 +691,8 @@ Use a fresh queue directory when changing the proxy key or destination. The exis
 | HTTP status / Response | Likely cause | Fix |
 | --- | --- | --- |
 | `403 Forbidden` | Request `Host` header does not match `--listen` (e.g., client used `localhost:8765` instead of `127.0.0.1:8765`, or host port mapping differs from `--listen`), or request included `Origin` / `Sec-Fetch-Site` | Point clients at `http://127.0.0.1:<port>` matching `--listen`, and do not call the relay from browser contexts sending `Origin`/`Sec-Fetch-Site`. |
-| `401 Google authorization is required` / `401 Provider authorization is required` | Client did not send its upstream auth header | Confirm the client is signed in (Google for Antigravity, ChatGPT for Codex) or configured with its provider API key. |
-| `404 Not Found` | Wrong client base URL or route excluded by `--provider` | Check the client base URL and provider scope. [Client base URLs](#all-four-client-base-paths) |
+| `401 Google authorization is required` / `401 Provider authorization is required` | Client did not send its upstream auth header | Confirm Antigravity is signed in to Google or the OpenAI-compatible client has its provider API key. |
+| `404 Not Found` | Wrong client base URL or route excluded by `--provider` | Check the client base URL and provider scope. [Client base URLs](#proxy-client-base-paths) |
 | `502 LLM Meter unavailable` (`remote-proxy`) | Relay cannot connect to the LLM Meter server over HTTPS | Check DNS, TLS certificate trust, firewall/VPN, and server `/healthz`. |
 | `502 Upstream unavailable` (`usage-only` or direct server) | Provider upstream is unreachable or refused the connection | Check outbound HTTPS connectivity and any `--upstream` / `*_UPSTREAM` override. |
 

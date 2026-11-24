@@ -464,7 +464,7 @@ test('shows stale data during an outage and refreshes the same scope on reconnec
   expect(usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
 });
 
-test('retries failed request pages in place and links client diagnostics to the same outcome filter', async ({ page }) => {
+test('retries failed request pages in place and links client diagnostics to the same outcome filter', async ({ page }, testInfo) => {
   const failed: UsageRequest = {
     ...response.requests[0], id: 5, model: 'gpt-rate-limited', status: 429, at: '2026-11-20T14:06:00Z',
     usageAvailable: false, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, priceSource: undefined
@@ -519,10 +519,15 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect(page.getByText('Latest recorded request')).toBeVisible();
   await expect(page.getByText('Rate limited (429)')).toBeVisible();
   const clientType = page.getByRole('combobox', { name: 'Connection type' });
-  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/v1$/);
+  const guide = page.getByRole('link', { name: 'OpenTelemetry setup guide' });
+  await expect(guide).toHaveAttribute('href', /#53-opentelemetry$/);
+  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('client-setup.png') });
   await clientType.press('Enter');
-  await page.getByRole('option', { name: 'Codex (ChatGPT sign-in)' }).click();
-  const baseURL = new URL('/codex', page.url()).href;
+  await expect(page.getByRole('option')).toHaveText(['OpenTelemetry', 'OpenAI-compatible proxy']);
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  const baseURL = new URL('/v1', page.url()).href;
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
@@ -530,15 +535,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await copyURL.press('Enter');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(baseURL);
   await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
-  await expect(page.getByText('config.toml', { exact: true })).toBeVisible();
-  await expect(page.getByText('LLM_METER_KEY', { exact: true })).toBeVisible();
-  await clientType.press('Enter');
-  await page.getByRole('option', { name: 'OpenCode (ChatGPT sign-in)' }).click();
-  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
-  await expect(page.getByText('opencode.jsonc', { exact: true })).toBeVisible();
-  await clientType.press('Enter');
-  await page.getByRole('option', { name: 'OpenCode Go' }).click();
-  await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(/\/opencode-go$/);
+  await expect(page.getByText(/Set the full API base URL above/)).toBeVisible();
   await page.getByRole('button', { name: 'View failed requests' }).press('Enter');
   await expect(page).toHaveURL(/range=30d&client=open-code&outcome=failed$/);
   await expect(failedRow).toBeVisible();
@@ -574,11 +571,11 @@ test('keeps key shortcuts and repeated Enter from interrupting connection select
   await page.keyboard.press('End');
   await page.keyboard.down('Enter');
   await expect(options).toBeVisible();
-  await expect(baseURL).toHaveValue(/\/v1$/);
+  await expect(baseURL).toHaveCount(0);
   await page.keyboard.up('Enter');
   await page.keyboard.press('Enter');
   await expect(options).toBeHidden();
-  await expect(baseURL).toHaveValue(/\/opencode-go$/);
+  await expect(baseURL).toHaveValue(/\/v1$/);
 
   await connection.press('Enter');
   await page.keyboard.press('k');
@@ -1012,7 +1009,7 @@ test('guides an empty dashboard to a client and protects the first key before co
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
   await expect(page.getByText('Waiting for first request', { exact: true })).toBeVisible();
-  await expect(page.getByText('X-LLM-Meter-Key', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'OpenTelemetry setup guide' })).toBeVisible();
 });
 
 test('keeps a client draft through session expiry and clears it on lock', async ({ page }) => {

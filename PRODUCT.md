@@ -16,7 +16,7 @@ Give operators one place to inspect model usage across connected clients. An ope
 
 ## Positioning
 
-LLM Meter tracks tokens, costs, and provider allowances across AI clients. The server can meter traffic as a reverse proxy, and the local relay can meter proxied traffic or collect OpenTelemetry usage from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode. A client key attributes usage while the client keeps its existing upstream credentials.
+LLM Meter tracks tokens and estimated spend across AI clients. Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode send usage through OpenTelemetry to the local relay. Generic OpenAI-compatible clients and Antigravity can send model traffic through the server proxy or local relay. A client key attributes usage while the client keeps its upstream credentials.
 
 ## Operating Context
 
@@ -27,7 +27,7 @@ LLM Meter tracks tokens, costs, and provider allowances across AI clients. The s
 ## Capabilities and Constraints
 
 - Dashboard estimates are shown in USD. The ledger preserves provider-reported amounts, including zero, and uses recorded rates for estimates where applicable. Requests with insufficient pricing data appear as **Unpriced**.
-- OpenCode Go list value and allowance use are distinct from the reported charge.
+- Historical OpenCode Go records preserve reported charges, list values, and allowance use. Historical Codex quota observations remain available.
 - The full proxy key is shown only at issuance. The proxy validates the key and removes its header before forwarding the request upstream.
 
 ## Product Principles

@@ -22,7 +22,7 @@ func main() {
 	flag.StringVar(&opts.Listen, "listen", relay.DefaultListen, "client-facing loopback IP and port")
 	flag.StringVar(&opts.Bind, "bind", "", "container socket address, e.g. 0.0.0.0:8765 with a loopback-only Docker port mapping")
 	flag.StringVar(&opts.Mode, "mode", relay.ModeRemoteProxy, "remote-proxy, usage-only, or telemetry")
-	flag.StringVar(&opts.Provider, "provider", "", "restrict to antigravity, openai, codex, or opencode-go (default all)")
+	flag.StringVar(&opts.Provider, "provider", "", "restrict to antigravity or openai (default both)")
 	flag.StringVar(&opts.Target, "target", "", "HTTPS LLM Meter origin")
 	flag.StringVar(&opts.Upstream, "upstream", "", "HTTPS provider base URL override in usage-only mode with --provider")
 	flag.StringVar(&opts.keyFile, "key-file", "", "path to the private proxy key file")

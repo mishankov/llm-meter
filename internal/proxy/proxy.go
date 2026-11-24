@@ -17,10 +17,7 @@ import (
 
 const (
 	apiPrefix         = "/v1"
-	CodexPrefix       = "/codex"
-	codexUpstreamPath = "/backend-api/codex"
 	accessKey         = "X-LLM-Meter-Key"
-	OpenCodeGoPrefix  = "/opencode-go"
 	AntigravityPrefix = "/antigravity"
 )
 
@@ -71,40 +68,22 @@ func WithClient(ctx context.Context, clientID string) context.Context {
 	return context.WithValue(ctx, clientContextKey{}, clientID)
 }
 
-// New creates an HTTP and WebSocket proxy for the configured upstreams.
+// New creates an HTTP and WebSocket proxy for the configured API upstream.
 // The caller must authenticate access before passing requests to this handler.
-func New(apiUpstream, codexUpstream, opencodeGoUpstream *url.URL, record func(Usage)) http.Handler {
+func New(apiUpstream *url.URL, record func(Usage)) http.Handler {
 	if record == nil {
 		record = func(Usage) {}
 	}
 	if apiUpstream == nil {
 		apiUpstream = &url.URL{Scheme: "https", Host: "api.openai.com", Path: apiPrefix}
 	}
-	if codexUpstream == nil {
-		codexUpstream = &url.URL{Scheme: "https", Host: "chatgpt.com", Path: codexUpstreamPath}
-	}
-	if opencodeGoUpstream == nil {
-		opencodeGoUpstream = &url.URL{Scheme: "https", Host: "opencode.ai", Path: "/inference/go"}
-	}
-	api := newUpstream(apiPrefix, "api", *apiUpstream, record)
-	codex := newUpstream(CodexPrefix, "codex", *codexUpstream, record)
-	opencodeGo := newUpstream(OpenCodeGoPrefix, "api", *opencodeGoUpstream, func(usage Usage) {
-		if usage.ResponseID != "" {
-			usage.ResponseID = "opencode-go:" + usage.ResponseID
-		}
-		record(usage)
-	})
+	api := newUpstream(apiPrefix, *apiUpstream, record)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case hasPrefix(r.URL.Path, apiPrefix):
-			api.serve(w, r)
-		case hasPrefix(r.URL.Path, CodexPrefix):
-			codex.serve(w, r)
-		case hasPrefix(r.URL.Path, OpenCodeGoPrefix):
-			opencodeGo.serve(w, r)
-		default:
+		if !hasPrefix(r.URL.Path, apiPrefix) {
 			http.NotFound(w, r)
+			return
 		}
+		api.serve(w, r)
 	})
 }
 
@@ -113,7 +92,7 @@ func NewAntigravity(baseURL url.URL, record func(Usage)) http.Handler {
 	if record == nil {
 		record = func(Usage) {}
 	}
-	route := newUpstream(AntigravityPrefix, "api", baseURL, func(usage Usage) {
+	route := newUpstream(AntigravityPrefix, baseURL, func(usage Usage) {
 		if usage.ResponseID != "" {
 			usage.ResponseID = "antigravity:" + usage.ResponseID
 		}
@@ -130,16 +109,15 @@ func NewAntigravity(baseURL url.URL, record func(Usage)) http.Handler {
 
 type upstream struct {
 	prefix   string
-	source   string
 	provider string
 	baseURL  url.URL
 	record   func(Usage)
 	http     *httputil.ReverseProxy
 }
 
-func newUpstream(prefix, source string, baseURL url.URL, record func(Usage)) *upstream {
+func newUpstream(prefix string, baseURL url.URL, record func(Usage)) *upstream {
 	route := &upstream{
-		prefix: prefix, source: source, provider: upstreamProvider(prefix, baseURL), baseURL: baseURL, record: record,
+		prefix: prefix, provider: upstreamProvider(prefix, baseURL), baseURL: baseURL, record: record,
 	}
 	route.http = &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
@@ -175,7 +153,7 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	clientID, _ := r.Context().Value(clientContextKey{}).(string)
 	usage := Usage{
 		At:       time.Now().UTC(),
-		Source:   u.source,
+		Source:   "api",
 		Provider: u.provider,
 		ClientID: clientID,
 		Endpoint: r.URL.Path,
@@ -209,12 +187,7 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func upstreamProvider(prefix string, baseURL url.URL) string {
-	switch prefix {
-	case CodexPrefix:
-		return "codex"
-	case OpenCodeGoPrefix:
-		return "opencode-go"
-	case AntigravityPrefix:
+	if prefix == AntigravityPrefix {
 		return "google"
 	}
 	switch strings.ToLower(baseURL.Hostname()) {
@@ -252,9 +225,6 @@ func (u *upstream) observeResponse(response *http.Response) error {
 	if meter.usage.Model == "" {
 		meter.usage.Model = response.Header.Get("X-OpenAI-Model")
 	}
-	if u.source == "codex" {
-		meter.usage.mergeRateLimits(limitsFromHeaders(response.Header))
-	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	var observer io.Writer
 	switch {
@@ -281,11 +251,7 @@ func (u *upstream) observeResponse(response *http.Response) error {
 func (u *upstream) targetURL(incoming *url.URL) url.URL {
 	target := u.baseURL
 	suffix := strings.TrimPrefix(incoming.Path, u.prefix)
-	var protocolPath string
-	if u.prefix == OpenCodeGoPrefix {
-		protocolPath = openCodeGoProtocol(suffix)
-	}
-	target.Path = strings.TrimSuffix(target.Path, "/") + protocolPath + suffix
+	target.Path = strings.TrimSuffix(target.Path, "/") + suffix
 	if incoming.RawPath != "" || u.baseURL.RawPath != "" {
 		// Each character in the route prefix is ASCII and may be percent encoded.
 		escaped := incoming.EscapedPath()
@@ -297,7 +263,7 @@ func (u *upstream) targetURL(incoming *url.URL) url.URL {
 				index++
 			}
 		}
-		target.RawPath = strings.TrimSuffix(u.baseURL.EscapedPath(), "/") + protocolPath + escaped[index:]
+		target.RawPath = strings.TrimSuffix(u.baseURL.EscapedPath(), "/") + escaped[index:]
 	}
 	if target.RawQuery != "" && incoming.RawQuery != "" {
 		target.RawQuery += "&"
@@ -305,19 +271,6 @@ func (u *upstream) targetURL(incoming *url.URL) url.URL {
 	target.RawQuery += incoming.RawQuery
 	target.ForceQuery = target.ForceQuery || incoming.ForceQuery
 	return target
-}
-
-func openCodeGoProtocol(suffix string) string {
-	switch {
-	case suffix == "/models", suffix == "/usage":
-		return "/v1"
-	case hasPrefix(suffix, "/messages"):
-		return "/anthropic/v1"
-	case strings.HasPrefix(suffix, "/models/") && strings.Contains(suffix, ":"):
-		return "/google/v1beta"
-	default:
-		return "/openai/v1"
-	}
 }
 
 // IsAntigravityEndpoint reports whether a recorded endpoint uses Cloud Code Assist.

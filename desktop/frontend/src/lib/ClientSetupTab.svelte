@@ -4,6 +4,7 @@
   import CopyIcon from "@lucide/svelte/icons/copy";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import TerminalIcon from "@lucide/svelte/icons/terminal";
+  import { Browser } from "@wailsio/runtime";
   import { Button } from "@ui-sdk/svelte/button";
   import {
     Select,
@@ -17,23 +18,20 @@
 
   let { snapshot }: { snapshot: AppSnapshot } = $props();
 
+  const guide = "https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md";
   const clients = [
-    { value: "codex", label: "Signed-in Codex" },
-    { value: "opencode-api", label: "OpenCode · OpenAI API key" },
-    { value: "opencode-chatgpt", label: "OpenCode · ChatGPT sign-in" },
-    { value: "opencode-go", label: "OpenCode Go" },
-    { value: "antigravity", label: "Antigravity / T3 Code" },
     { value: "openai", label: "OpenAI-compatible SDK / CLI" },
+    { value: "antigravity", label: "Antigravity / T3 Code" },
   ];
 
   const scope = $derived(snapshot.config.provider);
-  const clientChoices = $derived(clients.filter(c =>
-    !scope || c.value === scope || (scope === "codex" && c.value === "opencode-chatgpt") ||
-      (scope === "openai" && c.value === "opencode-api"),
-  ));
-  let preferredClient = $state("codex");
+  const clientChoices = $derived(clients.filter(client => !scope || client.value === scope));
+  let preferredClient = $state("openai");
   const selectedClient = $derived(clientChoices.some(c => c.value === preferredClient)
     ? preferredClient : clientChoices[0]?.value);
+  const guideURL = $derived(guide + (selectedClient
+    ? "#53-opentelemetry"
+    : "#migrating-from-the-codex-and-opencode-go-proxy-routes"));
 
   let antigravityBin = $state("");
   let launcherDest = $state("");
@@ -70,45 +68,16 @@
     return () => { current = false; };
   });
 
-  const isOpenCode = $derived(selectedClient?.startsWith("opencode"));
-  const baseUrl = $derived.by(() => {
-    switch (selectedClient) {
-      case "codex":
-      case "opencode-chatgpt":
-        return `${origin}/codex`;
-      case "opencode-go":
-        return `${origin}/opencode-go`;
-      case "antigravity":
-        return origin;
-      default:
-        return `${origin}/v1`;
-    }
-  });
+  const baseUrl = $derived(selectedClient === "antigravity" ? origin : `${origin}/v1`);
+  const snippet = $derived(selectedClient === "antigravity" ? launcherScript : `export OPENAI_BASE_URL="${baseUrl}"
+# Keep your normal OPENAI_API_KEY; do not send X-LLM-Meter-Key.`);
 
-  const snippet = $derived.by(() => {
-    switch (selectedClient) {
-      case "codex":
-        return `model_provider = "metered-codex"
-
-[model_providers.metered-codex]
-name = "OpenAI"
-base_url = "${origin}/codex"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = true`;
-      case "opencode-api":
-      case "opencode-chatgpt":
-      case "opencode-go": {
-        const provider = selectedClient === "opencode-go" ? "opencode-go" : "openai";
-        return JSON.stringify({ providers: { [provider]: { settings: { baseURL: baseUrl } } } }, null, 2);
-      }
-      case "antigravity":
-        return launcherScript;
-      default:
-        return `export OPENAI_BASE_URL="${origin}/v1"
-# Keep your normal OPENAI_API_KEY; do not send X-LLM-Meter-Key.`;
-    }
-  });
+  function openTelemetryGuide(event: MouseEvent) {
+    event.preventDefault();
+    void Browser.OpenURL(guideURL).catch(err => {
+      installResult = { ok: false, text: errorMessage(err) };
+    });
+  }
 
   async function copy(key: string, value: string) {
     try {
@@ -158,120 +127,124 @@ supports_websockets = true`;
 
 <div class="stack">
   <section class="card setup-card">
-    <div class="field">
-      <span class="field-label" id="client-select-label">Client</span>
-      <Select
-        items={clientChoices}
-        value={selectedClient}
-        onValueChange={(next) => {
-          if (next) preferredClient = next;
-          installResult = null;
-        }}
-      >
-        <SelectTrigger class="select-trigger" aria-labelledby="client-select-label">
-          <SelectValue />
-          <ChevronDownIcon size={14} aria-hidden="true" />
-        </SelectTrigger>
-        <SelectContent class="select-content">
-          {#each clientChoices as choice (choice.value)}
-            <SelectItem class="select-item" value={choice.value}>
-              {choice.label}
-              <SelectItemIndicator>
-                <CheckIcon size={13} aria-hidden="true" />
-              </SelectItemIndicator>
-            </SelectItem>
-          {/each}
-        </SelectContent>
-      </Select>
-    </div>
-
-    <div class="field">
-      <span class="field-label">Local base URL</span>
-      <div class="url-row">
-        <code class="url-box">{baseUrl}</code>
-        <Button class="secondary-button" onclick={() => copy("url", baseUrl)}>
-          <CopyIcon size={12} aria-hidden="true" />
-          {copiedKey === "url" ? "Copied" : "Copy URL"}
-        </Button>
+    {#if selectedClient}
+      <div class="field">
+        <span class="field-label" id="client-select-label">Client</span>
+        <Select
+          items={clientChoices}
+          value={selectedClient}
+          onValueChange={(next) => {
+            if (next) preferredClient = next;
+            installResult = null;
+          }}
+        >
+          <SelectTrigger class="select-trigger" aria-labelledby="client-select-label">
+            <SelectValue />
+            <ChevronDownIcon size={14} aria-hidden="true" />
+          </SelectTrigger>
+          <SelectContent class="select-content">
+            {#each clientChoices as choice (choice.value)}
+              <SelectItem class="select-item" value={choice.value}>
+                {choice.label}
+                <SelectItemIndicator>
+                  <CheckIcon size={13} aria-hidden="true" />
+                </SelectItemIndicator>
+              </SelectItem>
+            {/each}
+          </SelectContent>
+        </Select>
       </div>
-      <p class="hint muted">
-        Use the exact host and port shown. The relay checks both on incoming requests.
-      </p>
-    </div>
 
-    {#if selectedClient === "antigravity"}
-      <div class="launcher-box">
-        <div class="field">
-          <label class="field-label" for="ag-bin">Installed Antigravity executable</label>
-          <div class="url-row">
-            <input
-              id="ag-bin"
-              class="text-input mono-input"
-              type="text"
-              placeholder="/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity"
-              disabled={picking || installing}
-              bind:value={antigravityBin}
-              spellcheck="false"
-            />
-            <Button type="button" class="secondary-button" disabled={picking || installing} onclick={pickBinary}>
-              <FolderOpenIcon size={13} aria-hidden="true" />
-              Browse…
-            </Button>
-          </div>
+      <div class="field">
+        <span class="field-label">Local base URL</span>
+        <div class="url-row">
+          <code class="url-box">{baseUrl}</code>
+          <Button class="secondary-button" onclick={() => copy("url", baseUrl)}>
+            <CopyIcon size={12} aria-hidden="true" />
+            {copiedKey === "url" ? "Copied" : "Copy URL"}
+          </Button>
         </div>
-
-        <div class="field">
-          <label class="field-label" for="ag-dest">Launcher destination (named <code>antigravity</code> or <code>agy</code>)</label>
-          <div class="url-row">
-            <input
-              id="ag-dest"
-              class="text-input mono-input"
-              type="text"
-              placeholder="~/.local/bin/antigravity"
-              disabled={installing}
-              bind:value={launcherDest}
-              spellcheck="false"
-            />
-            <Button type="button" class="primary-button" title="Install launcher (⌘⇧I)" aria-keyshortcuts="Meta+Shift+I" disabled={installing || picking || !launcherScript || !launcherDest.trim()} onclick={installLauncher}>
-              <TerminalIcon size={13} aria-hidden="true" />
-              {installing ? "Installing…" : "Install Launcher"}
-            </Button>
-          </div>
-        </div>
-
-
+        <p class="hint muted">
+          Use the exact host and port shown. The relay checks both on incoming requests.
+        </p>
       </div>
+
+      {#if selectedClient === "antigravity"}
+        <div class="launcher-box">
+          <div class="field">
+            <label class="field-label" for="ag-bin">Installed Antigravity executable</label>
+            <div class="url-row">
+              <input
+                id="ag-bin"
+                class="text-input mono-input"
+                type="text"
+                placeholder="/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity"
+                disabled={picking || installing}
+                bind:value={antigravityBin}
+                spellcheck="false"
+              />
+              <Button type="button" class="secondary-button" disabled={picking || installing} onclick={pickBinary}>
+                <FolderOpenIcon size={13} aria-hidden="true" />
+                Browse…
+              </Button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="ag-dest">Launcher destination (named <code>antigravity</code> or <code>agy</code>)</label>
+            <div class="url-row">
+              <input
+                id="ag-dest"
+                class="text-input mono-input"
+                type="text"
+                placeholder="~/.local/bin/antigravity"
+                disabled={installing}
+                bind:value={launcherDest}
+                spellcheck="false"
+              />
+              <Button type="button" class="primary-button" title="Install launcher (⌘⇧I)" aria-keyshortcuts="Meta+Shift+I" disabled={installing || picking || !launcherScript || !launcherDest.trim()} onclick={installLauncher}>
+                <TerminalIcon size={13} aria-hidden="true" />
+                {installing ? "Installing…" : "Install Launcher"}
+              </Button>
+            </div>
+          </div>
+
+
+        </div>
+      {/if}
+
+      <div class="field">
+        <div class="snippet-head">
+          <span class="field-label">
+            {#if selectedClient === "antigravity"}
+              Launcher script preview
+            {:else}
+              Environment example
+            {/if}
+          </span>
+          <Button class="secondary-button compact-button" disabled={!snippet} title="Copy snippet (⌘⇧C)" aria-keyshortcuts="Meta+Shift+C" onclick={() => copy("snippet", snippet)}>
+            <CopyIcon size={12} aria-hidden="true" />
+            {copiedKey === "snippet" ? "Copied" : "Copy Snippet"}
+          </Button>
+        </div>
+        <pre class="code-block"><code>{snippet}</code></pre>
+      </div>
+      <p class="hint muted">For Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode, follow the <a class="guide-link" href={guideURL} onclick={openTelemetryGuide}>OpenTelemetry setup guide</a>.</p>
+    {:else}
+      <p class="hint muted">This relay profile uses a retired proxy route. <a class="guide-link" href={guideURL} onclick={openTelemetryGuide}>Migrate to OpenTelemetry</a> or choose a supported proxy route in Settings.</p>
     {/if}
-
     {#if installResult || scriptError}
       <div class="banner" class:banner-success={installResult?.ok && !scriptError} class:banner-error={!installResult?.ok || scriptError} role="status">
         <span>{scriptError || installResult?.text}</span>
       </div>
     {/if}
-    <div class="field">
-      <div class="snippet-head">
-        <span class="field-label">
-          {#if selectedClient === "codex"}
-            Codex <code>config.toml</code>
-          {:else if isOpenCode}
-            OpenCode <code>opencode.jsonc</code>
-          {:else if selectedClient === "antigravity"}
-            Launcher script preview
-          {:else}
-            Environment example
-          {/if}
-        </span>
-        <Button class="secondary-button compact-button" disabled={!snippet} title="Copy snippet (⌘⇧C)" aria-keyshortcuts="Meta+Shift+C" onclick={() => copy("snippet", snippet)}>
-          <CopyIcon size={12} aria-hidden="true" />
-          {copiedKey === "snippet" ? "Copied" : "Copy Snippet"}
-        </Button>
-      </div>
-      <pre class="code-block"><code>{snippet}</code></pre>
-    </div>
   </section>
 </div>
 
 <style>
+  .guide-link {
+    color: var(--accent);
+  }
   .stack {
     display: grid;
     gap: 14px;

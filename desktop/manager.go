@@ -579,8 +579,6 @@ func buildEndpoints(listenAddr, provider string) []ClientEndpoint {
 	base := "http://" + listenAddr
 	all := []ClientEndpoint{
 		{Provider: "openai", Label: "OpenAI-compatible (/v1)", URL: base + "/v1"},
-		{Provider: "codex", Label: "Signed-in Codex (/codex)", URL: base + "/codex"},
-		{Provider: "opencode-go", Label: "OpenCode Go (/opencode-go)", URL: base + "/opencode-go"},
 		{Provider: "antigravity", Label: "Antigravity ACP (root)", URL: base},
 	}
 	if provider == "" {

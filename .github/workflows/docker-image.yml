@@ -55,12 +55,14 @@ jobs:
               --mount "type=bind,src=$scratch/data,dst=/data" \
               llm-meter-relay:smoke --mode "$mode" --target https://llm-meter.invalid \
               --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data)
-            for path in /v1internal:loadCodeAssist /v1/models /codex/models /opencode-go/models; do
+            for check in 401:/v1internal:loadCodeAssist 401:/v1/models 404:/codex/models 404:/opencode-go/models; do
+              expected=${check%%:*}
+              path=${check#*:}
               if ! status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
                   --request POST --max-time 2 --retry 5 --retry-all-errors --retry-delay 1 \
-                  "http://127.0.0.1:8765$path") || [[ "$status" != 401 ]]; then
+                  "http://127.0.0.1:8765$path") || [[ "$status" != "$expected" ]]; then
                 docker logs "$container"
-                printf 'Expected %s in relay mode %s to return 401, got %s\n' "$path" "$mode" "$status" >&2
+                printf 'Expected %s in relay mode %s to return %s, got %s\n' "$path" "$mode" "$expected" "$status" >&2
                 exit 1
               fi
             done

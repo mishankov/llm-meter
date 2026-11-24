@@ -29,13 +29,11 @@ type connectionProvider struct {
 	name, prefix, defaultUpstream string
 }
 
-var providerOrder = []string{"antigravity", "openai", "codex", "opencode-go"}
+var providerOrder = []string{"antigravity", "openai"}
 
 var providers = map[string]connectionProvider{
 	"antigravity": {"antigravity", proxy.AntigravityPrefix, "https://daily-cloudcode-pa.googleapis.com"},
 	"openai":      {"openai", apiPrefix, "https://api.openai.com/v1"},
-	"codex":       {"codex", proxy.CodexPrefix, "https://chatgpt.com/backend-api/codex"},
-	"opencode-go": {"opencode-go", proxy.OpenCodeGoPrefix, "https://opencode.ai/inference/go"},
 }
 
 // Providers returns all supported relay providers in deterministic order.
@@ -164,22 +162,16 @@ func remoteProxy(provider connectionProvider, target *url.URL, key string, trans
 }
 
 func directProxy(provider connectionProvider, upstream url.URL, record func(proxy.Usage)) http.Handler {
-	switch provider.prefix {
-	case proxy.AntigravityPrefix:
-		forward := proxy.NewAntigravity(upstream, record)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			request := r.Clone(r.Context())
-			request.URL.Path = provider.prefix + request.URL.Path
-			if request.URL.RawPath != "" {
-				request.URL.RawPath = provider.prefix + request.URL.RawPath
-			}
-			forward.ServeHTTP(w, request)
-		})
-	case proxy.CodexPrefix:
-		return proxy.New(nil, &upstream, nil, record)
-	case proxy.OpenCodeGoPrefix:
-		return proxy.New(nil, nil, &upstream, record)
-	default:
-		return proxy.New(&upstream, nil, nil, record)
+	if provider.prefix != proxy.AntigravityPrefix {
+		return proxy.New(&upstream, record)
 	}
+	forward := proxy.NewAntigravity(upstream, record)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := r.Clone(r.Context())
+		request.URL.Path = provider.prefix + request.URL.Path
+		if request.URL.RawPath != "" {
+			request.URL.RawPath = provider.prefix + request.URL.RawPath
+		}
+		forward.ServeHTTP(w, request)
+	})
 }

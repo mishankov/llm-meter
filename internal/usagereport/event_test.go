@@ -17,7 +17,7 @@ func TestReportKeepsUsageWhenQuotaMetadataIsInvalid(t *testing.T) {
 	for i := range 34 {
 		limits = append(limits, proxy.RateLimit{ID: fmt.Sprintf("limit-%d", i), Window: "primary", WindowMinutes: 300, UsedPercent: 20})
 	}
-	usage := proxy.Usage{At: time.Now(), Provider: "codex", Endpoint: "/codex/responses", Method: http.MethodPost,
+	usage := proxy.Usage{At: time.Now(), Provider: "codex", Endpoint: CodexTelemetryEndpoint, Method: http.MethodPost,
 		Status: http.StatusOK, HasUsage: true, InputTokens: 21, OutputTokens: 5, RateLimits: limits}
 	event, err := NewEvent(usage)
 	if err != nil {
@@ -25,7 +25,7 @@ func TestReportKeepsUsageWhenQuotaMetadataIsInvalid(t *testing.T) {
 	}
 	reported := event.Usage()
 	if len(event.RateLimits) != 32 || event.RateLimits[0].ID != "limit-0" || reported.InputTokens != 21 ||
-		reported.Source != "codex" || reported.Endpoint != "/codex/responses" {
+		reported.Source != "codex" || reported.Endpoint != CodexTelemetryEndpoint {
 		t.Fatal("the report lost usage or included invalid quota data")
 	}
 	event.Provider = "openai"
@@ -34,7 +34,30 @@ func TestReportKeepsUsageWhenQuotaMetadataIsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Decode(bytes.NewReader(payload)); err == nil {
-		t.Fatal("accepted a provider incompatible with the Codex route")
+		t.Fatal("accepted a provider incompatible with Codex telemetry")
+	}
+}
+
+func TestUsageReportRejectsRetiredProxyRoutes(t *testing.T) {
+	for _, fixture := range []struct{ provider, endpoint string }{
+		{"codex", "/codex/responses"},
+		{"opencode-go", "/opencode-go/chat/completions"},
+	} {
+		event, err := NewEvent(proxy.Usage{
+			At: time.Now(), Provider: fixture.provider, Endpoint: fixture.endpoint, Method: http.MethodPost,
+			Status: http.StatusOK, HasUsage: true, InputTokens: 12,
+		})
+		if err == nil {
+			t.Fatalf("created a report for retired route %q", fixture.endpoint)
+		}
+		event.Endpoint = fixture.endpoint
+		payload, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Decode(bytes.NewReader(payload)); err == nil {
+			t.Fatalf("decoded a report for retired route %q", fixture.endpoint)
+		}
 	}
 }
 

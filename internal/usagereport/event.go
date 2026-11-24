@@ -68,7 +68,7 @@ var (
 	eventID    = regexp.MustCompile(`^[A-Z2-7]{26}$`)
 	idHash     = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@+~-]{0,255}$`)
-	providers  = []string{"codex", "openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
+	providers  = []string{"openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
 	tiers      = []string{"auto", "default", "standard", "scale", "batch", "flex", "fast", "priority", "ultrafast", "unknown"}
 	methods    = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, "OTHER"}
 )
@@ -174,14 +174,10 @@ func validProvider(endpoint, provider string) bool {
 		return provider == "codex" || provider == ""
 	case endpoint == CopilotTelemetryEndpoint:
 		return provider == "github-copilot"
-	case strings.HasPrefix(endpoint, proxy.CodexPrefix):
-		return provider == "codex"
-	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
-		return provider == "opencode-go"
 	case proxy.IsAntigravityEndpoint(endpoint):
 		return provider == "google" || provider == "antigravity"
 	default:
-		return provider == "" || (provider != "codex" && slices.Contains(providers, provider))
+		return provider == "" || slices.Contains(providers, provider)
 	}
 }
 
@@ -232,7 +228,7 @@ func endpointName(path string) string {
 	case ClaudeCodeEndpoint, CodexTelemetryEndpoint, GeminiTelemetryEndpoint, CopilotTelemetryEndpoint, OpenCodeTelemetryEndpoint:
 		return path
 	}
-	for _, prefix := range [...]string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {
+	for _, prefix := range [...]string{"/v1", proxy.AntigravityPrefix} {
 		suffix, ok := strings.CutPrefix(path, prefix)
 		if !ok || (suffix != "" && !strings.HasPrefix(suffix, "/")) {
 			continue

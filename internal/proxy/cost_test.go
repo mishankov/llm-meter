@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestOpenCodeGoReportsZeroChargeAndListValue(t *testing.T) {
+func TestAPIProxyReportsOpenCodeGoZeroChargeAndListValue(t *testing.T) {
 	cases := []struct {
 		name, path, contentType, payload, responseID string
 	}{
@@ -33,12 +33,13 @@ func TestOpenCodeGoReportsZeroChargeAndListValue(t *testing.T) {
 			}))
 			defer upstream.Close()
 			records := make(chan Usage, 2)
-			handler := New(nil, nil, parseURL(t, upstream.URL+"/inference/go"), func(usage Usage) { records <- usage })
-			req := httptest.NewRequest(http.MethodPost, OpenCodeGoPrefix+tc.path, nil)
-			handler.ServeHTTP(httptest.NewRecorder(), req)
+			proxy := newUpstream(apiPrefix, *parseURL(t, upstream.URL), func(usage Usage) { records <- usage })
+			proxy.provider = "opencode-go"
+			req := httptest.NewRequest(http.MethodPost, apiPrefix+tc.path, nil)
+			proxy.serve(httptest.NewRecorder(), req)
 			usage := nextRecord(t, records)
 			if usage.Provider != "opencode-go" || usage.Model != "fixture-model" || !usage.HasUsage ||
-				usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.ResponseID != "opencode-go:"+tc.responseID {
+				usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.ResponseID != tc.responseID {
 				t.Fatalf("incorrect attribution or token counts: %+v", usage)
 			}
 			assertReportedAmount(t, "charged", usage.ReportedCost, 0)
@@ -67,7 +68,7 @@ func TestWebSocketRecordsReportedCostWithoutTokens(t *testing.T) {
 	assertReportedAmount(t, "allowance", records[0].ReportedAllowance, .003)
 }
 
-func TestOpenCodeGoMessagesStreamPreservesInputUsage(t *testing.T) {
+func TestAPIProxyMessagesStreamPreservesInputUsage(t *testing.T) {
 	const stream = `event: message_start
 data: {"type":"message_start","message":{"id":"msg-1","type":"message","model":"fixture-model","content":[],"usage":{"input_tokens":25,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"output_tokens":1}}}
 
@@ -87,14 +88,15 @@ data: {"type":"message_stop"}
 	}))
 	defer upstream.Close()
 	records := make(chan Usage, 1)
-	handler := New(nil, nil, parseURL(t, upstream.URL+"/inference/go"), func(usage Usage) { records <- usage })
+	proxy := newUpstream(apiPrefix, *parseURL(t, upstream.URL), func(usage Usage) { records <- usage })
+	proxy.provider = "opencode-go"
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, OpenCodeGoPrefix+"/messages", nil))
+	proxy.serve(response, httptest.NewRequest(http.MethodPost, apiPrefix+"/messages", nil))
 	if response.Body.String() != stream {
 		t.Fatal("proxy changed the upstream stream")
 	}
 	usage := nextRecord(t, records)
-	if !usage.HasUsage || usage.Model != "fixture-model" || usage.ResponseID != "opencode-go:msg-1" ||
+	if !usage.HasUsage || usage.Model != "fixture-model" || usage.ResponseID != "msg-1" ||
 		usage.InputTokens != 1125 || usage.CachedInputTokens != 1000 || usage.CacheWriteTokens != 100 || usage.OutputTokens != 15 {
 		t.Fatalf("incorrect Messages usage: %+v", usage)
 	}
@@ -110,7 +112,7 @@ func TestResponsesPostCapturesBackgroundCompletionWindow(t *testing.T) {
 	}))
 	defer upstream.Close()
 	records := make(chan Usage, 1)
-	handler := New(parseURL(t, upstream.URL+"/v1"), nil, nil, func(usage Usage) { records <- usage })
+	handler := New(parseURL(t, upstream.URL+"/v1"), func(usage Usage) { records <- usage })
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"background":true,"background_options":{"completion_window":"8h"},"service_tier":"default"}`))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(httptest.NewRecorder(), req)

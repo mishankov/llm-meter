@@ -208,17 +208,19 @@ func TestRelayDestinations(t *testing.T) {
 		name, mode, provider, target, upstream, wantRoute string
 	}{
 		{"remote target with route", ModeRemoteProxy, "", "https://proxy.test/antigravity", "", ""},
-		{"remote with explicit provider", ModeRemoteProxy, "codex", "https://proxy.test/", "", "https://proxy.test/codex"},
-		{"remote target with selected route", ModeRemoteProxy, "codex", "https://proxy.test/codex", "", ""},
-		{"usage with explicit provider", ModeUsageOnly, "codex", "https://proxy.test/", "", providers["codex"].defaultUpstream},
-		{"custom upstream", ModeUsageOnly, "codex", "https://proxy.test", "https://upstream.test/codex", "https://upstream.test/codex"},
-		{"remote with override", ModeRemoteProxy, "codex", "https://proxy.test", "https://upstream.test/codex", ""},
+		{"remote with explicit provider", ModeRemoteProxy, "openai", "https://proxy.test/", "", "https://proxy.test/v1"},
+		{"remote target with selected route", ModeRemoteProxy, "openai", "https://proxy.test/v1", "", ""},
+		{"usage with explicit provider", ModeUsageOnly, "openai", "https://proxy.test/", "", providers["openai"].defaultUpstream},
+		{"custom upstream", ModeUsageOnly, "openai", "https://proxy.test", "https://upstream.test/custom", "https://upstream.test/custom"},
+		{"remote with override", ModeRemoteProxy, "openai", "https://proxy.test", "https://upstream.test/v1", ""},
 		{"custom upstream without a provider", ModeUsageOnly, "", "https://proxy.test", "https://upstream.test", ""},
-		{"usage with proxy route", ModeUsageOnly, "codex", "https://proxy.test/codex", "", ""},
-		{"usage with same upstream host", ModeUsageOnly, "codex", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
-		{"usage with a default upstream on the proxy host", ModeUsageOnly, "", "https://chatgpt.com", "", ""},
-		{"unknown mode", "auto", "codex", "https://proxy.test", "", ""},
+		{"usage with proxy route", ModeUsageOnly, "openai", "https://proxy.test/v1", "", ""},
+		{"usage with same upstream host", ModeUsageOnly, "openai", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
+		{"usage with a default upstream on the proxy host", ModeUsageOnly, "", "https://api.openai.com", "", ""},
+		{"unknown mode", "auto", "openai", "https://proxy.test", "", ""},
 		{"unknown provider", ModeRemoteProxy, "unknown", "https://proxy.test", "", ""},
+		{"retired Codex provider", ModeRemoteProxy, "codex", "https://proxy.test", "", ""},
+		{"retired OpenCode Go provider", ModeUsageOnly, "opencode-go", "https://proxy.test", "", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config, err := configureRelay(Config{Mode: test.mode, Provider: test.provider, Target: test.target, Upstream: test.upstream})
@@ -258,9 +260,6 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 	}{
 		{"antigravity", "antigravity", "Authorization", "/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
 		{"openai", "openai", "Authorization", "/v1/responses", "/v1/responses", "/direct/responses", usage},
-		{"codex", "codex", "Authorization", "/codex/responses", "/codex/responses", "/direct/responses", usage},
-		{"opencode-go", "opencode-go", "Authorization", "/opencode-go/responses", "/opencode-go/responses", "/direct/openai/v1/responses", usage},
-		{"opencode-go Gemini", "opencode-go", "X-Goog-Api-Key", "/opencode-go/models/fixture:generateContent", "/opencode-go/models/fixture:generateContent", "/direct/google/v1beta/models/fixture:generateContent", usage},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			provider := providers[test.provider]
@@ -328,8 +327,6 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 	}{
 		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
 		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
-		{"codex", http.MethodGet, "/codex/models", "/codex/models", "/backend-api/codex/models"},
-		{"opencode-go", http.MethodGet, "/opencode-go/models", "/opencode-go/models", "/inference/go/v1/models"},
 	}
 	for _, mode := range []string{ModeRemoteProxy, ModeUsageOnly} {
 		t.Run(mode, func(t *testing.T) {
@@ -401,7 +398,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 			} else if len(observed) != 0 {
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
-			for _, path := range []string{"/api/usage/events", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
+			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
 				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 				r.Header.Set("Authorization", authorization)
 				response := httptest.NewRecorder()
@@ -497,7 +494,7 @@ func TestInstanceLifecycleAndRequestCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := inst.Status()
-	if st.State != StateRunning || st.ListenAddr == "" || len(st.Routes) != 4 {
+	if st.State != StateRunning || st.ListenAddr == "" || len(st.Routes) != 2 {
 		t.Fatalf("unexpected running status: %+v", st)
 	}
 
@@ -541,8 +538,8 @@ func TestConnectionIDAndProviders(t *testing.T) {
 	if err != nil || id3 == id1 {
 		t.Fatalf("ConnectionID should differ for different keys: %q vs %q (%v)", id1, id3, err)
 	}
-	if len(Providers()) != 4 {
-		t.Fatalf("expected 4 providers, got %d", len(Providers()))
+	if len(Providers()) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(Providers()))
 	}
 }
 
