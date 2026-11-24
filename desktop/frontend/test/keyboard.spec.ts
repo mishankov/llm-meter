@@ -5,10 +5,10 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   const snapshot: AppSnapshot = {
     configured: true, keyConfigured: true, keyPrefix: "llmm_sample…",
     config: { target: "https://meter.example.org", mode: "usage-only", listen: "127.0.0.1:8765", provider: "", upstream: "", autoStart: true },
-    status: { state: "stopped", mode: "usage-only", listenAddr: "127.0.0.1:8765", target: "https://meter.example.org", routes: ["openai", "codex"], requestsTotal: 0 },
+    status: { state: "stopped", mode: "usage-only", listenAddr: "127.0.0.1:8765", target: "https://meter.example.org", routes: ["openai", "antigravity"], requestsTotal: 0 },
     keptQueues: 1, pendingOnDisk: 2, endpoints: [
       { provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" },
-      { provider: "codex", label: "Signed-in Codex", url: "http://127.0.0.1:8765/codex" },
+      { provider: "antigravity", label: "Antigravity", url: "http://127.0.0.1:8765" },
     ], logs: [{ level: "info", timestamp: "2026-01-15T12:34:00Z", message: "Relay stopped" }], providers: [],
     antigravityBin: "/opt/bin/antigravity", launcherPath: "/tmp/launcher/antigravity",
   };
@@ -58,13 +58,15 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   const target = page.getByLabel("LLM Meter server URL");
   await target.fill("https://new.example.org");
   await page.getByRole("tab", { name: "Client Setup" }).click();
-  await expect(page.locator("pre")).toContainText('base_url = "http://127.0.0.1:8765/codex"');
+  await expect(page.locator("pre")).toContainText('OPENAI_BASE_URL="http://127.0.0.1:8765/v1"');
+  await expect(page.getByRole("link", { name: "OpenTelemetry setup guide" })).toHaveAttribute("href", /#53-opentelemetry$/);
+  await page.screenshot({ path: testInfo.outputPath("client-setup.png") });
   const client = page.getByRole("combobox", { name: "Client", exact: true });
-  for (const [label, route] of [["OpenCode · OpenAI API key", "/v1"], ["OpenCode · ChatGPT sign-in", "/codex"], ["OpenCode Go", "/opencode-go"]]) {
-    await client.click();
-    await page.getByRole("option", { name: label, exact: true }).click();
-    await expect(page.locator("pre")).toContainText(`"baseURL": "http://127.0.0.1:8765${route}"`);
-  }
+  await client.press("Enter");
+  await expect(page.getByRole("option")).toHaveText(["OpenAI-compatible SDK / CLI", "Antigravity / T3 Code"]);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("pre")).toContainText("#!/bin/sh");
   await page.evaluate(() => window.dispatchEvent(new Event("relay-open-settings")));
   await expect(target).toHaveValue("https://new.example.org");
 
@@ -112,4 +114,16 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   await expect(page.getByLabel("Launcher destination")).toHaveValue("/tmp/test/antigravity");
   await page.keyboard.press("Meta+Shift+i");
   await expect(page.getByText("Installed executable launcher", { exact: false })).toBeVisible();
+
+  snapshot.config.provider = "codex";
+  snapshot.configured = false;
+  snapshot.status.state = "stopped";
+  snapshot.status.routes = [];
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Client Setup" }).press("Enter");
+  await expect(page.getByRole("link", { name: "Migrate to OpenTelemetry" })).toHaveAttribute("href", /#migrating-from-the-codex-and-opencode-go-proxy-routes$/);
+  await expect(page.getByRole("combobox", { name: "Client", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Copy (URL|Snippet)/ })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("retired-proxy-setup.png") });
 });

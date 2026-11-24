@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/mishankov/llm-meter/internal/usagereport"
 	"io"
 	"net"
 	"net/http"
@@ -17,11 +16,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 const (
 	ModeRemoteProxy = "remote-proxy"
 	ModeUsageOnly   = "usage-only"
+	ModeTelemetry   = "telemetry"
 	DefaultListen   = "127.0.0.1:8765"
 
 	maxKeyBytes = 4096
@@ -37,6 +39,8 @@ type Config struct {
 	Upstream string
 	Key      string
 	DataDir  string
+	TLSCert  string
+	TLSKey   string
 }
 
 // Validate checks cfg without opening files, sockets, or databases.
@@ -171,6 +175,9 @@ func parseTargetOrigin(raw string) (*url.URL, error) {
 }
 
 func configureRelay(cfg Config) (relayConfig, error) {
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") || (cfg.TLSCert != "" && cfg.Mode != ModeTelemetry) {
+		return relayConfig{}, errors.New("--tls-cert and --tls-key must be used together in telemetry mode")
+	}
 	selected := cfg.Provider
 	if _, ok := providers[selected]; selected != "" && !ok {
 		return relayConfig{}, errors.New("unknown --provider")
@@ -185,15 +192,21 @@ func configureRelay(cfg Config) (relayConfig, error) {
 		if cfg.Upstream != "" {
 			return relayConfig{}, errors.New("--upstream requires --mode usage-only")
 		}
-	case ModeUsageOnly:
+	case ModeUsageOnly, ModeTelemetry:
+		if cfg.Mode == ModeTelemetry && (selected != "" || cfg.Upstream != "") {
+			return relayConfig{}, errors.New("--provider and --upstream cannot be used in telemetry mode")
+		}
 		if cfg.Upstream != "" && selected == "" {
 			return relayConfig{}, errors.New("--upstream requires --provider")
 		}
 		usageTarget := *origin
 		usageTarget.Path, usageTarget.RawPath = usagereport.Path, ""
 		config.usageTarget = &usageTarget
+		if cfg.Mode == ModeTelemetry {
+			return config, nil
+		}
 	default:
-		return relayConfig{}, errors.New("--mode must be remote-proxy or usage-only")
+		return relayConfig{}, errors.New("--mode must be remote-proxy, usage-only, or telemetry")
 	}
 
 	for _, name := range providerOrder {

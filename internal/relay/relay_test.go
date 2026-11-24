@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -206,17 +208,19 @@ func TestRelayDestinations(t *testing.T) {
 		name, mode, provider, target, upstream, wantRoute string
 	}{
 		{"remote target with route", ModeRemoteProxy, "", "https://proxy.test/antigravity", "", ""},
-		{"remote with explicit provider", ModeRemoteProxy, "codex", "https://proxy.test/", "", "https://proxy.test/codex"},
-		{"remote target with selected route", ModeRemoteProxy, "codex", "https://proxy.test/codex", "", ""},
-		{"usage with explicit provider", ModeUsageOnly, "codex", "https://proxy.test/", "", providers["codex"].defaultUpstream},
-		{"custom upstream", ModeUsageOnly, "codex", "https://proxy.test", "https://upstream.test/codex", "https://upstream.test/codex"},
-		{"remote with override", ModeRemoteProxy, "codex", "https://proxy.test", "https://upstream.test/codex", ""},
+		{"remote with explicit provider", ModeRemoteProxy, "openai", "https://proxy.test/", "", "https://proxy.test/v1"},
+		{"remote target with selected route", ModeRemoteProxy, "openai", "https://proxy.test/v1", "", ""},
+		{"usage with explicit provider", ModeUsageOnly, "openai", "https://proxy.test/", "", providers["openai"].defaultUpstream},
+		{"custom upstream", ModeUsageOnly, "openai", "https://proxy.test", "https://upstream.test/custom", "https://upstream.test/custom"},
+		{"remote with override", ModeRemoteProxy, "openai", "https://proxy.test", "https://upstream.test/v1", ""},
 		{"custom upstream without a provider", ModeUsageOnly, "", "https://proxy.test", "https://upstream.test", ""},
-		{"usage with proxy route", ModeUsageOnly, "codex", "https://proxy.test/codex", "", ""},
-		{"usage with same upstream host", ModeUsageOnly, "codex", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
-		{"usage with a default upstream on the proxy host", ModeUsageOnly, "", "https://chatgpt.com", "", ""},
-		{"unknown mode", "auto", "codex", "https://proxy.test", "", ""},
+		{"usage with proxy route", ModeUsageOnly, "openai", "https://proxy.test/v1", "", ""},
+		{"usage with same upstream host", ModeUsageOnly, "openai", "https://proxy.test", "https://PROXY.test.:8443/v1", ""},
+		{"usage with a default upstream on the proxy host", ModeUsageOnly, "", "https://api.openai.com", "", ""},
+		{"unknown mode", "auto", "openai", "https://proxy.test", "", ""},
 		{"unknown provider", ModeRemoteProxy, "unknown", "https://proxy.test", "", ""},
+		{"retired Codex provider", ModeRemoteProxy, "codex", "https://proxy.test", "", ""},
+		{"retired OpenCode Go provider", ModeUsageOnly, "opencode-go", "https://proxy.test", "", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config, err := configureRelay(Config{Mode: test.mode, Provider: test.provider, Target: test.target, Upstream: test.upstream})
@@ -256,9 +260,6 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 	}{
 		{"antigravity", "antigravity", "Authorization", "/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
 		{"openai", "openai", "Authorization", "/v1/responses", "/v1/responses", "/direct/responses", usage},
-		{"codex", "codex", "Authorization", "/codex/responses", "/codex/responses", "/direct/responses", usage},
-		{"opencode-go", "opencode-go", "Authorization", "/opencode-go/responses", "/opencode-go/responses", "/direct/openai/v1/responses", usage},
-		{"opencode-go Gemini", "opencode-go", "X-Goog-Api-Key", "/opencode-go/models/fixture:generateContent", "/opencode-go/models/fixture:generateContent", "/direct/google/v1beta/models/fixture:generateContent", usage},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			provider := providers[test.provider]
@@ -326,8 +327,6 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 	}{
 		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
 		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
-		{"codex", http.MethodGet, "/codex/models", "/codex/models", "/backend-api/codex/models"},
-		{"opencode-go", http.MethodGet, "/opencode-go/models", "/opencode-go/models", "/inference/go/v1/models"},
 	}
 	for _, mode := range []string{ModeRemoteProxy, ModeUsageOnly} {
 		t.Run(mode, func(t *testing.T) {
@@ -399,7 +398,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 			} else if len(observed) != 0 {
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
-			for _, path := range []string{"/api/usage/events", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
+			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
 				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 				r.Header.Set("Authorization", authorization)
 				response := httptest.NewRecorder()
@@ -495,7 +494,7 @@ func TestInstanceLifecycleAndRequestCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := inst.Status()
-	if st.State != StateRunning || st.ListenAddr == "" || len(st.Routes) != 4 {
+	if st.State != StateRunning || st.ListenAddr == "" || len(st.Routes) != 2 {
 		t.Fatalf("unexpected running status: %+v", st)
 	}
 
@@ -539,8 +538,136 @@ func TestConnectionIDAndProviders(t *testing.T) {
 	if err != nil || id3 == id1 {
 		t.Fatalf("ConnectionID should differ for different keys: %q vs %q (%v)", id1, id3, err)
 	}
-	if len(Providers()) != 4 {
-		t.Fatalf("expected 4 providers, got %d", len(Providers()))
+	if len(Providers()) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(Providers()))
+	}
+}
+
+func TestTelemetryRelayOnlyAcceptsLocalOTLPExports(t *testing.T) {
+	config := Config{Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
+		Key: "fixture-key", DataDir: t.TempDir()}
+	for _, invalid := range []Config{
+		{Mode: ModeTelemetry, Target: config.Target, Provider: "openai"},
+		{Mode: ModeTelemetry, Target: config.Target, Upstream: "https://provider.test"},
+		{Mode: ModeTelemetry, Target: config.Target, TLSCert: "cert.pem"},
+		{Mode: ModeUsageOnly, Target: config.Target, TLSCert: "cert.pem", TLSKey: "key.pem"},
+	} {
+		if _, err := configureRelay(invalid); err == nil {
+			t.Fatalf("accepted a model routing option in telemetry mode: %+v", invalid)
+		}
+	}
+	inst, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := inst.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, test := range []struct {
+		name, method, path, host string
+		headers                  http.Header
+		status                   int
+	}{
+		{name: "local export", method: http.MethodPost, path: "/v1/logs", status: http.StatusOK},
+		{name: "trace export", method: http.MethodPost, path: "/v1/traces", status: http.StatusOK},
+		{name: "metric export", method: http.MethodPost, path: "/v1/metrics", status: http.StatusOK},
+		{name: "model traffic", method: http.MethodPost, path: "/v1/messages", status: http.StatusNotFound},
+		{name: "path suffix", method: http.MethodPost, path: "/v1/logs/", status: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: "/v1/logs", status: http.StatusMethodNotAllowed},
+		{name: "wrong host", method: http.MethodPost, path: "/v1/logs", host: "example.test", status: http.StatusForbidden},
+		{name: "browser origin", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
+		{name: "fetch metadata", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequestWithContext(ctx, test.method, "http://"+inst.Status().ListenAddr+test.path,
+				strings.NewReader("{}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Host = test.host
+			for name, values := range test.headers {
+				request.Header[name] = values
+			}
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != test.status {
+				t.Fatalf("response status %d, want %d", response.StatusCode, test.status)
+			}
+		})
+	}
+	status := inst.Status()
+	if status.RequestsTotal != 3 || len(status.Routes) != 0 || status.Outbox == nil || status.Outbox.Pending != 0 {
+		t.Fatalf("unexpected telemetry relay status: %+v", status)
+	}
+}
+
+func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
+	fixture := httptest.NewTLSServer(http.NotFoundHandler())
+	defer fixture.Close()
+	cert := fixture.TLS.Certificates[0]
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := New(Config{
+		Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
+		Key: "fixture-key", DataDir: dir, TLSCert: certFile, TLSKey: keyFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := inst.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/v1/traces", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := fixture.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.TLS == nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("expected trusted HTTPS OTLP, got %v", response.Status)
+	}
+}
+
+func TestRelayGuardAcceptsDefaultHTTPSPort(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/v1/traces", nil)
+	response := httptest.NewRecorder()
+	guardClient("127.0.0.1:443", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("request without explicit default port returned %d", response.Code)
 	}
 }
 

@@ -72,7 +72,7 @@ func TestHTTPForwardsTheOriginalCredentialsAndMetersNewUsage(t *testing.T) {
 
 	records := make(chan Usage, 2)
 	target := parseURL(t, upstream.URL+"/upstream?provider=1")
-	proxy := testProxy(target, nil, records)
+	proxy := testProxy(target, records)
 	for _, method := range []string{http.MethodPost, http.MethodGet} {
 		var body io.Reader
 		if method == http.MethodPost {
@@ -116,13 +116,10 @@ func TestSSEStreamsAndReadsReportedUsageAfterAnOversizedEvent(t *testing.T) {
 	var once sync.Once
 	resume := func() { once.Do(func() { close(release) }) }
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/backend-api/codex/responses" || r.Header.Get("ChatGPT-Account-Id") != "account" {
-			t.Errorf("unexpected Codex request: %s", r.URL)
+		if r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer upstream" {
+			t.Errorf("unexpected Responses request: %s", r.URL)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("X-Codex-Primary-Used-Percent", "24.5")
-		w.Header().Set("X-Codex-Primary-Window-Minutes", "300")
-		w.Header().Set("X-Codex-Primary-Reset-At", "1790000000")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_sse\",\"model\":\"gpt-sse\"}}\n\n")
 		w.(http.Flusher).Flush()
 		<-release
@@ -135,14 +132,14 @@ func TestSSEStreamsAndReadsReportedUsageAfterAnOversizedEvent(t *testing.T) {
 	defer upstream.Close()
 
 	records := make(chan Usage, 1)
-	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexUpstreamPath), records))
+	server := httptest.NewServer(testProxy(parseURL(t, upstream.URL+"/v1"), records))
 	defer server.Close()
 	defer resume()
-	request, err := http.NewRequest(http.MethodPost, server.URL+CodexPrefix+"/responses", nil)
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("ChatGPT-Account-Id", "account")
+	request.Header.Set("Authorization", "Bearer upstream")
 	client := server.Client()
 	client.Timeout = 5 * time.Second
 	response, err := client.Do(request)
@@ -161,14 +158,9 @@ func TestSSEStreamsAndReadsReportedUsageAfterAnOversizedEvent(t *testing.T) {
 		t.Fatalf("stream ended early: %d bytes, %v", len(rest), err)
 	}
 	record := nextRecord(t, records)
-	if record.Source != "codex" || record.Model != "gpt-sse" || record.ResponseID != "resp_sse" ||
+	if record.Source != "api" || record.Model != "gpt-sse" || record.ResponseID != "resp_sse" ||
 		!record.HasUsage || record.InputTokens != 0 || record.OutputTokens != 0 {
-		t.Fatalf("unexpected Codex usage: %+v", record)
-	}
-	if len(record.RateLimits) != 1 || record.RateLimits[0].ID != "codex" ||
-		record.RateLimits[0].UsedPercent != 24.5 || record.RateLimits[0].WindowMinutes != 300 ||
-		record.RateLimits[0].ResetsAt.Unix() != 1790000000 {
-		t.Fatalf("unexpected Codex limits: %+v", record.RateLimits)
+		t.Fatalf("unexpected Responses usage: %+v", record)
 	}
 }
 
@@ -203,7 +195,7 @@ func TestResponsesStreamFallbackForwardsAndMeters(t *testing.T) {
 			defer upstream.Close()
 
 			records := make(chan Usage, 2)
-			server := httptest.NewServer(testProxy(parseURL(t, upstream.URL), nil, records))
+			server := httptest.NewServer(testProxy(parseURL(t, upstream.URL), records))
 			defer server.Close()
 			defer close(release)
 
@@ -295,7 +287,7 @@ func TestResponsesFallbackPreservesOtherResponses(t *testing.T) {
 			defer upstream.Close()
 
 			records := make(chan Usage, 1)
-			handler := testProxy(parseURL(t, upstream.URL), nil, records)
+			handler := testProxy(parseURL(t, upstream.URL), records)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
 			if response.Code != tc.status || response.Header().Get("Content-Type") != tc.contentType || response.Body.String() != tc.body {
@@ -312,11 +304,10 @@ func TestResponsesFallbackPreservesOtherResponses(t *testing.T) {
 	}
 }
 
-func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
-	const limitEvent = `{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":27,"window_minutes":300,"reset_at":1790000000}}}`
+func TestWebSocketMetersEachResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/backend-api/codex/responses" {
-			t.Errorf("unexpected Codex WebSocket path: %s", r.URL.Path)
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("unexpected Responses WebSocket path: %s", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer upstream" || r.Header.Get(accessKey) != "" {
 			t.Error("proxy and upstream WebSocket credentials were not separated")
@@ -329,10 +320,6 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 		}
 		defer remote.Close()
 		_ = remote.SetReadDeadline(time.Now().Add(4 * time.Second))
-		if err := remote.WriteMessage(websocket.TextMessage, []byte(limitEvent)); err != nil {
-			t.Error(err)
-			return
-		}
 		for i := 1; i <= 2; i++ {
 			kind, payload, err := remote.ReadMessage()
 			if err != nil || kind != websocket.TextMessage || !strings.Contains(string(payload), "gpt-ws") {
@@ -354,12 +341,12 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 	}))
 	defer upstream.Close()
 	records := make(chan Usage, 4)
-	server := httptest.NewServer(testProxy(nil, parseURL(t, upstream.URL+codexUpstreamPath), records))
+	server := httptest.NewServer(testProxy(parseURL(t, upstream.URL+"/v1"), records))
 	defer server.Close()
 
 	dialer := websocket.Dialer{Subprotocols: []string{"responses"}, HandshakeTimeout: 4 * time.Second}
 	client, response, err := dialer.Dial(
-		"ws"+strings.TrimPrefix(server.URL, "http")+CodexPrefix+"/responses",
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses",
 		http.Header{"Authorization": {"Bearer upstream"}, accessKey: {"proxy-secret"}},
 	)
 	if err != nil {
@@ -370,16 +357,6 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 	if client.Subprotocol() != "responses" || response.Header.Get("X-Upstream") != "kept" {
 		t.Fatalf("handshake did not preserve negotiated headers: %+v", response.Header)
 	}
-	_, payload, err := client.ReadMessage()
-	if err != nil || string(payload) != limitEvent {
-		t.Fatalf("quota event = %q, err %v", payload, err)
-	}
-	quota := nextRecord(t, records)
-	if quota.Status != 0 || quota.ClientID != "client-1" || len(quota.RateLimits) != 1 ||
-		quota.RateLimits[0].UsedPercent != 27 || quota.HasUsage {
-		t.Fatalf("incorrect allowance event: %+v", quota)
-	}
-
 	for i := 1; i <= 2; i++ {
 		if err := client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-ws"}`)); err != nil {
 			t.Fatal(err)
@@ -391,7 +368,7 @@ func TestWebSocketMetersEachResponseAndForwardsCodexLimits(t *testing.T) {
 		}
 		record := nextRecord(t, records)
 		if record.Status != http.StatusSwitchingProtocols || record.Model != "gpt-ws" ||
-			record.ResponseID != id || record.ClientID != "client-1" || record.Endpoint != "/codex/responses" {
+			record.ResponseID != id || record.ClientID != "client-1" || record.Endpoint != "/v1/responses" {
 			t.Fatalf("unexpected WebSocket usage metadata: %+v", record)
 		}
 		if i == 1 && (!record.HasUsage || record.InputTokens != 12 || record.CachedInputTokens != 2 || record.OutputTokens != 3) {
@@ -422,44 +399,8 @@ func TestSocketMeterRecordsAnErrorAfterASuccess(t *testing.T) {
 	}
 }
 
-func TestOpenCodeGoForwardsNativeRoutesAndKeepsProviderCredentials(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer go-credential" || r.Header.Get(accessKey) != "" || r.Header.Get("X-OpenCode-Session") != "go-session" {
-			t.Error("incorrect credentials or session header on OpenCode Go request")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Upstream-Path", r.URL.Path)
-		_, _ = io.WriteString(w, `{"id":"chatcmpl_test","model":"fixture-model","usage":{"prompt_tokens":8,"completion_tokens":3}}`)
-	}))
-	defer upstream.Close()
-	records := make(chan Usage, 5)
-	handler := New(nil, nil, parseURL(t, upstream.URL+"/inference/go"), func(usage Usage) { records <- usage })
-	for local, native := range map[string]string{
-		"/models":                            "/v1/models",
-		"/messages":                          "/anthropic/v1/messages",
-		"/models/test:streamGenerateContent": "/google/v1beta/models/test:streamGenerateContent",
-		"/responses":                         "/openai/v1/responses",
-		"/chat/completions":                  "/openai/v1/chat/completions",
-	} {
-		req := httptest.NewRequest(http.MethodPost, OpenCodeGoPrefix+local, nil)
-		req.Header.Set("Authorization", "Bearer go-credential")
-		req.Header.Set("X-OpenCode-Session", "go-session")
-		req.Header.Set(accessKey, "local-key")
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, req.WithContext(WithClient(req.Context(), "go-client")))
-		if path := response.Header().Get("X-Upstream-Path"); response.Code != 200 || path != "/inference/go"+native {
-			t.Fatalf("wrong upstream for %s: status %d, path %s", local, response.Code, path)
-		}
-		record := nextRecord(t, records)
-		if record.ClientID != "go-client" || record.Source != "api" || record.ResponseID != "opencode-go:chatcmpl_test" ||
-			!record.HasUsage || record.InputTokens != 8 || record.OutputTokens != 3 {
-			t.Fatalf("wrong usage record: %+v", record)
-		}
-	}
-}
-
-func testProxy(api, codex *url.URL, records chan<- Usage) http.Handler {
-	proxy := New(api, codex, nil, func(usage Usage) { records <- usage })
+func testProxy(api *url.URL, records chan<- Usage) http.Handler {
+	proxy := New(api, func(usage Usage) { records <- usage })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxy.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
 	})

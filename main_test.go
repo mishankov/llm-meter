@@ -23,6 +23,8 @@ import (
 
 	"github.com/mishankov/llm-meter/internal/ledger"
 	"github.com/mishankov/llm-meter/internal/pricing"
+	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
 func TestDashboardServesPrerenderedPages(t *testing.T) {
@@ -143,12 +145,11 @@ func TestDashboardServesPrecompressedAssets(t *testing.T) {
 	}
 }
 
-func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
+func TestDashboardProxyAndTelemetryShareClientAttribution(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-LLM-Meter-Key") != "" || r.Header.Get("Authorization") != "Bearer fixture-upstream-token" {
 			t.Errorf("incorrect authorization handling for %s", r.URL.Path)
 		}
-		id, outputTokens := "resp_api", 30
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/responses/resp_background" {
 			_, _ = io.WriteString(w, `{"id":"resp_background","model":"gpt-6.2-sol","status":"completed","usage":{"input_tokens":12000,"output_tokens":30,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,"cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}}}`)
@@ -160,21 +161,17 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 				_, _ = io.WriteString(w, `{"id":"resp_background","model":"gpt-6.2-sol","status":"queued","usage":null}`)
 				return
 			}
-		case "/backend-api/codex/responses":
-			id = "resp_codex"
-			outputTokens = 40
 		default:
 			t.Errorf("unexpected upstream route %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": id, "model": "gpt-6.2-sol", "usage": map[string]any{
-				"input_tokens": 120, "input_tokens_details": map[string]int{"cached_tokens": 20}, "output_tokens": outputTokens,
+			"id": "resp_api", "model": "gpt-6.2-sol", "usage": map[string]any{
+				"input_tokens": 120, "input_tokens_details": map[string]int{"cached_tokens": 20}, "output_tokens": 30,
 			},
 		})
 	}))
 	defer upstream.Close()
 	api, _ := url.Parse(upstream.URL + "/v1")
-	codex, _ := url.Parse(upstream.URL + "/backend-api/codex")
 	directory := t.TempDir()
 	override := filepath.Join(directory, "prices.json")
 	if err := os.WriteFile(override, []byte(`{"gpt-6.2-sol":{"input":2,"cachedInput":0.1,"output":10,"cacheWrite":2.5,"cacheWrite12h":5}}`), 0600); err != nil {
@@ -191,7 +188,7 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	defer store.Close()
 	const dashboardToken = "fixture-dashboard-token-5e9ebc83"
 	ui := fstest.MapFS{"index.html": {Data: []byte("dashboard shell")}}
-	app := httptest.NewServer(routes(store, ui, api, codex, nil, nil, dashboardToken, false, slog.New(slog.DiscardHandler)))
+	app := httptest.NewServer(routes(store, ui, api, nil, dashboardToken, false, slog.New(slog.DiscardHandler)))
 	defer app.Close()
 	client := app.Client()
 	client.Jar, _ = cookiejar.New(nil)
@@ -232,7 +229,6 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	request("POST", "/api/login", `{"token":"`+dashboardToken+`"}`, "", 204)
 	request("GET", "/api/session", "", "", 204)
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, dashboardToken, 401)
-	request("POST", "/opencode-go/chat/completions", "", "", 401)
 
 	var created struct {
 		Client ledger.Client `json:"client"`
@@ -248,7 +244,24 @@ func TestDashboardAndProxyShareClientAttribution(t *testing.T) {
 	}
 	request("POST", "/v1/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
 	request("GET", "/backend-api/codex/models", "", created.Key.Token, http.StatusNotFound)
-	request("POST", "/codex/responses", `{"model":"gpt-6.2-sol"}`, created.Key.Token, 200)
+	for _, retired := range []string{"/codex/responses", "/opencode-go/chat/completions"} {
+		request("POST", retired, `{"model":"gpt-6.2-sol"}`, created.Key.Token, http.StatusMethodNotAllowed)
+		request("GET", retired, "", created.Key.Token, http.StatusNotFound)
+	}
+
+	codexEvent, err := usagereport.NewEvent(proxy.Usage{
+		At: time.Now(), Provider: "codex", Model: "gpt-6.2-sol", Endpoint: usagereport.CodexTelemetryEndpoint,
+		Method: http.MethodPost, Status: http.StatusOK, HasUsage: true,
+		InputTokens: 120, CachedInputTokens: 20, OutputTokens: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexPayload, err := json.Marshal(codexEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request("POST", usagereport.Path, string(codexPayload), created.Key.Token, http.StatusNoContent)
 
 	var dashboard ledger.Dashboard
 	body = request("GET", "/api/usage?client="+created.Client.ID, "", "", 200)

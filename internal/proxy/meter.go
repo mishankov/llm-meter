@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 )
 
 type httpMeter struct {
@@ -47,9 +45,6 @@ func (m *httpMeter) finish() {
 }
 
 func (m *httpMeter) observeEvent(message wireMessage) {
-	if m.usage.Source == "codex" {
-		m.usage.mergeRateLimits(message.limits())
-	}
 	// Antigravity can report a response ID before it reports token usage.
 	m.usage.applyMessage(message, m.captureUsage && (IsAntigravityEndpoint(m.usage.Endpoint) || message.reportsUsage()))
 	if message.Response != nil && message.Response.ID != "" {
@@ -85,12 +80,6 @@ type wireMessage struct {
 	BackgroundOptions *struct {
 		CompletionWindow string `json:"completion_window"`
 	} `json:"background_options"`
-	MeteredLimitName string `json:"metered_limit_name"`
-	LimitName        string `json:"limit_name"`
-	RateLimits       *struct {
-		Primary   *wireWindow `json:"primary"`
-		Secondary *wireWindow `json:"secondary"`
-	} `json:"rate_limits"`
 }
 
 type wireUsage struct {
@@ -133,12 +122,6 @@ type wireInputDetails struct {
 		Short int64 `json:"ttl_30m_tokens"`
 		Long  int64 `json:"ttl_12h_tokens"`
 	} `json:"cache_write_tokens_details"`
-}
-
-type wireWindow struct {
-	UsedPercent   *float64 `json:"used_percent"`
-	WindowMinutes int      `json:"window_minutes"`
-	ResetAt       int64    `json:"reset_at"`
 }
 
 func decodeMessage(data []byte) wireMessage {
@@ -349,85 +332,6 @@ func count(value *int64) int64 {
 		return 0
 	}
 	return max(*value, 0)
-}
-
-func (m wireMessage) limits() []RateLimit {
-	if m.Type != "codex.rate_limits" || m.RateLimits == nil {
-		return nil
-	}
-	id := m.MeteredLimitName
-	if id == "" {
-		id = m.LimitName
-	}
-	if id == "" {
-		id = "codex"
-	}
-	var result []RateLimit
-	if window, ok := m.RateLimits.Primary.limit(id, "primary"); ok {
-		result = append(result, window)
-	}
-	if window, ok := m.RateLimits.Secondary.limit(id, "secondary"); ok {
-		result = append(result, window)
-	}
-	return result
-}
-
-func limitsFromHeaders(header http.Header) []RateLimit {
-	var result []RateLimit
-	for name := range header {
-		prefix, ok := strings.CutSuffix(strings.ToLower(name), "-used-percent")
-		if !ok || !strings.HasPrefix(prefix, "x-codex-") {
-			continue
-		}
-		index := strings.LastIndexByte(prefix, '-')
-		id, label := strings.TrimPrefix(prefix[:index], "x-"), prefix[index+1:]
-		if label != "primary" && label != "secondary" {
-			continue
-		}
-		percentage, err := strconv.ParseFloat(header.Get(name), 64)
-		if err != nil {
-			continue
-		}
-		minutes, _ := strconv.Atoi(header.Get(prefix + "-window-minutes"))
-		reset, _ := strconv.ParseInt(header.Get(prefix+"-reset-at"), 10, 64)
-		window := wireWindow{UsedPercent: &percentage, WindowMinutes: minutes, ResetAt: reset}
-		if limit, ok := window.limit(id, label); ok {
-			result = append(result, limit)
-		}
-	}
-	return result
-}
-
-func (w *wireWindow) limit(id, label string) (RateLimit, bool) {
-	if w == nil || w.UsedPercent == nil || math.IsNaN(*w.UsedPercent) || math.IsInf(*w.UsedPercent, 0) {
-		return RateLimit{}, false
-	}
-	limit := RateLimit{
-		ID:            strings.ReplaceAll(strings.ToLower(strings.TrimSpace(id)), "-", "_"),
-		Window:        label,
-		WindowMinutes: w.WindowMinutes,
-		UsedPercent:   min(max(*w.UsedPercent, 0), 100),
-	}
-	if w.ResetAt > 0 {
-		limit.ResetsAt = time.Unix(w.ResetAt, 0).UTC()
-	}
-	return limit, true
-}
-
-func (u *Usage) mergeRateLimits(limits []RateLimit) {
-	for _, limit := range limits {
-		replaced := false
-		for i, existing := range u.RateLimits {
-			if existing.ID == limit.ID && existing.Window == limit.Window {
-				u.RateLimits[i] = limit
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			u.RateLimits = append(u.RateLimits, limit)
-		}
-	}
 }
 
 const responseStreamProbeLimit = 8 << 10

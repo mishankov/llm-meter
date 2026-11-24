@@ -31,7 +31,7 @@ func TestUsageReportsShareLedgerAndRetrySafely(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	app := routes(store, fstest.MapFS{}, api, nil, nil, nil, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler))
+	app := routes(store, fstest.MapFS{}, api, nil, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler))
 	now := time.Now().UTC()
 	first, firstKey, err := store.CreateClient(t.Context(), "First relay", now)
 	if err != nil {

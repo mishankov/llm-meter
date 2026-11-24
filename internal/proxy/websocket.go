@@ -34,9 +34,6 @@ func (u *upstream) serveWebSocket(w http.ResponseWriter, r *http.Request, usage 
 		} else {
 			defer response.Body.Close()
 			usage.Status = response.StatusCode
-			if u.source == "codex" {
-				usage.RateLimits = limitsFromHeaders(response.Header)
-			}
 			copyHeader(w.Header(), websocketHeaders(response.Header))
 			w.WriteHeader(usage.Status)
 			_, _ = io.Copy(w, response.Body)
@@ -59,9 +56,6 @@ func (u *upstream) serveWebSocket(w http.ResponseWriter, r *http.Request, usage 
 	usage.Status = http.StatusSwitchingProtocols
 	usage.Model = target.Query().Get("model")
 	meter := socketMeter{usage: usage, record: u.record}
-	if u.source == "codex" {
-		meter.recordLimits(limitsFromHeaders(response.Header))
-	}
 	done := make(chan struct{}, 2)
 	go func() {
 		relayMessages(client, remote, meter.request, true)
@@ -190,10 +184,6 @@ func (m *socketMeter) request(message wireMessage) {
 }
 
 func (m *socketMeter) response(message wireMessage) {
-	if m.usage.Source == "codex" && message.Type == "codex.rate_limits" {
-		m.recordLimits(message.limits())
-		return
-	}
 	if message.Type != "response.created" && message.Type != "error" && !message.reportsUsage() {
 		return
 	}
@@ -254,17 +244,4 @@ func (m *socketMeter) finish() {
 		m.usage.applyResult(wireResult{wireMetadata: m.last}, false)
 		m.record(m.usage)
 	}
-}
-
-func (m *socketMeter) recordLimits(limits []RateLimit) {
-	if len(limits) == 0 {
-		return
-	}
-	m.mu.Lock()
-	usage := m.usage
-	m.mu.Unlock()
-	usage.At = time.Now().UTC()
-	usage.Status = 0
-	usage.RateLimits = limits
-	m.record(usage)
 }

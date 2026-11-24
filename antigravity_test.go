@@ -83,7 +83,7 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := httptest.NewServer(routes(store, fstest.MapFS{}, nil, nil, nil, base, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler)))
+	app := httptest.NewServer(routes(store, fstest.MapFS{}, nil, base, "fixture-dashboard-token-5e9ebc83", false, slog.New(slog.DiscardHandler)))
 	defer app.Close()
 	httpClient := app.Client()
 	httpClient.Timeout = 5 * time.Second

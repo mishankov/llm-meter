@@ -18,8 +18,13 @@ import (
 )
 
 const (
-	Path         = "/api/usage/events"
-	MaxBodyBytes = 16 << 10
+	Path                      = "/api/usage/events"
+	MaxBodyBytes              = 16 << 10
+	ClaudeCodeEndpoint        = "/claude-code/api-request"
+	CodexTelemetryEndpoint    = "/codex/telemetry"
+	GeminiTelemetryEndpoint   = "/gemini-cli/api-request"
+	CopilotTelemetryEndpoint  = "/copilot/chat"
+	OpenCodeTelemetryEndpoint = "/opencode/telemetry"
 )
 
 // Event carries metering metadata. The collector derives the client identity
@@ -63,7 +68,7 @@ var (
 	eventID    = regexp.MustCompile(`^[A-Z2-7]{26}$`)
 	idHash     = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@+~-]{0,255}$`)
-	providers  = []string{"codex", "openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
+	providers  = []string{"openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
 	tiers      = []string{"auto", "default", "standard", "scale", "batch", "flex", "fast", "priority", "ultrafast", "unknown"}
 	methods    = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, "OTHER"}
 )
@@ -161,14 +166,18 @@ func (limit RateLimit) valid() bool {
 
 func validProvider(endpoint, provider string) bool {
 	switch {
-	case strings.HasPrefix(endpoint, proxy.CodexPrefix):
-		return provider == "codex"
-	case strings.HasPrefix(endpoint, proxy.OpenCodeGoPrefix):
-		return provider == "opencode-go"
+	case endpoint == ClaudeCodeEndpoint:
+		return provider == "anthropic"
+	case endpoint == GeminiTelemetryEndpoint:
+		return provider == "google"
+	case endpoint == CodexTelemetryEndpoint:
+		return provider == "codex" || provider == ""
+	case endpoint == CopilotTelemetryEndpoint:
+		return provider == "github-copilot"
 	case proxy.IsAntigravityEndpoint(endpoint):
 		return provider == "google" || provider == "antigravity"
 	default:
-		return provider == "" || (provider != "codex" && slices.Contains(providers, provider))
+		return provider == "" || slices.Contains(providers, provider)
 	}
 }
 
@@ -183,7 +192,7 @@ func serviceTier(value string) string {
 func (e Event) Usage() proxy.Usage {
 	source := "api"
 	provider := e.Provider
-	if strings.HasPrefix(e.Endpoint, proxy.CodexPrefix) {
+	if e.Provider == "codex" {
 		source = "codex"
 	}
 	if proxy.IsAntigravityEndpoint(e.Endpoint) {
@@ -215,7 +224,11 @@ func knownValue(value string, values []string) string {
 // data. Only known operation names and fixed route templates cross the wire.
 func endpointName(path string) string {
 	path, _, _ = strings.Cut(path, "?")
-	for _, prefix := range [...]string{"/v1", proxy.CodexPrefix, proxy.OpenCodeGoPrefix, proxy.AntigravityPrefix} {
+	switch path {
+	case ClaudeCodeEndpoint, CodexTelemetryEndpoint, GeminiTelemetryEndpoint, CopilotTelemetryEndpoint, OpenCodeTelemetryEndpoint:
+		return path
+	}
+	for _, prefix := range [...]string{"/v1", proxy.AntigravityPrefix} {
 		suffix, ok := strings.CutPrefix(path, prefix)
 		if !ok || (suffix != "" && !strings.HasPrefix(suffix, "/")) {
 			continue

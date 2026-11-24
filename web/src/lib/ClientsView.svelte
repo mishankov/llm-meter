@@ -448,10 +448,10 @@
               {/if}
             {:else if hasUsedKey}
               <strong>Proxy key accepted</strong>
-              <span>Wait for the request to finish. If no result appears, check the client and proxy logs.</span>
+              <span>Wait for usage to appear. If nothing appears, check the client and relay or proxy logs.</span>
             {:else}
               <strong>Waiting for first request</strong>
-              <span>Send a request from your client. If nothing appears, check the base URL and whether your key is active below.</span>
+              <span>Send a request from your client. If usage is missing, check your connection settings and the key status below.</span>
             {/if}
           </div>
           {#if hasActiveKey && lastRequestFailed}
@@ -563,7 +563,7 @@
       <p class="copy-status muted" aria-live="polite">
         {#if copyState === 'copied'}Key copied.{:else if copyState === 'manual'}Key selected. Use your system’s copy shortcut.{/if}
       </p>
-      <p class="muted">Send it in the <code>X-LLM-Meter-Key</code> header.</p>
+      <p class="muted">Save it in the local relay’s key file. For a direct proxy connection, send it in the <code>X-LLM-Meter-Key</code> header.</p>
       <div class="dialog-actions key-dialog-actions">
         {#if copyState !== 'copied'}
           <AlertDialog

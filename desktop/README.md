@@ -1,6 +1,6 @@
 # LLM Meter Relay for macOS
 
-Run one local relay from the menu bar. In **Settings**, enter your LLM Meter HTTPS origin and a dashboard client key. Choose **usage-only** to send usage reports while clients connect directly to providers, or **remote-proxy** to forward model requests through your server. Copy the matching loopback URL or configuration from **Client Setup**.
+Run one local relay from the menu bar. In **Settings**, enter your LLM Meter HTTPS origin and a dashboard client key. Choose **usage-only** to send usage reports while clients connect directly to providers, or **remote-proxy** to forward model requests through your server. Copy the matching loopback URL or configuration for generic OpenAI-compatible clients or Antigravity from **Client Setup**. For Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode, run the relay CLI in `telemetry` mode. [OpenTelemetry setup](../docs/configuration.md#53-opentelemetry)
 
 The app stores the proxy key in Keychain and keeps settings and usage queues in `~/Library/Application Support/LLM Meter Relay/`. Each server and key pair has its own queue. When switching with pending reports, you can drain the old queue or keep it for later. Choose **Upload kept reports** in **Status** to send retained reports to their original servers, including after restarting the app. The app keeps each original credential in Keychain until its queues finish uploading and the active profile no longer needs it.
 

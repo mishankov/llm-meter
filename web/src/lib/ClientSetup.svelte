@@ -9,14 +9,12 @@
   let { origin, disabled }: { origin: string; disabled: boolean } = $props();
 
   const profiles = [
-    { value: 'openai', label: 'OpenAI-compatible client', path: '/v1' },
-    { value: 'codex', label: 'Codex (ChatGPT sign-in)', path: '/codex' },
-    { value: 'opencode-chatgpt', label: 'OpenCode (ChatGPT sign-in)', path: '/codex' },
-    { value: 'opencode-go', label: 'OpenCode Go', path: '/opencode-go' }
+    { value: 'telemetry', label: 'OpenTelemetry' },
+    { value: 'openai', label: 'OpenAI-compatible proxy' }
   ];
   let profile = $state(profiles[0]);
-  const baseURL = $derived(origin + profile.path);
-  let urlInput: HTMLTextAreaElement;
+  const baseURL = $derived(origin + '/v1');
+  let urlInput = $state<HTMLTextAreaElement>();
   let copying = $state(false);
   let copyMessage = $state('');
 
@@ -28,7 +26,7 @@
   }
 
   async function copyURL() {
-    if (disabled || copying || !origin) return;
+    if (disabled || copying || !origin || !urlInput) return;
     const url = baseURL;
     const copiedProfile = profile.value;
     const field = urlInput;
@@ -55,46 +53,34 @@
     <Filter label="Connection type" value={profile.value} items={profiles} onChange={changeProfile} />
   </div>
 
-  <div class="setup-field">
-    <label class="setup-label" for="setup-base-url">Base URL</label>
-    <div class="url-row">
-      <textarea id="setup-base-url" class="text-input" dir="ltr" value={baseURL} rows="2" readonly spellcheck="false" bind:this={urlInput}></textarea>
-      <Button class="secondary-button" title="Copy URL (Enter)" aria-keyshortcuts="Enter" disabled={disabled || copying || !origin} focusableWhenDisabled onclick={copyURL} onkeydown={guardEnter}>
-        <CopyIcon size={14} aria-hidden="true" /> Copy URL
-      </Button>
-    </div>
-    <p class="copy-feedback muted" role="status">{copyMessage}</p>
-  </div>
-
-  <p class="credentials muted">
-    Send your proxy key in <code>X-LLM-Meter-Key</code>.
-    {#if profile.value === 'openai'}
-      Keep your provider API key in <code>Authorization</code>.
-    {:else if profile.value === 'opencode-go'}
-      Keep your saved OpenCode Go credentials.
-    {:else}
-      Keep your ChatGPT sign-in.
-    {/if}
-  </p>
-
-  <Collapsible class="setup-help">
-    <CollapsibleTrigger class="secondary-button" title="Provider setup instructions (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>
-      Provider setup instructions <ChevronDownIcon size={14} aria-hidden="true" />
-    </CollapsibleTrigger>
-    <CollapsiblePanel>
-      <div class="instructions muted">
-        {#if profile.value === 'openai'}
-          <p>Set the API base URL in your client. For OpenCode, set <code>settings.baseURL</code> on the <code>openai</code> provider in <code>opencode.jsonc</code>. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
-        {:else if profile.value === 'codex'}
-          <p>In Codex’s <code>config.toml</code>, select a provider with this <code>base_url</code>. Set <code>wire_api = "responses"</code>, <code>requires_openai_auth = true</code>, and <code>supports_websockets = true</code>. Map <code>X-LLM-Meter-Key</code> to <code>LLM_METER_KEY</code> in <code>env_http_headers</code>, set that environment variable to your proxy key, and start a new Codex session.</p>
-        {:else if profile.value === 'opencode-chatgpt'}
-          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>openai</code> provider. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
-        {:else}
-          <p>In <code>opencode.jsonc</code>, set <code>settings.baseURL</code> on the <code>opencode-go</code> provider. Add <code>X-LLM-Meter-Key</code> to the provider’s <code>headers</code>.</p>
-        {/if}
+  {#if profile.value === 'telemetry'}
+    <p class="credentials muted">Use the local telemetry relay for Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode. Supply this client’s key to the relay and point your harness’s exporter at it.</p>
+    <a class="guide-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#53-opentelemetry" target="_blank" rel="noreferrer">OpenTelemetry setup guide</a>
+  {:else}
+    <div class="setup-field">
+      <label class="setup-label" for="setup-base-url">Base URL</label>
+      <div class="url-row">
+        <textarea id="setup-base-url" class="text-input" dir="ltr" value={baseURL} rows="2" readonly spellcheck="false" bind:this={urlInput}></textarea>
+        <Button class="secondary-button" title="Copy URL (Enter)" aria-keyshortcuts="Enter" disabled={disabled || copying || !origin} focusableWhenDisabled onclick={copyURL} onkeydown={guardEnter}>
+          <CopyIcon size={14} aria-hidden="true" /> Copy URL
+        </Button>
       </div>
-    </CollapsiblePanel>
-  </Collapsible>
+      <p class="copy-feedback muted" role="status">{copyMessage}</p>
+    </div>
+
+    <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code>. Keep your provider API key in <code>Authorization</code>.</p>
+
+    <Collapsible class="setup-help">
+      <CollapsibleTrigger class="secondary-button" title="Provider setup instructions (Enter)" aria-keyshortcuts="Enter" onkeydown={guardEnter}>
+        Provider setup instructions <ChevronDownIcon size={14} aria-hidden="true" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div class="instructions muted">
+          <p>Set the full API base URL above, including <code>/v1</code>. For clients that can’t send custom headers, use the local proxy relay.</p>
+        </div>
+      </CollapsiblePanel>
+    </Collapsible>
+  {/if}
 </div>
 
 <style>
@@ -108,6 +94,7 @@
   .url-row :global(button) { flex: none; }
   .copy-feedback, .credentials, .instructions p { margin: 0; }
   .copy-feedback:empty { position: absolute; }
+  .guide-link { color: var(--accent); justify-self: start; }
   .setup code { color: var(--text); overflow-wrap: anywhere; }
   .setup :global(.setup-help [aria-expanded=true] svg) { transform: rotate(180deg); }
   .instructions { display: grid; gap: 7px; margin-block-start: 8px; }
