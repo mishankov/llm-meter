@@ -143,6 +143,84 @@ async function unlock(page: Page) {
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
 }
 
+test('chooses a dashboard theme with the keyboard without interrupting a client draft', async ({ page }) => {
+  await mockAPI(page);
+  await unlock(page);
+  const root = page.locator('html');
+  const theme = page.getByRole('combobox', { name: 'Theme', exact: true });
+  await expect(root).toHaveCSS('color-scheme', 'dark');
+  await expect(theme).toHaveAttribute('aria-keyshortcuts', 'Enter Space');
+  await page.getByRole('link', { name: 'Clients' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(theme).toBeFocused();
+  await page.keyboard.down('Enter');
+  const options = page.getByRole('listbox');
+  await expect(options).toBeVisible();
+  await page.keyboard.down('Enter');
+  await page.keyboard.up('Enter');
+  await expect(options).toBeVisible();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Enter');
+  await expect(root).toHaveCSS('color-scheme', 'light');
+  await expect(theme).toBeFocused();
+  await expect(theme).toHaveText('Light');
+  await theme.dispatchEvent('keydown', { key: 'd', isComposing: true, bubbles: true, cancelable: true });
+  await expect(root).toHaveCSS('color-scheme', 'light');
+
+  await page.reload();
+  await expect(theme).toHaveText('Light');
+  await expect(root).toHaveCSS('color-scheme', 'light');
+  await page.getByRole('link', { name: 'Clients' }).press('Enter');
+  await page.getByRole('button', { name: 'New client' }).press('N');
+  const name = page.getByRole('textbox', { name: 'Client name' });
+  await name.fill('My client');
+  await page.keyboard.press('Space');
+  await expect(name).toHaveValue('My client ');
+  await expect(options).toBeHidden();
+  await expect(root).toHaveCSS('color-scheme', 'light');
+  await page.keyboard.press('Escape');
+  await expect(name).toBeHidden();
+  await theme.press('Space');
+  await expect(options).toBeVisible();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Space');
+  await expect(root).toHaveCSS('color-scheme', 'dark');
+  await expect(theme).toHaveText('Dark');
+  await expect(theme).toBeFocused();
+});
+
+test('keeps theme selection off the unlock screen and follows the device in System mode', async ({ page }) => {
+  await mockAPI(page);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/');
+  const token = page.getByLabel('Access token');
+  const theme = page.getByRole('combobox', { name: 'Theme', exact: true });
+  const root = page.locator('html');
+  await expect(token).toBeVisible();
+  await expect(theme).toHaveCount(0);
+  await expect(root).toHaveCSS('background-color', 'rgb(17, 19, 23)');
+  await token.fill('dashboard-token');
+  await token.press('Enter');
+  await theme.click();
+  await page.getByRole('option', { name: 'System' }).click();
+  await expect(theme).toHaveText('System');
+  await expect(root).toHaveCSS('background-color', 'rgb(248, 249, 252)');
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(root).toHaveCSS('background-color', 'rgb(17, 19, 23)');
+  await page.reload();
+  await expect(theme).toHaveText('System');
+  await page.getByRole('button', { name: 'Lock dashboard' }).press('Enter');
+  await expect(token).toBeVisible();
+  await expect(theme).toHaveCount(0);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(root).toHaveCSS('background-color', 'rgb(248, 249, 252)');
+  await page.reload();
+  await expect(token).toBeVisible();
+  await expect(root).toHaveCSS('background-color', 'rgb(248, 249, 252)');
+});
+
 test('filters requests from a chart and inspects and pages through them with the keyboard', async ({ page }) => {
   const { usageQueries, usagePaths } = await mockAPI(page);
   await unlock(page);
@@ -219,9 +297,10 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
   await unlock(page);
   await page.getByRole('button', { name: /Details for gpt-api/ }).waitFor();
 
-  for (const width of [300, 320, 390, 768]) {
+  for (const width of [300, 320, 381, 390, 768]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    await expect(page.getByRole('combobox', { name: 'Theme', exact: true })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
   }
   await page.setViewportSize({ width: 300, height: 900 });
@@ -1081,6 +1160,7 @@ test.describe('coarse touch input', () => {
     const source = page.getByRole('combobox', { name: 'Source' });
 
     for (const target of [
+      page.getByRole('combobox', { name: 'Theme', exact: true }),
       page.getByRole('button', { name: 'Lock dashboard' }),
       page.getByRole('button', { name: 'Refresh usage' }),
       source,
@@ -1282,6 +1362,12 @@ test('the UI SDK exposes and unlocks the dashboard by accessible names', async (
   expect(result.ok, result.error?.message).toBe(true);
   await expect(page.getByRole('link', { name: 'LLM Meter' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+  const changed = await page.evaluate(async (path) => {
+    const { agent } = await import(path);
+    return agent.act({ steps: [{ ref: 'Theme', action: 'setValue', args: ['light'] }] });
+  }, '/test/agent.ts');
+  expect(changed.ok, changed.error?.message).toBe(true);
+  await expect(page.locator('html')).toHaveCSS('color-scheme', 'light');
 });
 
 test('the UI SDK exposes client management and gates archive confirmation', async ({ page }) => {

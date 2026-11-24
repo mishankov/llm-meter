@@ -15,6 +15,7 @@
   import meterMark from '../../lib/assets/llm-meter.png';
   import { guardEnter } from '../../lib/format';
   import RecoveryNotice from '../../lib/RecoveryNotice.svelte';
+  import ThemePicker from '../../lib/ThemePicker.svelte';
   import { defaultFilters, overviewParams, parseUsageFilters, requestParams, usageURL, type UsageFilters } from '../../lib/usage-filters';
 
   type Screen = 'usage' | 'clients';
@@ -382,6 +383,7 @@
         </a>
       </nav>
       <div class="nav-end">
+        <ThemePicker disabled={loggingOut || keyDialogOpen} />
         <Button class="lock-button" title="Lock dashboard (Enter)" aria-keyshortcuts="Enter" disabled={loggingOut || keyDialogOpen} focusableWhenDisabled={loggingOut} onclick={logout} onkeydown={guardEnter}>
           <LogOutIcon size={16} aria-hidden="true" /> <span>{loggingOut ? 'Locking…' : 'Lock dashboard'}</span>
         </Button>
