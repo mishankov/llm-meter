@@ -1,6 +1,7 @@
 # BEGIN mstack managed skill attributes
 skills/babysit-pr/** linguist-vendored
 skills/capture-issue/** linguist-vendored
+skills/diagnosing-bugs/** linguist-vendored
 skills/file-pr/** linguist-vendored
 skills/github-comments/** linguist-vendored
 skills/impeccable/** linguist-vendored
