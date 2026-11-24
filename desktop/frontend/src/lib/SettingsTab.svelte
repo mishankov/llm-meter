@@ -57,10 +57,15 @@
     return "Enter an HTTPS origin without a path, query, fragment, or credentials.";
   });
   $effect(() => { targetInput?.setCustomValidity(targetError); });
+  let proxyEnabled = $state(true);
+  let telemetryEnabled = $state(false);
   let mode = $state("usage-only");
   let listen = $state("127.0.0.1:8765");
+  let telemetryListen = $state("127.0.0.1:4318");
   let provider = $state("");
   let upstream = $state("");
+  let tlsCert = $state("");
+  let tlsKey = $state("");
   let autoStart = $state(true);
   let newKey = $state("");
   let initialized = $state(false);
@@ -80,10 +85,15 @@
 
   function syncFromSnapshot(snap: AppSnapshot) {
     target = snap.config.target || "";
+    proxyEnabled = snap.config.proxyEnabled;
+    telemetryEnabled = snap.config.telemetryEnabled;
     mode = snap.config.mode || "usage-only";
     listen = snap.config.listen || "127.0.0.1:8765";
+    telemetryListen = snap.config.telemetryListen || "127.0.0.1:4318";
     provider = snap.config.provider || "";
     upstream = snap.config.upstream || "";
+    tlsCert = snap.config.tlsCert || "";
+    tlsKey = snap.config.tlsKey || "";
     autoStart = snap.config.autoStart;
   }
 
@@ -97,30 +107,37 @@
     {
       value: "usage-only",
       label: "Usage-only",
-      desc: "Model traffic and credentials go directly to providers; relay uploads usage metadata to LLM Meter.",
+      desc: "Relay forwards requests directly to providers and uploads usage.",
     },
     {
       value: "remote-proxy",
       label: "Remote proxy",
-      desc: "Relay forwards model traffic through your LLM Meter server, which meters and forwards to providers.",
+      desc: "LLM Meter forwards requests to providers and records usage.",
     },
   ];
 
+  const listenersEnabled = $derived(proxyEnabled || telemetryEnabled);
+  const uploadsUsage = $derived(telemetryEnabled || (proxyEnabled && mode === "usage-only"));
   const pendingOutbox = $derived(snapshot.status.outbox?.pending ?? snapshot.pendingOnDisk);
   const switchingOutbox = $derived(
-    snapshot.config.mode === "usage-only" &&
-      (mode !== "usage-only" ||
-        target.trim() !== snapshot.config.target ||
+    (snapshot.config.telemetryEnabled || (snapshot.config.proxyEnabled && snapshot.config.mode === "usage-only")) &&
+      (!uploadsUsage ||
+        target.trim().replace(/\/$/, "") !== snapshot.config.target.replace(/\/$/, "") ||
         newKey.trim() !== ""),
   );
 
   function buildConfig(): AppConfig {
     return {
       target: target.trim(),
+      proxyEnabled,
+      telemetryEnabled,
       mode,
       listen: listen.trim() || "127.0.0.1:8765",
+      telemetryListen: telemetryListen.trim() || "127.0.0.1:4318",
       provider,
-      upstream: mode === "usage-only" && provider !== "" ? upstream.trim() : "",
+      upstream: upstream.trim(),
+      tlsCert: tlsCert.trim(),
+      tlsKey: tlsKey.trim(),
       autoStart,
     };
   }
@@ -147,7 +164,7 @@
         config: buildConfig(),
         newKey: newKey.trim(),
         drainBeforeSwitch,
-        startAfterSave: !snapshot.configured,
+        startAfterSave: !snapshot.configured && listenersEnabled,
       });
       newKey = "";
       syncFromSnapshot(updated);
@@ -202,7 +219,7 @@
           bind:value={target}
           aria-invalid={!!targetError}
           aria-describedby="target-hint"
-          required
+          required={listenersEnabled}
           spellcheck="false"
         />
         <Button
@@ -240,48 +257,155 @@
         autocomplete="off"
         placeholder={snapshot.keyConfigured ? "Leave blank to keep saved key, or paste a new llmm_… key" : "llmm_…"}
         bind:value={newKey}
-        required={!snapshot.keyConfigured}
+        required={listenersEnabled && !snapshot.keyConfigured}
         spellcheck="false"
       />
       <p class="field-hint muted">Saved in your macOS Keychain.</p>
     </div>
+  </section>
 
-    <div class="field">
-      <span class="field-label" id="relay-mode-label">Relay mode</span>
-      <RadioGroup
-        aria-labelledby="relay-mode-label"
-        value={mode}
-        onValueChange={(next) => {
-          if (next) mode = next;
-        }}
-        class="mode-grid"
-      >
-        {#each modeChoices as choice (choice.value)}
-          <label class="mode-card" class:selected={mode === choice.value}>
-            <div class="mode-card-head">
-              <Radio value={choice.value} class="radio-btn">
-                <RadioIndicator class="radio-dot" />
-              </Radio>
-              <span class="mode-title">{choice.label}</span>
+  <section class="card form-section" aria-labelledby="listeners-label">
+    <h2 class="section-title" id="listeners-label">Local listeners</h2>
+    <div class="listener-options">
+      <div class="field">
+        <label class="checkbox-row">
+          <Checkbox class="checkbox-box" checked={proxyEnabled} onCheckedChange={(next) => (proxyEnabled = next === true)} aria-describedby="proxy-hint">
+            <CheckboxIndicator><CheckIcon size={11} aria-hidden="true" /></CheckboxIndicator>
+          </Checkbox>
+          <span>Model proxy</span>
+        </label>
+        <p class="field-hint muted" id="proxy-hint">For OpenAI-compatible clients and Antigravity.</p>
+      </div>
+      <div class="field">
+        <label class="checkbox-row">
+          <Checkbox class="checkbox-box" checked={telemetryEnabled} onCheckedChange={(next) => (telemetryEnabled = next === true)} aria-describedby="telemetry-hint">
+            <CheckboxIndicator><CheckIcon size={11} aria-hidden="true" /></CheckboxIndicator>
+          </Checkbox>
+          <span>OpenTelemetry</span>
+        </label>
+        <p class="field-hint muted" id="telemetry-hint">Receives usage from harness exporters over OTLP/HTTP.</p>
+      </div>
+    </div>
+
+    {#if proxyEnabled}
+      <div class="field listener-details">
+        <span class="field-label" id="relay-mode-label">Proxy mode</span>
+        <RadioGroup
+          aria-labelledby="relay-mode-label"
+          value={mode}
+          onValueChange={(next) => {
+            if (next) mode = next;
+          }}
+          class="mode-grid"
+        >
+          {#each modeChoices as choice (choice.value)}
+            <label class="mode-card" class:selected={mode === choice.value}>
+              <div class="mode-card-head">
+                <Radio value={choice.value} class="radio-btn" aria-labelledby={`mode-${choice.value}`} aria-describedby={`mode-${choice.value}-hint`}>
+                  <RadioIndicator class="radio-dot" />
+                </Radio>
+                <span class="mode-title" id={`mode-${choice.value}`}>{choice.label}</span>
+              </div>
+              <span class="mode-desc muted" id={`mode-${choice.value}-hint`}>{choice.desc}</span>
+            </label>
+          {/each}
+        </RadioGroup>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="relay-listen">Proxy listen address</label>
+        <input
+          id="relay-listen"
+          class="text-input mono-input"
+          type="text"
+          placeholder="127.0.0.1:8765"
+          bind:value={listen}
+          spellcheck="false"
+        />
+        <p class="field-hint muted">Use a loopback address such as 127.0.0.1 or [::1], followed by a port.</p>
+      </div>
+      <Collapsible class="advanced">
+        <CollapsibleTrigger class="secondary-button compact-button">
+          Advanced routing
+          <ChevronDownIcon size={13} aria-hidden="true" />
+        </CollapsibleTrigger>
+        <CollapsiblePanel class="advanced-panel">
+          <div class="field">
+            <span class="field-label" id="provider-scope-label">Provider scope</span>
+            <Select
+              items={providerOptions}
+              value={provider}
+              onValueChange={(next) => {
+                provider = next ?? "";
+                if (!provider) upstream = "";
+              }}
+            >
+              <SelectTrigger class="select-trigger" aria-labelledby="provider-scope-label">
+                <SelectValue />
+                <ChevronDownIcon size={14} aria-hidden="true" />
+              </SelectTrigger>
+              <SelectContent class="select-content">
+                {#each providerOptions as opt (opt.value)}
+                  <SelectItem class="select-item" value={opt.value}>
+                    {opt.label}
+                    <SelectItemIndicator>
+                      <CheckIcon size={13} aria-hidden="true" />
+                    </SelectItemIndicator>
+                  </SelectItem>
+                {/each}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {#if mode === "usage-only" && provider !== ""}
+            <div class="field">
+              <label class="field-label" for="relay-upstream">Custom HTTPS provider upstream (optional)</label>
+              <input
+                id="relay-upstream"
+                class="text-input mono-input"
+                type="url"
+                placeholder="https://openrouter.ai/api/v1"
+                bind:value={upstream}
+                spellcheck="false"
+              />
+              <p class="field-hint muted">Overrides the default upstream for the selected provider in usage-only mode.</p>
             </div>
-            <span class="mode-desc muted">{choice.desc}</span>
-          </label>
-        {/each}
-      </RadioGroup>
-    </div>
+          {/if}
+        </CollapsiblePanel>
+      </Collapsible>
+    {/if}
 
-    <div class="field">
-      <label class="field-label" for="relay-listen">Local loopback listen address</label>
-      <input
-        id="relay-listen"
-        class="text-input mono-input"
-        type="text"
-        placeholder="127.0.0.1:8765"
-        bind:value={listen}
-        spellcheck="false"
-      />
-      <p class="field-hint muted">Loopback only (127.0.0.1 or [::1]). Clients must connect using this exact host and port.</p>
-    </div>
+    {#if telemetryEnabled}
+      <div class="field listener-details">
+        <label class="field-label" for="telemetry-listen">OpenTelemetry listen address</label>
+        <input
+          id="telemetry-listen"
+          class="text-input mono-input"
+          type="text"
+          placeholder="127.0.0.1:4318"
+          bind:value={telemetryListen}
+          spellcheck="false"
+        />
+        <p class="field-hint muted">{proxyEnabled ? "Use a different loopback address or port from the proxy." : "Use a loopback address followed by a port."}</p>
+      </div>
+      <Collapsible class="advanced">
+        <CollapsibleTrigger class="secondary-button compact-button">
+          Local HTTPS
+          <ChevronDownIcon size={13} aria-hidden="true" />
+        </CollapsibleTrigger>
+        <CollapsiblePanel class="advanced-panel">
+          <p class="field-hint muted">GitHub Copilot CLI uses HTTPS. Enter both PEM file paths to enable it.</p>
+          <div class="field">
+            <label class="field-label" for="relay-tls-cert">TLS certificate path</label>
+            <input id="relay-tls-cert" class="text-input mono-input" type="text" bind:value={tlsCert} spellcheck="false" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="relay-tls-key">TLS private key path</label>
+            <input id="relay-tls-key" class="text-input mono-input" type="text" bind:value={tlsKey} spellcheck="false" />
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    {/if}
   </section>
 
   <section class="card form-section">
@@ -313,56 +437,6 @@
         <span>Launch LLM Meter Relay at macOS login</span>
       </label>
     {/if}
-
-    <Collapsible class="advanced">
-      <CollapsibleTrigger class="secondary-button compact-button">
-        Advanced routing
-        <ChevronDownIcon size={13} aria-hidden="true" />
-      </CollapsibleTrigger>
-      <CollapsiblePanel class="advanced-panel">
-        <div class="field">
-          <span class="field-label" id="provider-scope-label">Provider scope</span>
-          <Select
-            items={providerOptions}
-            value={provider}
-            onValueChange={(next) => {
-              provider = next ?? "";
-              if (!provider) upstream = "";
-            }}
-          >
-            <SelectTrigger class="select-trigger" aria-labelledby="provider-scope-label">
-              <SelectValue />
-              <ChevronDownIcon size={14} aria-hidden="true" />
-            </SelectTrigger>
-            <SelectContent class="select-content">
-              {#each providerOptions as opt (opt.value)}
-                <SelectItem class="select-item" value={opt.value}>
-                  {opt.label}
-                  <SelectItemIndicator>
-                    <CheckIcon size={13} aria-hidden="true" />
-                  </SelectItemIndicator>
-                </SelectItem>
-              {/each}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {#if mode === "usage-only" && provider !== ""}
-          <div class="field">
-            <label class="field-label" for="relay-upstream">Custom HTTPS provider upstream (optional)</label>
-            <input
-              id="relay-upstream"
-              class="text-input mono-input"
-              type="url"
-              placeholder="https://openrouter.ai/api/v1"
-              bind:value={upstream}
-              spellcheck="false"
-            />
-            <p class="field-hint muted">Overrides the default upstream for the selected provider in usage-only mode.</p>
-          </div>
-        {/if}
-      </CollapsiblePanel>
-    </Collapsible>
   </section>
 
   <div class="form-footer">
@@ -375,7 +449,7 @@
       Reset
     </Button>
     <Button type="submit" class="primary-button" disabled={saving || busy} title="Save settings (⌘S)" aria-keyshortcuts="Meta+S">
-      {saving ? "Saving…" : snapshot.configured ? "Save & Apply" : "Save & Start Relay"}
+      {saving ? "Saving…" : snapshot.configured || !listenersEnabled ? "Save & Apply" : "Save & Start Relay"}
     </Button>
   </div>
 </fieldset>
@@ -414,6 +488,31 @@
   .form-section {
     display: grid;
     gap: 14px;
+  }
+
+  .section-title {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 620;
+  }
+
+  .listener-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .listener-options .field {
+    align-content: start;
+  }
+
+  .listener-options .field-hint {
+    padding-inline-start: 26px;
+  }
+
+  .listener-details {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
   }
 
   .field {

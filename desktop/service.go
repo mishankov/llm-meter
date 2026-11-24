@@ -143,6 +143,9 @@ func (s *RelayService) SetAutostart(enabled bool) (AutostartStatus, error) {
 
 func (s *RelayService) GenerateAntigravityLauncher(binaryPath string) (string, error) {
 	snap := s.manager.Snapshot()
+	if !snap.Config.ProxyEnabled {
+		return "", errors.New("enable the local proxy in Settings first")
+	}
 	listen := snap.Status.ListenAddr
 	if listen == "" {
 		listen = snap.Config.Listen
@@ -152,6 +155,9 @@ func (s *RelayService) GenerateAntigravityLauncher(binaryPath string) (string, e
 
 func (s *RelayService) InstallAntigravityLauncher(destPath, binaryPath string) (string, error) {
 	snap := s.manager.Snapshot()
+	if !snap.Config.ProxyEnabled {
+		return "", errors.New("enable the local proxy in Settings first")
+	}
 	listen := snap.Status.ListenAddr
 	if listen == "" {
 		listen = snap.Config.Listen

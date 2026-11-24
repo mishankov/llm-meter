@@ -15,28 +15,44 @@ import (
 )
 
 const (
-	appDirName    = "LLM Meter Relay"
-	configFile    = "config.json"
-	queuesDirName = "queues"
+	appDirName             = "LLM Meter Relay"
+	configFile             = "config.json"
+	queuesDirName          = "queues"
+	defaultTelemetryListen = "127.0.0.1:4318"
 )
 
 // AppConfig holds non-secret desktop relay configuration persisted in config.json.
 // Only the native key store holds the raw credential.
 type AppConfig struct {
-	Target    string `json:"target"`
-	Mode      string `json:"mode"`
-	Listen    string `json:"listen"`
-	Provider  string `json:"provider"`
-	Upstream  string `json:"upstream"`
-	AutoStart bool   `json:"autoStart"`
+	Target           string `json:"target"`
+	Mode             string `json:"mode"`
+	ProxyEnabled     bool   `json:"proxyEnabled"`
+	Listen           string `json:"listen"`
+	Provider         string `json:"provider"`
+	Upstream         string `json:"upstream"`
+	TelemetryEnabled bool   `json:"telemetryEnabled"`
+	TelemetryListen  string `json:"telemetryListen"`
+	TLSCert          string `json:"tlsCert"`
+	TLSKey           string `json:"tlsKey"`
+	AutoStart        bool   `json:"autoStart"`
 }
 
 func defaultAppConfig() AppConfig {
 	return AppConfig{
-		Mode:      relay.ModeUsageOnly,
-		Listen:    relay.DefaultListen,
-		AutoStart: true,
+		Mode:            relay.ModeUsageOnly,
+		ProxyEnabled:    true,
+		Listen:          relay.DefaultListen,
+		TelemetryListen: defaultTelemetryListen,
+		AutoStart:       true,
 	}
+}
+
+func (cfg AppConfig) hasListeners() bool {
+	return cfg.ProxyEnabled || cfg.TelemetryEnabled
+}
+
+func (cfg AppConfig) hasUsageQueue() bool {
+	return cfg.TelemetryEnabled || (cfg.ProxyEnabled && cfg.Mode == relay.ModeUsageOnly)
 }
 
 type storedConfig struct {
@@ -46,7 +62,7 @@ type storedConfig struct {
 }
 
 // A kept queue owns a reference to its original credential until it drains
-// or becomes the active usage-only queue again.
+// or becomes the active usage queue again.
 type keptQueue struct {
 	ID     string    `json:"id"`
 	KeyID  string    `json:"keyId"`
@@ -85,7 +101,25 @@ func (s *ConfigStore) LoadConfig() (storedConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.AppConfig = migrateTelemetryConfig(cfg.AppConfig)
 	return cfg, nil
+}
+
+func migrateTelemetryConfig(cfg AppConfig) AppConfig {
+	if cfg.Mode == relay.ModeTelemetry {
+		cfg.Mode = relay.ModeUsageOnly
+		cfg.ProxyEnabled = false
+		cfg.TelemetryEnabled = true
+		cfg.TelemetryListen = cfg.Listen
+		if cfg.TelemetryListen == "" {
+			cfg.TelemetryListen = relay.DefaultListen
+		}
+		cfg.Listen = relay.DefaultListen
+		if cfg.Listen == cfg.TelemetryListen {
+			cfg.Listen = "127.0.0.1:8766"
+		}
+	}
+	return cfg
 }
 
 // Stage a new credential before switching the config file. Even if the app

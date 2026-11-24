@@ -19,19 +19,21 @@
   let { snapshot }: { snapshot: AppSnapshot } = $props();
 
   const guide = "https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md";
+  const telemetryGuide = guide + "#53-opentelemetry";
+  const migrationGuide = guide + "#migrating-from-the-codex-and-opencode-go-proxy-routes";
   const clients = [
     { value: "openai", label: "OpenAI-compatible SDK / CLI" },
     { value: "antigravity", label: "Antigravity / T3 Code" },
   ];
 
+  const proxy = $derived(snapshot.config.proxyEnabled);
+  const telemetry = $derived(snapshot.config.telemetryEnabled);
+  const telemetryURL = $derived(snapshot.endpoints?.find(endpoint => endpoint.provider === "telemetry")?.url ?? "");
   const scope = $derived(snapshot.config.provider);
-  const clientChoices = $derived(clients.filter(client => !scope || client.value === scope));
+  const clientChoices = $derived(proxy ? clients.filter(client => !scope || client.value === scope) : []);
   let preferredClient = $state("openai");
   const selectedClient = $derived(clientChoices.some(c => c.value === preferredClient)
     ? preferredClient : clientChoices[0]?.value);
-  const guideURL = $derived(guide + (selectedClient
-    ? "#53-opentelemetry"
-    : "#migrating-from-the-codex-and-opencode-go-proxy-routes"));
 
   let antigravityBin = $state("");
   let launcherDest = $state("");
@@ -72,9 +74,9 @@
   const snippet = $derived(selectedClient === "antigravity" ? launcherScript : `export OPENAI_BASE_URL="${baseUrl}"
 # Keep your normal OPENAI_API_KEY; do not send X-LLM-Meter-Key.`);
 
-  function openTelemetryGuide(event: MouseEvent) {
+  function openGuide(event: MouseEvent, url: string) {
     event.preventDefault();
-    void Browser.OpenURL(guideURL).catch(err => {
+    void Browser.OpenURL(url).catch(err => {
       installResult = { ok: false, text: errorMessage(err) };
     });
   }
@@ -126,8 +128,31 @@
 </script>
 
 <div class="stack">
-  <section class="card setup-card">
-    {#if selectedClient}
+  {#if telemetry}
+    <section class="card setup-card">
+      <div class="field">
+        <span class="field-label">OTLP/HTTP base URL</span>
+        <div class="url-row">
+          <code class="url-box">{telemetryURL}</code>
+          <Button
+            class="secondary-button"
+            disabled={!telemetryURL}
+            title="Copy endpoint (⌘⇧E)"
+            aria-keyshortcuts="Meta+Shift+E"
+            onclick={() => copy("telemetry", telemetryURL)}
+          >
+            <CopyIcon size={12} aria-hidden="true" />
+            {copiedKey === "telemetry" ? "Copied" : "Copy endpoint"}
+          </Button>
+        </div>
+        <p class="hint muted">Use this for <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>. For signal-specific settings, append <code>/v1/logs</code> or <code>/v1/traces</code>.</p>
+      </div>
+      <p class="hint muted">Configure Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode using the <a class="guide-link" href={telemetryGuide} onclick={(event) => openGuide(event, telemetryGuide)}>OpenTelemetry setup guide</a>.</p>
+    </section>
+  {/if}
+
+  {#if selectedClient}
+    <section class="card setup-card">
       <div class="field">
         <span class="field-label" id="client-select-label">Client</span>
         <Select
@@ -229,16 +254,24 @@
         </div>
         <pre class="code-block"><code>{snippet}</code></pre>
       </div>
-      <p class="hint muted">For Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode, follow the <a class="guide-link" href={guideURL} onclick={openTelemetryGuide}>OpenTelemetry setup guide</a>.</p>
-    {:else}
-      <p class="hint muted">This relay profile uses a retired proxy route. <a class="guide-link" href={guideURL} onclick={openTelemetryGuide}>Migrate to OpenTelemetry</a> or choose a supported proxy route in Settings.</p>
-    {/if}
-    {#if installResult || scriptError}
-      <div class="banner" class:banner-success={installResult?.ok && !scriptError} class:banner-error={!installResult?.ok || scriptError} role="status">
-        <span>{scriptError || installResult?.text}</span>
-      </div>
-    {/if}
-  </section>
+      {#if !telemetry}
+        <p class="hint muted">To receive harness telemetry, enable OpenTelemetry in Settings and follow the <a class="guide-link" href={telemetryGuide} onclick={(event) => openGuide(event, telemetryGuide)}>OpenTelemetry setup guide</a>.</p>
+      {/if}
+    </section>
+  {:else if proxy}
+    <section class="card setup-card">
+      <p class="hint muted">This relay profile uses a retired proxy route. <a class="guide-link" href={migrationGuide} onclick={(event) => openGuide(event, migrationGuide)}>Migrate to OpenTelemetry</a> or choose a supported proxy route in Settings.</p>
+    </section>
+  {:else if !telemetry}
+    <section class="card setup-card">
+      <p class="hint muted">Enable a listener in Settings to see its client setup.</p>
+    </section>
+  {/if}
+  {#if installResult || scriptError}
+    <div class="banner" class:banner-success={installResult?.ok && !scriptError} class:banner-error={!installResult?.ok || scriptError} role="status">
+      <span>{scriptError || installResult?.text}</span>
+    </div>
+  {/if}
 </div>
 
 <style>

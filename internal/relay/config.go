@@ -31,27 +31,67 @@ const (
 
 // Config configures one relay instance.
 type Config struct {
-	Listen   string
-	Bind     string
-	Mode     string
-	Provider string
-	Target   string
-	Upstream string
-	Key      string
-	DataDir  string
-	TLSCert  string
-	TLSKey   string
+	Listen          string
+	Bind            string
+	Mode            string
+	Provider        string
+	Target          string
+	Upstream        string
+	Key             string
+	DataDir         string
+	TelemetryListen string // Optional second loopback listener in a proxy mode.
+	TelemetryBind   string // Optional container bind for TelemetryListen.
+	TLSCert         string
+	TLSKey          string
 }
 
 // Validate checks cfg without opening files, sockets, or databases.
 func Validate(cfg Config) error {
-	if _, err := listenAddress(cfg.Listen, cfg.Bind); err != nil {
+	if _, _, err := relayListenAddresses(cfg); err != nil {
 		return err
 	}
 	if _, err := configureRelay(cfg); err != nil {
 		return err
 	}
 	return ValidateKey(cfg.Key)
+}
+
+func relayListenAddresses(cfg Config) (string, string, error) {
+	bind, err := listenAddress(cfg.Listen, cfg.Bind)
+	if err != nil {
+		return "", "", err
+	}
+	if cfg.TelemetryListen == "" {
+		if cfg.TelemetryBind != "" {
+			return "", "", errors.New("--telemetry-bind requires --telemetry-listen")
+		}
+		return bind, "", nil
+	}
+	if cfg.Mode == ModeTelemetry {
+		return "", "", errors.New("telemetry mode already uses the primary listener")
+	}
+	if !isLoopback(cfg.TelemetryListen) {
+		return "", "", errors.New("the OpenTelemetry listen address must specify a loopback IP and port")
+	}
+	telemetryBind, err := listenAddress(cfg.TelemetryListen, cfg.TelemetryBind)
+	if err != nil {
+		return "", "", errors.New("--telemetry-bind requires 0.0.0.0 and a fixed port, with a fixed loopback --telemetry-listen address")
+	}
+	if sameListenSocket(cfg.TelemetryListen, cfg.Listen) || sameListenSocket(telemetryBind, bind) {
+		return "", "", errors.New("the OpenTelemetry and proxy listen addresses must differ")
+	}
+	return bind, telemetryBind, nil
+}
+
+func sameListenSocket(first, second string) bool {
+	firstHost, firstPort, _ := net.SplitHostPort(first)
+	secondHost, secondPort, _ := net.SplitHostPort(second)
+	firstAddr, _ := netip.ParseAddr(firstHost)
+	secondAddr, _ := netip.ParseAddr(secondHost)
+	firstNumber, _ := net.LookupPort("tcp", firstPort)
+	secondNumber, _ := net.LookupPort("tcp", secondPort)
+	return firstNumber != 0 && firstNumber == secondNumber &&
+		(firstAddr.Unmap() == secondAddr.Unmap() || firstAddr.IsUnspecified() || secondAddr.IsUnspecified())
 }
 
 // ValidateKey checks that key is a single printable ASCII token without whitespace.
@@ -175,7 +215,8 @@ func parseTargetOrigin(raw string) (*url.URL, error) {
 }
 
 func configureRelay(cfg Config) (relayConfig, error) {
-	if (cfg.TLSCert == "") != (cfg.TLSKey == "") || (cfg.TLSCert != "" && cfg.Mode != ModeTelemetry) {
+	telemetryEnabled := cfg.Mode == ModeTelemetry || cfg.TelemetryListen != ""
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") || (cfg.TLSCert != "" && !telemetryEnabled) {
 		return relayConfig{}, errors.New("--tls-cert and --tls-key must be used together in telemetry mode")
 	}
 	selected := cfg.Provider
@@ -186,7 +227,7 @@ func configureRelay(cfg Config) (relayConfig, error) {
 	if err != nil {
 		return relayConfig{}, err
 	}
-	var config relayConfig
+	config := relayConfig{direct: cfg.Mode == ModeUsageOnly}
 	switch cfg.Mode {
 	case ModeRemoteProxy:
 		if cfg.Upstream != "" {
@@ -199,22 +240,24 @@ func configureRelay(cfg Config) (relayConfig, error) {
 		if cfg.Upstream != "" && selected == "" {
 			return relayConfig{}, errors.New("--upstream requires --provider")
 		}
-		usageTarget := *origin
-		usageTarget.Path, usageTarget.RawPath = usagereport.Path, ""
-		config.usageTarget = &usageTarget
-		if cfg.Mode == ModeTelemetry {
-			return config, nil
-		}
 	default:
 		return relayConfig{}, errors.New("--mode must be remote-proxy, usage-only, or telemetry")
 	}
 
+	if telemetryEnabled || cfg.Mode == ModeUsageOnly {
+		usageTarget := *origin
+		usageTarget.Path, usageTarget.RawPath = usagereport.Path, ""
+		config.usageTarget = &usageTarget
+	}
+	if cfg.Mode == ModeTelemetry {
+		return config, nil
+	}
 	for _, name := range providerOrder {
 		provider := providers[name]
 		if selected != "" && name != selected {
 			continue
 		}
-		if config.usageTarget == nil {
+		if !config.direct {
 			target := *origin
 			target.Path, target.RawPath = provider.prefix, ""
 			config.routes = append(config.routes, relayRoute{provider, target})

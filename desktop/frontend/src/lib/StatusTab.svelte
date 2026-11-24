@@ -34,6 +34,9 @@
   const pendingCount = $derived(outbox ? outbox.pending : snapshot.pendingOnDisk);
   const endpoints = $derived(snapshot.endpoints ?? []);
   const routes = $derived(snapshot.status.routes ?? []);
+  const proxy = $derived(snapshot.config.proxyEnabled);
+  const telemetry = $derived(snapshot.config.telemetryEnabled);
+  const telemetryURL = $derived(endpoints.find(endpoint => endpoint.provider === "telemetry")?.url);
 
   async function copyEndpoint(url: string) {
     try {
@@ -101,8 +104,7 @@
       <div class="onboarding-copy">
         <h2>Connect to your LLM Meter server</h2>
         <p class="muted">
-          Enter your HTTPS server origin and a dashboard client proxy key to start metering local Codex, OpenCode,
-          Antigravity, and OpenAI-compatible traffic.
+          Enter your HTTPS server origin and a dashboard client key to meter harness telemetry or proxied requests.
         </p>
       </div>
       <Button class="primary-button" onclick={onOpenSettings}>
@@ -138,6 +140,9 @@
       </div>
 
       {#if tested}<div class="banner banner-success card-banner" role="status">{tested}</div>{/if}
+      {#if !proxy && !telemetry}
+        <p class="muted card-note">Enable a listener in Settings to start the relay.</p>
+      {/if}
       <dl class="metrics">
         <div>
           <dt>State</dt>
@@ -146,14 +151,22 @@
             {snapshot.status.state}
           </dd>
         </div>
-        <div>
-          <dt>Mode</dt>
-          <dd>{snapshot.status.mode === "usage-only" ? "Usage-only (direct to providers)" : "Remote proxy"}</dd>
-        </div>
-        <div>
-          <dt>Local listener</dt>
-          <dd class="mono numeric">http://{snapshot.status.listenAddr || snapshot.config.listen}</dd>
-        </div>
+        {#if proxy}
+          <div>
+            <dt>Proxy mode</dt>
+            <dd>{snapshot.config.mode === "usage-only" ? "Usage-only (direct to providers)" : "Remote proxy"}</dd>
+          </div>
+          <div>
+            <dt>Proxy listener</dt>
+            <dd class="mono numeric">http://{snapshot.status.listenAddr || snapshot.config.listen}</dd>
+          </div>
+        {/if}
+        {#if telemetry}
+          <div>
+            <dt>OpenTelemetry listener</dt>
+            <dd class="mono numeric">{telemetryURL}</dd>
+          </div>
+        {/if}
         <div>
           <dt>LLM Meter server</dt>
           <dd class="mono">{snapshot.config.target}</dd>
@@ -168,17 +181,19 @@
         </div>
       </dl>
 
-      <div class="routes-row">
-        <span class="muted label-sm">Active routes</span>
-        <div class="chips">
-          {#each routes as route (route)}
-            <span class="chip">{route}</span>
-          {/each}
+      {#if proxy && routes.length > 0}
+        <div class="routes-row">
+          <span class="muted label-sm">Active routes</span>
+          <div class="chips">
+            {#each routes as route (route)}
+              <span class="chip">{route}</span>
+            {/each}
+          </div>
         </div>
-      </div>
+      {/if}
     </section>
 
-    {#if snapshot.config.mode === "usage-only" || pendingCount > 0}
+    {#if telemetry || (proxy && snapshot.config.mode === "usage-only") || pendingCount > 0}
       <section class="card">
         <div class="card-head">
           <h2>Usage Outbox</h2>
@@ -221,30 +236,34 @@
       </section>
     {/if}
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Local Client URLs</h2>
-        <span class="muted label-sm">No X-LLM-Meter-Key header needed</span>
-      </div>
-      <div class="endpoint-list">
-        {#each endpoints as ep (ep.provider)}
-          <div class="endpoint-row">
-            <div class="endpoint-info">
-              <span class="endpoint-label">{ep.label}</span>
-              <code class="endpoint-url">{ep.url}</code>
+    {#if endpoints.length > 0}
+      <section class="card">
+        <div class="card-head">
+          <h2>Local Client URLs</h2>
+          <span class="muted label-sm">No X-LLM-Meter-Key header needed</span>
+        </div>
+        <div class="endpoint-list">
+          {#each endpoints as ep (ep.provider)}
+            <div class="endpoint-row">
+              <div class="endpoint-info">
+                <span class="endpoint-label">{ep.label}</span>
+                <code class="endpoint-url">{ep.url}</code>
+              </div>
+              <Button
+                class="secondary-button compact-button"
+                onclick={() => copyEndpoint(ep.url)}
+                aria-label={`Copy ${ep.label} URL`}
+                aria-keyshortcuts={ep.provider === "telemetry" ? "Meta+Shift+E" : undefined}
+                title={ep.provider === "telemetry" ? "Copy endpoint (⌘⇧E)" : undefined}
+              >
+                <CopyIcon size={12} aria-hidden="true" />
+                {copiedUrl === ep.url ? "Copied" : "Copy"}
+              </Button>
             </div>
-            <Button
-              class="secondary-button compact-button"
-              onclick={() => copyEndpoint(ep.url)}
-              aria-label={`Copy ${ep.label} URL`}
-            >
-              <CopyIcon size={12} aria-hidden="true" />
-              {copiedUrl === ep.url ? "Copied" : "Copy"}
-            </Button>
-          </div>
-        {/each}
-      </div>
-    </section>
+          {/each}
+        </div>
+      </section>
+    {/if}
   {/if}
 </div>
 

@@ -50,11 +50,13 @@ jobs:
           printf '%s\n' llmm_fixture > "$scratch/key"
           mkdir "$scratch/data"
           for mode in remote-proxy usage-only; do
-            container=$(docker run --detach --user "$(id -u):$(id -g)" --publish 127.0.0.1:8765:8765 \
+            container=$(docker run --detach --user "$(id -u):$(id -g)" \
+              --publish 127.0.0.1:8765:8765 --publish 127.0.0.1:4318:4318 \
               --mount "type=bind,src=$scratch/key,dst=/run/secrets/proxy-key,readonly" \
               --mount "type=bind,src=$scratch/data,dst=/data" \
               llm-meter-relay:smoke --mode "$mode" --target https://llm-meter.invalid \
-              --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data)
+              --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data \
+              --telemetry-listen 127.0.0.1:4318 --telemetry-bind 0.0.0.0:4318)
             for check in 401:/v1internal:loadCodeAssist 401:/v1/models 404:/codex/models 404:/opencode-go/models; do
               expected=${check%%:*}
               path=${check#*:}
@@ -66,6 +68,12 @@ jobs:
                 exit 1
               fi
             done
+            if ! curl --silent --show-error --fail --output /dev/null --max-time 2 \
+                --header 'Content-Type: application/json' --data '{}' \
+                http://127.0.0.1:4318/v1/logs; then
+              docker logs "$container"
+              exit 1
+            fi
             docker rm --force "$container" >/dev/null
             container=
           done

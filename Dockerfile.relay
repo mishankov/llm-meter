@@ -14,6 +14,6 @@ RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 llmmeter && \
     chown llmmeter:llmmeter /data && chmod 700 /data
 COPY --from=build /llm-meter-relay /usr/local/bin/llm-meter-relay
 USER llmmeter
-EXPOSE 8765
+EXPOSE 8765 4318
 VOLUME ["/data"]
 ENTRYPOINT ["/usr/local/bin/llm-meter-relay"]

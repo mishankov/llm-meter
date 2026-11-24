@@ -60,6 +60,7 @@ type relayRoute struct {
 type relayConfig struct {
 	routes      []relayRoute
 	usageTarget *url.URL
+	direct      bool
 }
 
 type providerHandler struct {
@@ -71,7 +72,7 @@ func (config relayConfig) handler(host, key string, record func(proxy.Usage), tr
 	handlers := make([]providerHandler, 0, len(config.routes))
 	for _, route := range config.routes {
 		var forward http.Handler
-		if config.usageTarget != nil {
+		if config.direct {
 			forward = directProxy(route.provider, route.target, record)
 		} else {
 			forward = remoteProxy(route.provider, &route.target, key, transport)

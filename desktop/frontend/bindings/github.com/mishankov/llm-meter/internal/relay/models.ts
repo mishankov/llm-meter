@@ -29,6 +29,7 @@ export interface ProviderSpec {
 export interface Status {
     "state": string;
     "listenAddr": string;
+    "telemetryListenAddr"?: string;
     "mode": string;
     "target": string;
     "routes": string[] | null;

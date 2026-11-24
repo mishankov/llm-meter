@@ -4,7 +4,10 @@ import type { AppSnapshot, SaveConfigRequest } from "../bindings/github.com/mish
 test("settings drafts, scoped commands and the pending-outbox decision", async ({ page }, testInfo) => {
   const snapshot: AppSnapshot = {
     configured: true, keyConfigured: true, keyPrefix: "llmm_sample…",
-    config: { target: "https://meter.example.org", mode: "usage-only", listen: "127.0.0.1:8765", provider: "", upstream: "", autoStart: true },
+    config: {
+      target: "https://meter.example.org", proxyEnabled: true, telemetryEnabled: false, mode: "usage-only",
+      listen: "127.0.0.1:8765", telemetryListen: "127.0.0.1:4318", provider: "", upstream: "", tlsCert: "", tlsKey: "", autoStart: true,
+    },
     status: { state: "stopped", mode: "usage-only", listenAddr: "127.0.0.1:8765", target: "https://meter.example.org", routes: ["openai", "antigravity"], requestsTotal: 0 },
     keptQueues: 1, pendingOnDisk: 2, endpoints: [
       { provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" },
@@ -126,4 +129,112 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   await expect(page.getByRole("combobox", { name: "Client", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Copy (URL|Snippet)/ })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("retired-proxy-setup.png") });
+});
+
+test("enable both listeners and copy their separate addresses with the keyboard", async ({ page }, testInfo) => {
+  const snapshot: AppSnapshot = {
+    configured: true, keyConfigured: true, keyPrefix: "llmm_sample…",
+    config: {
+      target: "https://meter.example.org", proxyEnabled: true, telemetryEnabled: false, mode: "usage-only",
+      listen: "127.0.0.1:8765", telemetryListen: "127.0.0.1:4318",
+      provider: "openai", upstream: "https://upstream.example.org", tlsCert: "", tlsKey: "", autoStart: true,
+    },
+    status: {
+      state: "running", mode: "usage-only", listenAddr: "127.0.0.1:8765",
+      target: "https://meter.example.org", routes: ["openai"], requestsTotal: 0,
+    },
+    keptQueues: 0, pendingOnDisk: 2,
+    endpoints: [{ provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" }],
+    logs: [], providers: [], antigravityBin: "", launcherPath: "",
+  };
+  const endpoint = "https://127.0.0.1:4318";
+  const saves: SaveConfigRequest[] = [];
+  const copies: string[] = [];
+
+  await page.route("**/wails/runtime", route => {
+    const { args } = route.request().postDataJSON();
+    switch (args.methodID) {
+      case 437879872: return route.fulfill({ json: snapshot }); // GetSnapshot
+      case 1584871777: return route.fulfill({ json: { available: true, enabled: false } }); // GetAutostart
+      case 529336199: { // SaveConfig
+        saves.push(args.args[0]);
+        snapshot.config = args.args[0].config;
+        snapshot.status.mode = snapshot.config.mode;
+        snapshot.status.telemetryListenAddr = snapshot.config.telemetryListen;
+        snapshot.endpoints.push({ provider: "telemetry", label: "OTLP/HTTP", url: endpoint });
+        return route.fulfill({ json: snapshot });
+      }
+      case 1850498846: // CopyText
+        copies.push(args.args[0]);
+        return route.fulfill({ json: true });
+      default: throw Error("Unexpected Wails method " + args.methodID);
+    }
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Status" })).toBeVisible();
+  await page.keyboard.press("Meta+,");
+  const proxy = page.getByRole("checkbox", { name: "Model proxy", exact: true });
+  const telemetry = page.getByRole("checkbox", { name: "OpenTelemetry", exact: true });
+  const proxyMode = page.getByRole("radiogroup", { name: "Proxy mode" });
+  await expect(proxyMode).toBeVisible();
+  await proxy.press("Space");
+  await expect(proxyMode).toHaveCount(0);
+  await telemetry.press("Space");
+  await expect(telemetry).toBeChecked();
+  await expect(page.getByLabel("OpenTelemetry listen address")).toHaveValue("127.0.0.1:4318");
+  const localHTTPS = page.getByRole("button", { name: "Local HTTPS" });
+  await localHTTPS.press("Enter");
+  const certificate = page.getByLabel("TLS certificate path");
+  await certificate.fill("/tmp/loopback.pem");
+  await page.getByLabel("TLS private key path").fill("/tmp/loopback-key.pem");
+  await localHTTPS.press("Enter");
+  await proxy.press("Space");
+  await expect(proxy).toBeChecked();
+  await page.getByRole("radio", { name: "Usage-only" }).press("ArrowRight");
+  await expect(page.getByRole("radio", { name: "Remote proxy" })).toBeChecked();
+  await page.getByRole("heading", { name: "Local listeners" }).evaluate(heading => {
+    const panel = heading.closest(".panel-scroll");
+    if (panel) panel.scrollTop += heading.getBoundingClientRect().top - panel.getBoundingClientRect().top - 16;
+  });
+  await page.screenshot({ path: testInfo.outputPath("independent-listeners-settings.png") });
+
+  const setup = page.getByRole("tab", { name: "Client Setup" });
+  await setup.press("Enter");
+  await page.keyboard.press("Meta+,");
+  await localHTTPS.press("Enter");
+  await expect(certificate).toHaveValue("/tmp/loopback.pem");
+  await page.keyboard.press("Meta+s");
+  await expect(page.getByText("Settings saved.")).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(saves).toHaveLength(1);
+  expect(saves[0]).toMatchObject({
+    config: {
+      proxyEnabled: true, telemetryEnabled: true, mode: "remote-proxy", provider: "openai",
+      upstream: "https://upstream.example.org", listen: "127.0.0.1:8765", telemetryListen: "127.0.0.1:4318",
+      tlsCert: "/tmp/loopback.pem", tlsKey: "/tmp/loopback-key.pem",
+    },
+    drainBeforeSwitch: false,
+  });
+
+  await page.getByRole("tab", { name: "Status" }).press("Enter");
+  await expect(page.getByRole("definition").filter({ hasText: endpoint })).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "Remote proxy" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Usage Outbox" })).toBeVisible();
+  await page.keyboard.press("Meta+Shift+e");
+  await expect(page.getByRole("button", { name: "Copy OTLP/HTTP URL" })).toHaveText("Copied");
+  expect(copies).toEqual([endpoint]);
+
+  await setup.press("Enter");
+  await expect(page.locator(".url-box")).toHaveText([endpoint, "http://127.0.0.1:8765/v1"]);
+  const copy = page.getByRole("button", { name: "Copy endpoint" });
+  await expect(copy).toHaveAttribute("aria-keyshortcuts", "Meta+Shift+E");
+  await copy.dispatchEvent("keydown", { key: "E", code: "KeyE", metaKey: true, shiftKey: true, repeat: true });
+  await copy.dispatchEvent("keydown", { key: "E", code: "KeyE", metaKey: true, shiftKey: true, isComposing: true });
+  expect(copies).toHaveLength(1);
+  await page.screenshot({ path: testInfo.outputPath("independent-listeners-client-setup.png") });
+  await copy.dispatchEvent("keydown", { key: "У", code: "KeyE", metaKey: true, shiftKey: true });
+  await expect.poll(() => copies[1]).toBe(endpoint);
+  await page.keyboard.press("Meta+Shift+c");
+  await expect.poll(() => copies[2]).toContain('OPENAI_BASE_URL="http://127.0.0.1:8765/v1"');
 });

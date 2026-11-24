@@ -12,9 +12,14 @@ import * as relay$0 from "../internal/relay/models.js";
 export interface AppConfig {
     "target": string;
     "mode": string;
+    "proxyEnabled": boolean;
     "listen": string;
     "provider": string;
     "upstream": string;
+    "telemetryEnabled": boolean;
+    "telemetryListen": string;
+    "tlsCert": string;
+    "tlsKey": string;
     "autoStart": boolean;
 }
 
