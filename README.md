@@ -24,7 +24,7 @@ CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mi
 
 ### OpenTelemetry
 
-Run a local relay in `telemetry` mode to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode. Point the harness's OpenTelemetry exporter at the relay. Model requests and sign-in stay with the harness's provider. The dashboard shows model usage, token counts, cache counts where available, and estimated costs. [OpenTelemetry setup for each harness](docs/configuration.md#53-opentelemetry)
+Enable the local relay's OpenTelemetry listener to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode. That listener can run alongside the model proxy. Point the harness's OpenTelemetry exporter at the listener. Model requests and sign-in stay with the harness's provider. The dashboard shows model usage, token counts, cache counts where available, and estimated costs. [OpenTelemetry setup for each harness](docs/configuration.md#53-opentelemetry)
 
 If you used the retired Codex or OpenCode Go proxy routes, restore the harness's provider settings and migrate to OpenTelemetry. [Migration guide](docs/configuration.md#migrating-from-the-codex-and-opencode-go-proxy-routes)
 
@@ -65,7 +65,8 @@ The relay serves the OpenAI-compatible and Antigravity proxy routes on the same 
 | --- | --- | --- |
 | `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
 | `remote-proxy` (default) | Relay connects to LLM Meter, which forwards to the provider | Server meters the proxied request |
-| `telemetry` | Harness connects to its model provider directly | Relay extracts usage from OpenTelemetry logs and traces |
+
+Add `--telemetry-listen=127.0.0.1:4318` to receive OpenTelemetry on a separate loopback address alongside either proxy mode. Add `--proxy=false` for an OpenTelemetry-only relay. [Container setup](docs/configuration.md#42-default-single-service-docker-compose-setup)
 
 Usage-only mode sends the model, token counts, outcome, and any reported costs. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`).
 
@@ -80,7 +81,7 @@ To limit an instance to one route, set `--provider` to `antigravity` or `openai`
 
 ### Relay on macOS
 
-The [menu bar app](desktop/README.md) runs the relay locally, shows pending usage uploads, and provides setup snippets for OpenAI-compatible clients and Antigravity. The relay CLI runs OpenTelemetry metering.
+The [menu bar app](desktop/README.md) runs the relay locally, shows pending usage uploads, and provides setup for OpenTelemetry exporters, OpenAI-compatible clients, and Antigravity.
 
 ### Relay with Docker
 

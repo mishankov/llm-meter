@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -105,27 +107,36 @@ func (m *RelayManager) Snapshot() AppSnapshot {
 
 func (m *RelayManager) snapshotLocked() AppSnapshot {
 	status := relay.Status{
-		State:      relay.StateStopped,
-		ListenAddr: m.cfg.Listen,
-		Mode:       m.cfg.Mode,
-		Target:     m.cfg.Target,
-		Routes:     selectedRoutes(m.cfg.Provider),
-		LastError:  m.lastError,
+		State:     relay.StateStopped,
+		Mode:      m.cfg.Mode,
+		Target:    m.cfg.Target,
+		Routes:    selectedRoutes(m.cfg.AppConfig),
+		LastError: m.lastError,
 	}
 	if m.lastError != "" {
 		status.State = relay.StateError
 	}
 	if m.inst != nil {
 		status = m.inst.Status()
-		if status.ListenAddr == "" {
-			status.ListenAddr = m.cfg.Listen
+		if !m.cfg.ProxyEnabled {
+			status.TelemetryListenAddr = status.ListenAddr
+			status.ListenAddr = ""
 		}
+	}
+	if m.cfg.ProxyEnabled && status.ListenAddr == "" {
+		status.ListenAddr = m.cfg.Listen
+	}
+	if m.cfg.TelemetryEnabled && status.TelemetryListenAddr == "" {
+		status.TelemetryListenAddr = m.cfg.TelemetryListen
+	}
+	if m.cfg.TelemetryEnabled && !m.cfg.ProxyEnabled {
+		status.Mode = relay.ModeTelemetry
 	}
 
 	pendingOnDisk := 0
 	if status.Outbox != nil {
 		pendingOnDisk = status.Outbox.Pending
-	} else if m.cfg.Mode == relay.ModeUsageOnly && m.cfg.Target != "" && m.key != "" {
+	} else if m.cfg.hasUsageQueue() && m.cfg.Target != "" && m.key != "" {
 		if qdir, err := m.store.QueueDir(m.cfg.Target, m.key); err == nil {
 			if n, err := relayoutbox.PendingCount(qdir); err == nil {
 				pendingOnDisk = n
@@ -133,17 +144,8 @@ func (m *RelayManager) snapshotLocked() AppSnapshot {
 		}
 	}
 
-	configured := false
-	if m.cfg.Target != "" && m.key != "" {
-		if err := relay.Validate(buildRelayConfig(m.cfg.AppConfig, m.key, "")); err == nil {
-			configured = true
-		}
-	}
-
-	listen := status.ListenAddr
-	if listen == "" {
-		listen = relay.DefaultListen
-	}
+	configured := m.cfg.Target != "" && m.key != "" &&
+		relay.Validate(buildRelayConfig(m.cfg.AppConfig, m.key, "")) == nil
 
 	logs := make([]relay.LogEntry, len(m.logs))
 	copy(logs, m.logs)
@@ -156,7 +158,7 @@ func (m *RelayManager) snapshotLocked() AppSnapshot {
 		Status:         status,
 		PendingOnDisk:  pendingOnDisk,
 		KeptQueues:     len(m.cfg.Kept),
-		Endpoints:      buildEndpoints(listen, m.cfg.Provider),
+		Endpoints:      buildEndpoints(m.cfg.AppConfig, status.ListenAddr, status.TelemetryListenAddr),
 		Providers:      relay.Providers(),
 		Logs:           logs,
 		AntigravityBin: m.antigravityBin,
@@ -210,6 +212,10 @@ func (m *RelayManager) Start() error {
 }
 
 func (m *RelayManager) start() error {
+	return m.startWithTelemetryListener(nil)
+}
+
+func (m *RelayManager) startWithTelemetryListener(listener net.Listener) error {
 	if err := m.finishPreviousStop(); err != nil {
 		return err
 	}
@@ -223,6 +229,9 @@ func (m *RelayManager) start() error {
 	key := m.key
 	m.mu.Unlock()
 
+	if !cfg.hasListeners() {
+		return errors.New("enable the local proxy or OpenTelemetry in Settings first")
+	}
 	if strings.TrimSpace(cfg.Target) == "" {
 		return errors.New("configure the LLM Meter server URL first")
 	}
@@ -262,7 +271,7 @@ func (m *RelayManager) start() error {
 	m.inst = inst
 	m.lastError = ""
 	m.mu.Unlock()
-	if err := inst.Start(); err != nil {
+	if err := inst.StartWithTelemetryListener(listener); err != nil {
 		m.mu.Lock()
 		m.inst = nil
 		m.lastError = err.Error()
@@ -352,17 +361,30 @@ func (m *RelayManager) SaveConfig(ctx context.Context, req SaveConfigRequest) er
 	if nextCfg.Listen == "" {
 		nextCfg.Listen = relay.DefaultListen
 	}
+	nextCfg.TelemetryListen = strings.TrimSpace(nextCfg.TelemetryListen)
+	if nextCfg.TelemetryListen == "" {
+		nextCfg.TelemetryListen = defaultTelemetryListen
+	}
 	if nextCfg.Mode == "" {
 		nextCfg.Mode = relay.ModeUsageOnly
 	}
+	if nextCfg.Mode != relay.ModeUsageOnly && nextCfg.Mode != relay.ModeRemoteProxy {
+		return errors.New("select Usage-only or Remote proxy as the local proxy mode")
+	}
 	nextCfg.Provider = strings.TrimSpace(nextCfg.Provider)
 	nextCfg.Upstream = strings.TrimSpace(nextCfg.Upstream)
+	nextCfg.TLSCert = strings.TrimSpace(nextCfg.TLSCert)
+	nextCfg.TLSKey = strings.TrimSpace(nextCfg.TLSKey)
 
 	m.mu.Lock()
 	prev := m.cfg
 	prevKey := m.key
-	wasRunning := m.inst != nil && m.inst.Status().State == relay.StateRunning
+	var status relay.Status
+	if m.inst != nil {
+		status = m.inst.Status()
+	}
 	m.mu.Unlock()
+	wasRunning := status.State == relay.StateRunning
 	if prevKey == "" && prev.KeyID != "" {
 		// First launch can run before Keychain is unlocked. Resolve the old
 		// credential before deciding which queue a settings change will leave.
@@ -380,12 +402,52 @@ func (m *RelayManager) SaveConfig(ctx context.Context, req SaveConfigRequest) er
 	if newKey != "" {
 		effectiveKey = newKey
 	}
-	if err := relay.Validate(buildRelayConfig(nextCfg, effectiveKey, "")); err != nil {
+	if err := validateDesktopConfig(nextCfg, effectiveKey); err != nil {
 		return err
 	}
+	if nextCfg.TelemetryEnabled && nextCfg.TLSCert != "" {
+		if _, err := tls.LoadX509KeyPair(nextCfg.TLSCert, nextCfg.TLSKey); err != nil {
+			return fmt.Errorf("load telemetry TLS certificate: %w", err)
+		}
+	}
 
-	switching := prevKey != "" && prev.Mode == relay.ModeUsageOnly &&
-		(nextCfg.Mode != prev.Mode || prev.Target != nextCfg.Target || effectiveKey != prevKey)
+	var telemetryListener net.Listener
+	if wasRunning && nextCfg.TelemetryEnabled {
+		// Reserve new fixed telemetry ports before stopping the running relay.
+		// With port 0, bind the proxy first so the OS cannot assign its port to telemetry.
+		address, err := net.ResolveTCPAddr("tcp", nextCfg.TelemetryListen)
+		if err != nil {
+			return fmt.Errorf("resolve OpenTelemetry listen address: %w", err)
+		}
+		if address.Port != 0 && address.String() != status.ListenAddr && address.String() != status.TelemetryListenAddr {
+			telemetryListener, err = net.ListenTCP("tcp", address)
+			if err != nil {
+				return fmt.Errorf("listen for OpenTelemetry: %w", err)
+			}
+			defer func() {
+				if telemetryListener != nil {
+					_ = telemetryListener.Close()
+				}
+			}()
+		}
+	}
+
+	var nextQueueID, prevQueueDir string
+	if nextCfg.hasUsageQueue() {
+		var err error
+		nextQueueID, err = relay.ConnectionID(nextCfg.Target, effectiveKey)
+		if err != nil {
+			return err
+		}
+	}
+	if prev.hasUsageQueue() && prev.Target != "" && prevKey != "" {
+		var err error
+		prevQueueDir, err = m.store.QueueDir(prev.Target, prevKey)
+		if err != nil {
+			return err
+		}
+	}
+	switching := prevQueueDir != "" && filepath.Base(prevQueueDir) != nextQueueID
 	drain := switching && req.DrainBeforeSwitch
 
 	if wasRunning {
@@ -394,11 +456,7 @@ func (m *RelayManager) SaveConfig(ctx context.Context, req SaveConfigRequest) er
 			return fmt.Errorf("could not stop the relay before changing settings: %w", err)
 		}
 	} else if drain {
-		dir, err := m.store.QueueDir(prev.Target, prevKey)
-		if err != nil {
-			return err
-		}
-		if err := relay.DrainPending(ctx, buildRelayConfig(prev.AppConfig, prevKey, dir)); err != nil {
+		if err := drainPendingReports(ctx, prev.Target, prevKey, prevQueueDir); err != nil {
 			return fmt.Errorf("could not drain pending usage reports before switching: %w", err)
 		}
 	}
@@ -406,26 +464,18 @@ func (m *RelayManager) SaveConfig(ctx context.Context, req SaveConfigRequest) er
 	next.AppConfig = nextCfg
 	next.Kept = slices.Clone(prev.Kept)
 	if switching && !drain {
-		dir, err := m.store.QueueDir(prev.Target, prevKey)
-		if err != nil {
-			return err
-		}
-		count, err := relayoutbox.PendingCount(dir)
+		count, err := relayoutbox.PendingCount(prevQueueDir)
 		if err != nil {
 			return fmt.Errorf("check old queue before switching: %w", err)
 		}
 		if count > 0 {
-			next.Kept = append(next.Kept, keptQueue{ID: filepath.Base(dir), KeyID: prev.KeyID, Config: prev.AppConfig})
+			next.Kept = append(next.Kept, keptQueue{ID: filepath.Base(prevQueueDir), KeyID: prev.KeyID, Config: prev.AppConfig})
 		}
 	}
-	if next.Mode == relay.ModeUsageOnly {
-		id, err := relay.ConnectionID(next.Target, effectiveKey)
-		if err != nil {
-			return err
-		}
+	if nextQueueID != "" {
 		// The active relay now owns this queue, even if this save stored
 		// the same key in a new Keychain item.
-		next.Kept = slices.DeleteFunc(next.Kept, func(q keptQueue) bool { return q.ID == id })
+		next.Kept = slices.DeleteFunc(next.Kept, func(q keptQueue) bool { return q.ID == nextQueueID })
 	}
 	if effectiveKey == prevKey {
 		newKey = ""
@@ -440,15 +490,20 @@ func (m *RelayManager) SaveConfig(ctx context.Context, req SaveConfigRequest) er
 	m.mu.Lock()
 	m.inst = nil
 	m.lastError = ""
-	m.appendLogLocked("info", fmt.Sprintf("Saved settings (%s on %s)", nextCfg.Mode, nextCfg.Listen))
+	m.appendLogLocked("info", "Saved relay settings")
 	m.mu.Unlock()
 	m.notify()
 
+	if !nextCfg.hasListeners() {
+		m.restartAfterApply = false
+		return nil
+	}
 	if m.restartAfterApply || req.StartAfterSave {
 		m.restartAfterApply = true
-		if err := m.start(); err != nil {
+		if err := m.startWithTelemetryListener(telemetryListener); err != nil {
 			return fmt.Errorf("settings saved, but the relay could not start: %w", err)
 		}
+		telemetryListener = nil
 	}
 	return nil
 }
@@ -537,7 +592,14 @@ func (m *RelayManager) drainKeptQueue(ctx context.Context, q keptQueue) error {
 	if filepath.Base(dir) != q.ID {
 		return errors.New("saved credential no longer matches the kept queue")
 	}
-	return relay.DrainPending(ctx, buildRelayConfig(q.Config, key, dir))
+	return drainPendingReports(ctx, q.Config.Target, key, dir)
+}
+
+// The destination and key own the queue even when the receiver settings change.
+func drainPendingReports(ctx context.Context, target, key, dir string) error {
+	return relay.DrainPending(ctx, relay.Config{
+		Listen: relay.DefaultListen, Mode: relay.ModeTelemetry, Target: target, Key: key, DataDir: dir,
+	})
 }
 
 // TestConnection checks GET <target>/healthz.
@@ -552,22 +614,48 @@ func (m *RelayManager) TestConnection(ctx context.Context, target string) error 
 }
 
 func buildRelayConfig(cfg AppConfig, key, dataDir string) relay.Config {
-	return relay.Config{
-		Listen:   cfg.Listen,
-		Mode:     cfg.Mode,
-		Provider: cfg.Provider,
-		Target:   cfg.Target,
-		Upstream: cfg.Upstream,
-		Key:      key,
-		DataDir:  dataDir,
+	rc := relay.Config{
+		Mode: relay.ModeRemoteProxy, Listen: relay.DefaultListen, Target: cfg.Target, Key: key, DataDir: dataDir,
 	}
+	if cfg.ProxyEnabled {
+		rc.Mode = cfg.Mode
+		rc.Listen = cfg.Listen
+		rc.Provider = cfg.Provider
+		if cfg.Mode == relay.ModeUsageOnly {
+			rc.Upstream = cfg.Upstream
+		}
+	}
+	if cfg.TelemetryEnabled {
+		rc.TLSCert = cfg.TLSCert
+		rc.TLSKey = cfg.TLSKey
+		if cfg.ProxyEnabled {
+			rc.TelemetryListen = cfg.TelemetryListen
+		} else {
+			rc.Mode = relay.ModeTelemetry
+			rc.Listen = cfg.TelemetryListen
+		}
+	}
+	return rc
 }
 
-func selectedRoutes(provider string) []string {
+func validateDesktopConfig(cfg AppConfig, key string) error {
+	if !cfg.hasListeners() && (cfg.Target == "" || key == "") {
+		if key != "" {
+			return relay.ValidateKey(key)
+		}
+		return nil
+	}
+	return relay.Validate(buildRelayConfig(cfg, key, ""))
+}
+
+func selectedRoutes(cfg AppConfig) []string {
 	all := relay.Providers()
 	routes := make([]string, 0, len(all))
+	if !cfg.ProxyEnabled {
+		return routes
+	}
 	for _, p := range all {
-		if provider != "" && p.Name != provider {
+		if cfg.Provider != "" && p.Name != cfg.Provider {
 			continue
 		}
 		routes = append(routes, p.Name)
@@ -575,20 +663,23 @@ func selectedRoutes(provider string) []string {
 	return routes
 }
 
-func buildEndpoints(listenAddr, provider string) []ClientEndpoint {
-	base := "http://" + listenAddr
-	all := []ClientEndpoint{
-		{Provider: "openai", Label: "OpenAI-compatible (/v1)", URL: base + "/v1"},
-		{Provider: "antigravity", Label: "Antigravity ACP (root)", URL: base},
-	}
-	if provider == "" {
-		return all
-	}
-	filtered := make([]ClientEndpoint, 0, 1)
-	for _, ep := range all {
-		if ep.Provider == provider {
-			filtered = append(filtered, ep)
+func buildEndpoints(cfg AppConfig, proxyAddr, telemetryAddr string) []ClientEndpoint {
+	endpoints := make([]ClientEndpoint, 0, 3)
+	if cfg.ProxyEnabled {
+		base := "http://" + proxyAddr
+		if cfg.Provider == "" || cfg.Provider == "openai" {
+			endpoints = append(endpoints, ClientEndpoint{Provider: "openai", Label: "OpenAI-compatible (/v1)", URL: base + "/v1"})
+		}
+		if cfg.Provider == "" || cfg.Provider == "antigravity" {
+			endpoints = append(endpoints, ClientEndpoint{Provider: "antigravity", Label: "Antigravity ACP (root)", URL: base})
 		}
 	}
-	return filtered
+	if cfg.TelemetryEnabled {
+		scheme := "http://"
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			scheme = "https://"
+		}
+		endpoints = append(endpoints, ClientEndpoint{Provider: relay.ModeTelemetry, Label: "OTLP/HTTP", URL: scheme + telemetryAddr})
+	}
+	return endpoints
 }

@@ -20,16 +20,16 @@ All setups feed the same dashboard ledger and use dashboard client proxy keys (`
 | Setup | Model traffic path | What the LLM Meter server sees | Client custom header (`X-LLM-Meter-Key`) needed? | Local relay `/data` state needed? | Request `measurementSource` |
 | --- | --- | --- | --- | --- | --- |
 | **Direct client-to-server** | Client → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Yes | No | `proxy` |
-| **Relay (`remote-proxy`, default)** | Client → Local Relay → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Relay supplies it | Optional for switching to `usage-only` | `proxy` |
+| **Relay (`remote-proxy`, default)** | Client → Local Relay → LLM Meter → Provider | Full proxied requests, responses, and upstream auth headers | Relay supplies it | Optional unless OpenTelemetry is also enabled | `proxy` |
 | **Relay (`usage-only`)** | Client → Local Relay → Provider. Relay reports to LLM Meter. | Usage metadata only (model, canonical route, status, tokens, and costs) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
-| **Relay (`telemetry`)** | Harness → Model Provider. The harness exports telemetry to the local relay. | Usage metadata (model, tokens, and available cost estimates) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
+| **Relay (OpenTelemetry)** | Harness → Model Provider. The harness exports telemetry to the local relay. | Usage metadata (model, tokens, and available cost estimates) | Relay supplies it for uploads | Yes (`usage-outbox.db` SQLite queue) | `relay` |
 
 ### When to pick each setup
 
 - **Choose direct client-to-server** for generic OpenAI-compatible clients or Antigravity clients that can send custom headers. It supports server-side upstream overrides without a local relay process.
 - **Choose relay in `remote-proxy` mode** to route generic OpenAI-compatible clients or Antigravity through the server when those clients can set an endpoint but cannot send the LLM Meter header.
 - **Choose relay in `usage-only` mode** to forward requests from generic OpenAI-compatible clients or Antigravity directly to the provider from your machine and upload usage metadata to the dashboard.
-- **Choose relay in `telemetry` mode** to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode through their [OpenTelemetry exporters](#53-opentelemetry).
+- **Enable the relay's OpenTelemetry listener** to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode through their [OpenTelemetry exporters](#53-opentelemetry). It can run alongside either proxy mode.
 
 In `usage-only` mode, the server authenticates uploads with the dashboard client's proxy key and trusts that client to report its own usage. Prompt and response content and provider credentials travel between the client, relay, and provider. Uploads contain canonical route templates such as `/v1/responses/:id`, hashed response IDs, token counts, request outcomes, and reported costs.
 
@@ -194,7 +194,7 @@ Include a rate for every token category a request reports. Use `0` when a catego
 2. Create a client and copy its proxy key (`llmm_...`). The full key is displayed **only once**; the server stores only its SHA-256 digest and 13-character prefix.
 3. Keep multiple active keys for the same client during rotation. Revoke the old key once the replacement is in use.
 
-Open a client’s details in **Clients** to use **Rename** or **Archive**. Renaming changes its label throughout the dashboard, including past usage. Existing proxy keys continue to work. Archiving removes the client from **Clients** and revokes all its proxy keys. Past usage stays available in **Usage**. In `usage-only` or `telemetry` mode, let the relay upload its pending reports before archiving the client.
+Open a client’s details in **Clients** to use **Rename** or **Archive**. Renaming changes its label throughout the dashboard, including past usage. Existing proxy keys continue to work. Archiving removes the client from **Clients** and revokes all its proxy keys. Past usage stays available in **Usage**. If the relay uses Usage-only or OpenTelemetry, let it upload pending reports before archiving the client.
 
 **Key scope:**
 
@@ -210,7 +210,7 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 | **Direct to server** | Client's normal upstream auth (`Authorization`, API key, etc.) **plus** one `X-LLM-Meter-Key` header | Server validates `X-LLM-Meter-Key`, strips `X-LLM-Meter-Key` (and any `llm_meter_session` cookie), and forwards the client's upstream auth to the provider. |
 | **Via relay (`remote-proxy`)** | Client's normal upstream auth only (no `X-LLM-Meter-Key` needed) | Relay requires provider auth before forwarding, sets/replaces `X-LLM-Meter-Key` from `--key-file`, and forwards over HTTPS to LLM Meter. |
 | **Via relay (`usage-only`)** | Client's normal upstream auth only (no `X-LLM-Meter-Key` needed) | Relay requires provider auth, strips any inbound `X-LLM-Meter-Key`, forwards directly over HTTPS to the provider, and sends `--key-file` only in `X-LLM-Meter-Key` to `POST /api/usage/events`. |
-| **Via relay (`telemetry`)** | The harness sends OpenTelemetry to the local receiver and authenticates directly with its model provider. | Relay filters usage and uses the `--key-file` key to authenticate uploads to `POST /api/usage/events`. |
+| **Via relay (OpenTelemetry)** | The harness sends OpenTelemetry to the local receiver and authenticates directly with its model provider. | Relay filters usage and uses the `--key-file` key to authenticate uploads to `POST /api/usage/events`. |
 
 ### Proxy client base paths
 
@@ -227,7 +227,7 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 
 ## 4. Run the Local Relay
 
-A relay instance listens at `http://127.0.0.1:8765` by default. The two proxy modes serve the OpenAI-compatible and Antigravity routes by default. The `telemetry` mode accepts OTLP/HTTP requests from supported harnesses. Set `--target` to your LLM Meter server's HTTPS origin (`https://proxy.example.com`) and point `--key-file` at a private file containing one dashboard client key.
+The proxy listens at `http://127.0.0.1:8765` by default. It serves the OpenAI-compatible and Antigravity routes in either proxy mode. Enable a separate OTLP/HTTP listener with `--telemetry-listen=127.0.0.1:4318`. Set `--target` to your LLM Meter server's HTTPS origin (`https://proxy.example.com`) and point `--key-file` at a private file containing one dashboard client key for both listeners.
 
 ### 4.1 Prepare the key file and state directory
 
@@ -291,8 +291,10 @@ docker compose up -d relay
 ```
 
 - **To switch this service to `usage-only` mode**, add `- --mode=usage-only` under `command` and re-run `docker compose up -d relay`.
-- **For OpenTelemetry**, use `- --mode=telemetry` under `command` and follow [the exporter setup](#53-opentelemetry). For a local HTTPS listener, mount the TLS certificate and private key read-only and point the two TLS flags at their container paths.
-- **Keep `/data` mounted** in `usage-only` and `telemetry` modes so queued usage reports survive container recreation.
+- **For OpenTelemetry alongside the proxy**, add `127.0.0.1:4318:4318` under `ports` and add `--telemetry-listen=127.0.0.1:4318` and `--telemetry-bind=0.0.0.0:4318` under `command`. Follow [the exporter setup](#53-opentelemetry).
+- **For OpenTelemetry only**, make the same additions, add `--proxy=false`, and remove the proxy's port mapping and `--bind` flag.
+- **For HTTPS on the telemetry listener**, mount the TLS certificate and private key read-only and point `--tls-cert` and `--tls-key` at their container paths. The proxy uses its own HTTP listener.
+- **Keep `/data` mounted** whenever Usage-only or OpenTelemetry is enabled so queued usage reports survive container recreation.
 
 ### 4.3 Equivalent native Go binary commands
 
@@ -322,7 +324,7 @@ go build -o llm-meter-relay ./cmd/llm-meter-relay
 
 ### 4.4 Per-instance mode choice and running multiple instances
 
-`--mode`, `--key-file`, and `--data-dir` apply to an entire relay instance. Run additional instances on separate loopback ports. Give each `usage-only` or `telemetry` instance its own `--data-dir`. Common reasons to run more than one instance:
+`--mode` selects how the proxy operates. The proxy and OpenTelemetry listener share the instance's `--key-file` and `--data-dir`. Run additional instances on separate loopback ports and give each instance that queues local usage its own `--data-dir`. Common reasons to run more than one instance:
 
 - **Mixed modes** on the same machine — for example, `usage-only` for signed-in Antigravity on `127.0.0.1:8765` and `remote-proxy` for OpenAI-compatible tools on `127.0.0.1:8766`.
 - **Separate dashboard clients** — different `--key-file` files so each tool or provider appears under its own client name in the dashboard.
@@ -357,13 +359,16 @@ Positional arguments are rejected; pass all options as flags.
 | --- | --- | --- | --- |
 | `--target` | _(none)_ | Yes | HTTPS LLM Meter origin, without a route, user info, query, or fragment. |
 | `--key-file` | _(none)_ | Yes | Path to a private regular file containing a single proxy key (max 4,096 bytes, one line, printable ASCII, no whitespace). Must be owner-only (`0600`/`0400`) on Linux/macOS. |
-| `--mode` | `remote-proxy` | No | `remote-proxy`, `usage-only`, or `telemetry`. |
-| `--provider` | `""` (both proxy routes) | No | Restrict a proxy mode to `antigravity` or `openai`. Omit in `telemetry` mode. |
+| `--proxy` | `true` | No | Set `--proxy=false` with `--telemetry-listen` to run only the OTLP/HTTP receiver. |
+| `--mode` | `remote-proxy` | No | Choose `remote-proxy` or `usage-only` for the proxy. The existing `telemetry` value enables standalone OTLP/HTTP using `--listen` and `--bind`. |
+| `--provider` | `""` (both proxy routes) | No | Restrict the proxy to `antigravity` or `openai`. |
 | `--upstream` | `""` | No | Direct HTTPS provider base URL override (no user info, query, or fragment). Requires `--mode usage-only` and `--provider`. Hostname must differ from `--target`. |
 | `--listen` | `127.0.0.1:8765` | No | Client-facing loopback IP and port (`127.0.0.1:<port>` or `[::1]:<port>`). Enforced against the incoming HTTP `Host` header. |
 | `--bind` | `""` | No | Container socket address. When set, must be `0.0.0.0:<nonzero-port>` paired with a fixed non-zero loopback `--listen`. |
-| `--data-dir` | `./data/relay` | No | Persistent `usage-outbox.db` directory for `usage-only` or `telemetry`. Give each relay instance its own queue directory. |
-| `--tls-cert`, `--tls-key` | `""` | No | PEM certificate and key for the local HTTPS listener. Supply both together in `telemetry` mode. Server uploads use the HTTPS `--target` in every mode. |
+| `--telemetry-listen` | `""` (off) | No | Enable OTLP/HTTP at a client-facing loopback IP and port, for example `127.0.0.1:4318`. If the proxy is enabled, use a separate address or port. |
+| `--telemetry-bind` | `""` | No | Container socket `0.0.0.0:<nonzero-port>` for a fixed loopback `--telemetry-listen`. |
+| `--data-dir` | `./data/relay` | No | Persistent `usage-outbox.db` directory for Usage-only and OpenTelemetry. Give each relay instance its own queue directory. |
+| `--tls-cert`, `--tls-key` | `""` | No | Supply both PEM files to enable HTTPS on the OpenTelemetry listener. Server uploads use the HTTPS `--target` in every mode. |
 
 ### 4.6 Provider scoping and HTTPS `--upstream` overrides
 
@@ -417,19 +422,22 @@ The dashboard shows **Google** as the provider under the client owning the proxy
 
 ### 5.3 OpenTelemetry
 
-Update both the server and relay before enabling telemetry. Run the relay on the same machine as the harness, using a private key file prepared in [section 4.1](#41-prepare-the-key-file-and-state-directory). Omit `--provider` and `--upstream` from the telemetry relay command.
+Update both the server and relay before enabling telemetry. Run the relay on the same machine as the harness.
+
+On macOS, open the [desktop app](../desktop/README.md), enter the server's HTTPS origin and dashboard client key in **Settings**, and enable **OpenTelemetry** under **Local listeners**. Save with ⌘S, start the relay if it is stopped, and use ⌘⇧E in **Client Setup** to copy the endpoint. Use that endpoint's scheme, host, and port in the exporter examples below.
 
 If you previously metered Codex or OpenCode through a proxy, follow the [migration steps](#migrating-from-the-codex-and-opencode-go-proxy-routes) before enabling telemetry.
 
 ```sh
 ./llm-meter-relay \
-  --mode telemetry \
+  --proxy=false \
+  --telemetry-listen=127.0.0.1:4318 \
   --target https://proxy.example.com \
   --key-file "$HOME/.config/llm-meter/relay/proxy.key" \
   --data-dir "$HOME/.config/llm-meter/relay/telemetry-data"
 ```
 
-If you already run the Claude Code telemetry relay, reuse its current `--data-dir` with the same target and key so pending reports can finish uploading.
+To enable the proxy alongside OpenTelemetry, omit `--proxy=false` and choose `--mode=usage-only` or the default `remote-proxy`. The two listeners share the upload destination, key, and queue. Existing `--mode=telemetry` commands still work. If you already run a telemetry relay, reuse its `--data-dir` with the same target and key so pending reports can finish uploading.
 
 The receiver accepts OTLP over HTTP or HTTPS, with JSON or protobuf payloads, at `POST /v1/logs` and `POST /v1/traces`. It acknowledges and discards `POST /v1/metrics`. Harnesses can share the same receiver when they use its configured transport. Every report from an instance is attributed to the dashboard client that owns its key. For separate attribution, use a second loopback port, key, and data directory.
 
@@ -445,14 +453,14 @@ Start a fresh session with its log exporter pointed at the relay.
   export CLAUDE_CODE_ENABLE_TELEMETRY=1
   export OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=none OTEL_TRACES_EXPORTER=none
   export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
-  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:8765/v1/logs
+  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
   export OTEL_LOG_USER_PROMPTS=0 OTEL_LOG_ASSISTANT_RESPONSES=0
   export OTEL_LOG_TOOL_DETAILS=0 OTEL_LOG_TOOL_CONTENT=0
   claude
 )
 ```
 
-The relay reads Claude Code's `api_request` events. If usage is missing, check that the relay is running and the URL matches `--listen`. Claude Code can log exporter errors to a private file with `claude --debug-file <path>`. On a managed installation, your administrator may control the export destination. [Claude Code monitoring documentation](https://code.claude.com/docs/en/monitoring-usage)
+The relay reads Claude Code's `api_request` events. If usage is missing, check that the relay is running and the URL matches the configured OpenTelemetry address. Claude Code can log exporter errors to a private file with `claude --debug-file <path>`. On a managed installation, your administrator may control the export destination. [Claude Code monitoring documentation](https://code.claude.com/docs/en/monitoring-usage)
 
 #### Codex
 
@@ -460,7 +468,7 @@ Add these settings to the user `config.toml` read by the Codex process, merging 
 
 ```toml
 [otel]
-exporter = { otlp-http = { endpoint = "http://127.0.0.1:8765/v1/logs", protocol = "json" } }
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }
 log_user_prompt = false
 log_agent_responses = false
 log_guardian_assessments = false
@@ -480,7 +488,7 @@ Set Gemini CLI's exporter endpoint to the relay origin. Gemini CLI appends the s
   unset OTEL_EXPORTER_OTLP_HEADERS OTEL_EXPORTER_OTLP_LOGS_HEADERS
   export GEMINI_TELEMETRY_ENABLED=true GEMINI_TELEMETRY_TARGET=local
   export GEMINI_TELEMETRY_OTLP_PROTOCOL=http
-  export GEMINI_TELEMETRY_OTLP_ENDPOINT=http://127.0.0.1:8765
+  export GEMINI_TELEMETRY_OTLP_ENDPOINT=http://127.0.0.1:4318
   export GEMINI_TELEMETRY_LOG_PROMPTS=false GEMINI_TELEMETRY_TRACES_ENABLED=false
   gemini
 )
@@ -501,9 +509,14 @@ relay_tls_dir="$HOME/.config/llm-meter/relay/local-tls"
     -cert-file "$relay_tls_dir/loopback.pem" \
     -key-file "$relay_tls_dir/loopback-key.pem" 127.0.0.1
 )
+```
 
+In the macOS app, enter the full paths to `loopback.pem` and `loopback-key.pem` under **Settings → Local HTTPS**, then save. For the CLI, start the HTTPS listener with the same files.
+
+```sh
 ./llm-meter-relay \
-  --mode telemetry \
+  --proxy=false \
+  --telemetry-listen=127.0.0.1:4318 \
   --target https://proxy.example.com \
   --key-file "$HOME/.config/llm-meter/relay/proxy.key" \
   --data-dir "$HOME/.config/llm-meter/relay/copilot-data" \
@@ -516,7 +529,7 @@ With the relay running, start Copilot CLI in another terminal.
 ```sh
 COPILOT_OTEL_ENABLED=true \
 COPILOT_OTEL_EXPORTER_TYPE=otlp-http \
-OTEL_EXPORTER_OTLP_ENDPOINT=https://127.0.0.1:8765 \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://127.0.0.1:4318 \
 OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
 OTEL_EXPORTER_OTLP_CERTIFICATE="$HOME/.config/llm-meter/relay/local-tls/rootCA.pem" \
 OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=NO_CONTENT \
@@ -524,7 +537,7 @@ OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false \
 copilot
 ```
 
-If another relay already uses port `8765`, start the HTTPS relay with `--listen=127.0.0.1:8766` and use port `8766` in the exporter URL. To share the HTTPS receiver, use its `https://` address and configure the CA trust in each exporter. The relay uses Copilot's individual model-call spans for usage. [Copilot OpenTelemetry reference](https://docs.github.com/en/copilot/reference/enterprise-administrators/opentelemetry-reference)
+If port `4318` is already in use, choose another loopback port and use it in the exporter URL. To share the HTTPS receiver, use its `https://` address and configure the CA trust in each exporter. The relay uses Copilot's individual model-call spans for usage. [Copilot OpenTelemetry reference](https://docs.github.com/en/copilot/reference/enterprise-administrators/opentelemetry-reference)
 
 #### OpenCode
 
@@ -533,7 +546,7 @@ With OpenCode v2.3.2 or a version with the same usage spans, launch a standalone
 ```sh
 (
   unset OTEL_EXPORTER_OTLP_HEADERS
-  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8765 opencode --standalone
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 opencode --standalone
 )
 ```
 
@@ -572,15 +585,15 @@ The relay enforces strict checks when opening `--key-file`:
 | Component / mode | Is persistent `/data` needed? | What is stored there |
 | --- | --- | --- |
 | **LLM Meter server** | **Always** (`DATA_DIR=/data` in Docker, `./data` natively) | `llm-meter.db` — clients, hashed proxy keys, request/usage ledger, allowances, and cached pricing catalogs. |
-| **Relay (`remote-proxy`)** | **No** (not opened or written) | Nothing. Mounting `/data` in the default Compose file is harmless and makes switching to `usage-only` a one-line change. |
-| **Relay (`usage-only` or `telemetry`)** | **Yes** (`--data-dir`) | `usage-outbox.db` — durable SQLite queue of pending usage events plus the destination `(endpoint, key)` fingerprint. |
+| **Relay (Remote proxy alone)** | **No** | Mounting `/data` in the default Compose file makes it available when Usage-only or OpenTelemetry is enabled. |
+| **Relay (Usage-only or OpenTelemetry)** | **Yes** (`--data-dir`) | `usage-outbox.db` stores pending events and the destination `(endpoint, key)` fingerprint. |
 
 > **One `--data-dir` per `(server, key)` connection:** On first open, `usage-outbox.db` binds itself to a SHA-256 fingerprint of the upload endpoint (`https://<target>/api/usage/events`) and the proxy key. Starting a relay with a different `--target` or proxy key against the same directory fails immediately (`use a separate usage queue directory for a different server or key`) so pending events are never uploaded under the wrong client or server.
 
 ### 6.4 Durable queue, retry behavior, and graceful shutdown
 
 - The relay queues metered HTTP requests, WebSocket usage, and OpenTelemetry usage reports in `usage-outbox.db`. Each event has a stable ID and a 16 KiB size limit.
-- **Queue capacity:** Up to **10,000** pending events. When the queue fills, `usage-only` drops new reports with log message `Could not queue a usage report`. In `telemetry` mode, the local receiver returns `503` so the exporter can retry the batch. Model requests can continue in either mode.
+- **Queue capacity:** Up to **10,000** pending events. When the queue fills, Usage-only drops new reports with log message `Could not queue a usage report`. The OpenTelemetry listener returns `503` so the exporter can retry the batch. Model requests can continue.
 - **Ordered delivery & deduplication:** A single background worker uploads events strictly in FIFO order via `POST https://<target>/api/usage/events` with `X-LLM-Meter-Key` and a 10-second timeout. The server returns `204 No Content` and deduplicates retries atomically by `(client_id, event_id)`, so retries never double-count.
 - The uploader sends requests to the configured HTTPS URL. A redirect response leaves the event queued for retry at that URL.
 - **Retry backoff vs. permanent rejection:**
@@ -627,7 +640,7 @@ docker compose pull relay
 docker compose up -d relay
 ```
 
-For native binaries, rebuild with `go build -o llm-meter-relay ./cmd/llm-meter-relay` and restart the process. In `usage-only` and `telemetry` modes, keeping the same `--data-dir` preserves any queued events across the restart.
+For native binaries, rebuild with `go build -o llm-meter-relay ./cmd/llm-meter-relay` and restart the process. Keeping the same `--data-dir` preserves queued events across the restart.
 
 ### Check for pending reports
 

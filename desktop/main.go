@@ -137,7 +137,7 @@ func main() {
 		}()
 		if !initial.Configured {
 			openWindow(false)
-		} else if initial.Config.AutoStart {
+		} else if initial.Config.AutoStart && initial.Config.hasListeners() {
 			if err := manager.Start(); err != nil {
 				openWindow(false)
 			}
@@ -167,8 +167,11 @@ func setupTray(app *application.App, tray *application.SystemTray, service *Rela
 	retry := menu.Add("Retry Pending Uploads").OnClick(func(_ *application.Context) { service.RetryUploads() })
 
 	copyMenu := menu.AddSubmenu("Copy Client URL")
+	copyMenuItem := menu.FindByLabel("Copy Client URL")
 	endpoints := make(map[string]*application.MenuItem)
-	for _, endpoint := range buildEndpoints(relay.DefaultListen, "") {
+	availableEndpoints := buildEndpoints(AppConfig{ProxyEnabled: true, TelemetryEnabled: true},
+		relay.DefaultListen, defaultTelemetryListen)
+	for _, endpoint := range availableEndpoints {
 		provider := endpoint.Provider
 		endpoints[provider] = copyMenu.Add(endpoint.Label).OnClick(func(_ *application.Context) {
 			for _, ep := range service.GetSnapshot().Endpoints {
@@ -204,12 +207,15 @@ func setupTray(app *application.App, tray *application.SystemTray, service *Rela
 		}
 		draining := snap.Status.State == relay.StateDraining
 		running := snap.Status.State == relay.StateRunning
-		start.SetEnabled(snap.Configured && !running && !draining).SetHidden(running || draining)
+		start.SetEnabled(snap.Configured && snap.Config.hasListeners() && !running && !draining).SetHidden(running || draining)
 		stop.SetEnabled(running).SetHidden(!running && !draining)
 		retry.SetHidden(snap.Status.Outbox == nil || snap.Status.Outbox.Pending == 0)
 		for provider, item := range endpoints {
-			item.SetHidden(!slices.Contains(snap.Status.Routes, provider))
+			item.SetHidden(!slices.ContainsFunc(snap.Endpoints, func(endpoint ClientEndpoint) bool {
+				return endpoint.Provider == provider
+			}))
 		}
+		copyMenuItem.SetHidden(len(snap.Endpoints) == 0)
 		dashboard.SetEnabled(snap.Configured)
 	}
 }
@@ -217,15 +223,24 @@ func setupTray(app *application.App, tray *application.SystemTray, service *Rela
 func formatTrayStatus(snap AppSnapshot) string {
 	switch snap.Status.State {
 	case relay.StateRunning:
-		if snap.Status.Outbox != nil && snap.Status.Outbox.LastError != "" {
-			return fmt.Sprintf("▲ Attention · %s", snap.Status.Mode)
+		mode := snap.Status.Mode
+		if snap.Config.ProxyEnabled && snap.Config.TelemetryEnabled {
+			mode += " + OpenTelemetry"
+		} else if snap.Config.TelemetryEnabled {
+			mode = "OpenTelemetry"
 		}
-		return fmt.Sprintf("● Running · %s", snap.Status.Mode)
+		if snap.Status.Outbox != nil && snap.Status.Outbox.LastError != "" {
+			return fmt.Sprintf("▲ Attention · %s", mode)
+		}
+		return fmt.Sprintf("● Running · %s", mode)
 	case relay.StateDraining:
 		return "◌ Draining outbox…"
 	case relay.StateError:
 		return "▲ Relay error"
 	default:
+		if !snap.Config.hasListeners() {
+			return "○ Listeners disabled"
+		}
 		if !snap.Configured {
 			return "○ Setup required"
 		}

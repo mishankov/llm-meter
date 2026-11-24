@@ -38,14 +38,15 @@ type LogEntry struct {
 
 // Status is a thread-safe snapshot of a relay instance's state.
 type Status struct {
-	State         string              `json:"state"`
-	ListenAddr    string              `json:"listenAddr"`
-	Mode          string              `json:"mode"`
-	Target        string              `json:"target"`
-	Routes        []string            `json:"routes"`
-	RequestsTotal int64               `json:"requestsTotal"`
-	LastError     string              `json:"lastError,omitempty"`
-	Outbox        *relayoutbox.Status `json:"outbox,omitempty"`
+	State               string              `json:"state"`
+	ListenAddr          string              `json:"listenAddr"`
+	TelemetryListenAddr string              `json:"telemetryListenAddr,omitempty"`
+	Mode                string              `json:"mode"`
+	Target              string              `json:"target"`
+	Routes              []string            `json:"routes"`
+	RequestsTotal       int64               `json:"requestsTotal"`
+	LastError           string              `json:"lastError,omitempty"`
+	Outbox              *relayoutbox.Status `json:"outbox,omitempty"`
 }
 
 // Option customizes a relay Instance.
@@ -74,31 +75,33 @@ func WithTransport(transport http.RoundTripper) Option {
 
 // Instance manages one running or stopped local relay.
 type Instance struct {
-	cfg       Config
-	bindAddr  string
-	config    relayConfig
-	routes    []string
-	onStatus  func(Status)
-	onLog     func(LogEntry)
-	transport http.RoundTripper
+	cfg               Config
+	bindAddr          string
+	telemetryBindAddr string
+	config            relayConfig
+	routes            []string
+	onStatus          func(Status)
+	onLog             func(LogEntry)
+	transport         http.RoundTripper
 
 	requestsTotal atomic.Int64
 
-	mu           sync.Mutex
-	started      bool
-	state        string
-	listenAddr   string
-	stopHTTP     context.CancelFunc
-	drainCtx     context.Context
-	drainDropped int64
-	done         chan struct{}
-	runErr       error
-	queue        *relayoutbox.Queue
+	mu                  sync.Mutex
+	started             bool
+	state               string
+	listenAddr          string
+	telemetryListenAddr string
+	stopHTTP            context.CancelFunc
+	drainCtx            context.Context
+	drainDropped        int64
+	done                chan struct{}
+	runErr              error
+	queue               *relayoutbox.Queue
 }
 
 // New validates cfg and creates a ready-to-start relay Instance.
 func New(cfg Config, opts ...Option) (*Instance, error) {
-	bind, err := listenAddress(cfg.Listen, cfg.Bind)
+	bind, telemetryBind, err := relayListenAddresses(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +120,13 @@ func New(cfg Config, opts ...Option) (*Instance, error) {
 	}
 
 	inst := &Instance{
-		cfg:      cfg,
-		bindAddr: bind,
-		config:   rc,
-		routes:   routes,
-		state:    StateStopped,
-		done:     make(chan struct{}),
+		cfg:               cfg,
+		bindAddr:          bind,
+		telemetryBindAddr: telemetryBind,
+		config:            rc,
+		routes:            routes,
+		state:             StateStopped,
+		done:              make(chan struct{}),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -132,8 +136,23 @@ func New(cfg Config, opts ...Option) (*Instance, error) {
 	return inst, nil
 }
 
-// Start binds the listener and starts a single relay lifetime.
+type httpEndpoint struct {
+	listener net.Listener
+	handler  http.Handler
+}
+
+// Start binds the configured listeners and starts a single relay lifetime.
 func (i *Instance) Start() error {
+	return i.StartWithTelemetryListener(nil)
+}
+
+// StartWithTelemetryListener accepts a socket already bound to the configured
+// OpenTelemetry address. A nil socket uses normal binding. On failure, the
+// caller must close any supplied socket.
+func (i *Instance) StartWithTelemetryListener(telemetryListener net.Listener) error {
+	if telemetryListener != nil && i.cfg.Mode != ModeTelemetry && i.telemetryBindAddr == "" {
+		return errors.New("no OpenTelemetry listener configured")
+	}
 	i.mu.Lock()
 	if i.started {
 		i.mu.Unlock()
@@ -141,7 +160,7 @@ func (i *Instance) Start() error {
 	}
 	i.started = true
 	var tlsConfig *tls.Config
-	scheme := "http"
+	telemetryScheme := "http"
 	if i.cfg.TLSCert != "" {
 		pair, err := tls.LoadX509KeyPair(i.cfg.TLSCert, i.cfg.TLSKey)
 		if err != nil {
@@ -149,26 +168,56 @@ func (i *Instance) Start() error {
 			return i.finish(fmt.Errorf("load telemetry TLS certificate: %w", err))
 		}
 		tlsConfig = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
-		scheme = "https"
+		telemetryScheme = "https"
 	}
-	listener, err := net.Listen("tcp", i.bindAddr)
-	if err != nil {
-		i.mu.Unlock()
-		return i.finish(fmt.Errorf("listen: %w", err))
+	var listener net.Listener
+	var err error
+	if i.cfg.Mode == ModeTelemetry {
+		listener = telemetryListener
+	}
+	if listener == nil {
+		listener, err = net.Listen("tcp", i.bindAddr)
+		if err != nil {
+			i.mu.Unlock()
+			return i.finish(fmt.Errorf("listen: %w", err))
+		}
 	}
 	host := listener.Addr().String()
 	if i.cfg.Bind != "" {
 		host = i.cfg.Listen
 	}
-	if tlsConfig != nil {
+	if i.cfg.Mode == ModeTelemetry && tlsConfig != nil {
 		listener = tls.NewListener(listener, tlsConfig)
+	}
+	endpoints := []httpEndpoint{{listener: listener}}
+	var telemetryHost string
+	if i.telemetryBindAddr != "" {
+		receiver := telemetryListener
+		if receiver == nil {
+			receiver, err = net.Listen("tcp", i.telemetryBindAddr)
+			if err != nil {
+				_ = listener.Close()
+				i.mu.Unlock()
+				return i.finish(fmt.Errorf("listen for OpenTelemetry: %w", err))
+			}
+		}
+		telemetryHost = receiver.Addr().String()
+		if i.cfg.TelemetryBind != "" {
+			telemetryHost = i.cfg.TelemetryListen
+		}
+		if tlsConfig != nil {
+			receiver = tls.NewListener(receiver, tlsConfig)
+		}
+		endpoints = append(endpoints, httpEndpoint{listener: receiver})
 	}
 
 	var record func(proxy.Usage)
 	if i.config.usageTarget != nil {
 		i.queue, err = relayoutbox.Open(i.cfg.DataDir, i.config.usageTarget, i.cfg.Key)
 		if err != nil {
-			_ = listener.Close()
+			for _, endpoint := range endpoints {
+				_ = endpoint.listener.Close()
+			}
 			i.mu.Unlock()
 			return i.finish(fmt.Errorf("open usage queue: %w", err))
 		}
@@ -186,32 +235,50 @@ func (i *Instance) Start() error {
 		i.requestsTotal.Add(1)
 		i.emitStatus()
 	}
-	var handler http.Handler
 	if i.cfg.Mode == ModeTelemetry {
-		handler = guardClient(host, telemetry.Handler(i.queue.EnqueueBatch, onRequest))
+		endpoints[0].handler = guardClient(host, telemetry.Handler(i.queue.EnqueueBatch, onRequest))
 	} else {
-		handler = i.config.handler(host, i.cfg.Key, record, i.transport, onRequest)
+		endpoints[0].handler = i.config.handler(host, i.cfg.Key, record, i.transport, onRequest)
+		if telemetryHost != "" {
+			endpoints[1].handler = guardClient(telemetryHost, telemetry.Handler(i.queue.EnqueueBatch, onRequest))
+		}
 	}
 	httpCtx, cancel := context.WithCancel(context.Background())
 	i.stopHTTP = cancel
 	i.listenAddr = host
+	i.telemetryListenAddr = telemetryHost
 	i.state = StateRunning
 	i.mu.Unlock()
 
-	go i.run(httpCtx, listener, handler)
+	go i.run(httpCtx, cancel, endpoints)
+	scheme := "http"
+	if i.cfg.Mode == ModeTelemetry {
+		scheme = telemetryScheme
+	}
 	i.log("info", fmt.Sprintf("Listening on %s://%s (%s)", scheme, host, i.cfg.Mode))
+	if telemetryHost != "" {
+		i.log("info", fmt.Sprintf("Listening on %s://%s (OpenTelemetry)", telemetryScheme, telemetryHost))
+	}
 	i.emitStatus()
 	return nil
 }
 
 // The serving goroutine owns finalization on both requested and unexpected exits.
-func (i *Instance) run(ctx context.Context, listener net.Listener, handler http.Handler) {
+func (i *Instance) run(ctx context.Context, stopHTTP context.CancelFunc, endpoints []httpEndpoint) {
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	var worker sync.WaitGroup
 	if i.queue != nil {
 		worker.Go(func() { i.queue.Run(workerCtx) })
 	}
-	err := serve(ctx, listener, handler)
+	results := make(chan error, len(endpoints))
+	for _, endpoint := range endpoints {
+		go func() { results <- serve(ctx, endpoint.listener, endpoint.handler) }()
+	}
+	var err error
+	for range endpoints {
+		err = errors.Join(err, <-results)
+		stopHTTP()
+	}
 	i.mu.Lock()
 	drainCtx, drainDropped := i.drainCtx, i.drainDropped
 	i.mu.Unlock()
@@ -296,7 +363,7 @@ func DrainPending(ctx context.Context, cfg Config) error {
 		return err
 	}
 	if inst.config.usageTarget == nil {
-		return errors.New("draining a usage queue requires usage-only or telemetry mode")
+		return errors.New("draining a usage queue requires usage-only proxying or OpenTelemetry")
 	}
 	queue, err := relayoutbox.Open(inst.cfg.DataDir, inst.config.usageTarget, inst.cfg.Key)
 	if err != nil {
@@ -340,14 +407,15 @@ func (i *Instance) Status() Status {
 	}
 	routes := append([]string(nil), i.routes...)
 	return Status{
-		State:         i.state,
-		ListenAddr:    i.listenAddr,
-		Mode:          i.cfg.Mode,
-		Target:        i.cfg.Target,
-		Routes:        routes,
-		RequestsTotal: i.requestsTotal.Load(),
-		LastError:     lastError,
-		Outbox:        outbox,
+		State:               i.state,
+		ListenAddr:          i.listenAddr,
+		TelemetryListenAddr: i.telemetryListenAddr,
+		Mode:                i.cfg.Mode,
+		Target:              i.cfg.Target,
+		Routes:              routes,
+		RequestsTotal:       i.requestsTotal.Load(),
+		LastError:           lastError,
+		Outbox:              outbox,
 	}
 }
 

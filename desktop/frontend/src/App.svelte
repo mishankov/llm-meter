@@ -56,6 +56,7 @@
 
   const running = $derived(snapshot?.status.state === "running");
   const draining = $derived(snapshot?.status.state === "draining");
+  const listenersEnabled = $derived(snapshot?.config.proxyEnabled || snapshot?.config.telemetryEnabled);
   const hasAttention = $derived(
     snapshot?.status.state === "error" || Boolean(snapshot?.status.outbox?.lastError),
   );
@@ -106,9 +107,9 @@
       <div class="header-actions" style="--wails-draggable: no-drag">
         <Button
           class={running ? "secondary-button compact-button" : "primary-button compact-button"}
-          disabled={busy || saving || draining || (!running && !snapshot.configured)}
+          disabled={busy || saving || draining || (!running && (!snapshot.configured || !listenersEnabled))}
           aria-keyshortcuts="Meta+Enter"
-          title={running ? "Stop relay (⌘Return)" : "Start relay (⌘Return)"}
+          title={running ? "Stop relay (⌘Return)" : listenersEnabled ? "Start relay (⌘Return)" : "Enable a listener in Settings"}
           onclick={() => runRelayAction(running ? bridge.stopRelay : bridge.startRelay)}
         >
           {#if running}

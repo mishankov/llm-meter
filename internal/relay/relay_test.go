@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -615,19 +616,8 @@ func TestTelemetryRelayOnlyAcceptsLocalOTLPExports(t *testing.T) {
 func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
 	fixture := httptest.NewTLSServer(http.NotFoundHandler())
 	defer fixture.Close()
-	cert := fixture.TLS.Certificates[0]
-	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	certFile, keyFile := writeTestTLSFiles(t, dir, fixture.TLS.Certificates[0])
 	inst, err := New(Config{
 		Mode: ModeTelemetry, Listen: "127.0.0.1:0", Target: "https://meter.test",
 		Key: "fixture-key", DataDir: dir, TLSCert: certFile, TLSKey: keyFile,
@@ -657,6 +647,194 @@ func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
 	defer response.Body.Close()
 	if response.TLS == nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("expected trusted HTTPS OTLP, got %v", response.Status)
+	}
+}
+
+func writeTestTLSFiles(t *testing.T, dir string, cert tls.Certificate) (string, string) {
+	t.Helper()
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
+}
+
+func TestProxyAndTelemetryListenersRunTogether(t *testing.T) {
+	const key = "fixture-key"
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	proxyStarted := make(chan struct{})
+	releaseProxy := make(chan struct{})
+	reports := make(chan string, 2)
+	meter := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(keyHeader) != key {
+			t.Error("the dashboard client key was missing")
+		}
+		switch r.URL.Path {
+		case "/v1/responses":
+			if r.Header.Get("Authorization") != "Bearer provider-credential" {
+				t.Error("provider authorization did not reach the remote proxy")
+			}
+			close(proxyStarted)
+			select {
+			case <-releaseProxy:
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"model":"proxy-fixture","usage":{"input_tokens":3,"output_tokens":1}}`)
+		case "/api/usage/events":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+			}
+			select {
+			case reports <- string(body):
+			default:
+				t.Error("unexpected extra telemetry reports")
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer meter.Close()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = meter.Client().Transport
+	defer func() { http.DefaultTransport = oldTransport }()
+
+	cfg := Config{
+		Mode: ModeRemoteProxy, Provider: "openai", Listen: "127.0.0.1:0", TelemetryListen: "127.0.0.1:0",
+		Target: meter.URL, Key: key, DataDir: t.TempDir(),
+	}
+	cfg.TLSCert, cfg.TLSKey = writeTestTLSFiles(t, cfg.DataDir, meter.TLS.Certificates[0])
+	inst, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Stop(ctx)
+	status := inst.Status()
+	if status.TelemetryListenAddr == "" || status.TelemetryListenAddr == status.ListenAddr || status.Outbox == nil {
+		t.Fatalf("expected distinct proxy and telemetry listeners with an outbox: %+v", status)
+	}
+	proxyReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+status.ListenAddr+"/v1/responses", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyReq.Header.Set("Authorization", "Bearer provider-credential")
+	proxyReq.Header.Set("Content-Type", "application/json")
+	proxyFinished := make(chan error, 1)
+	go func() {
+		resp, err := meter.Client().Do(proxyReq)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				proxyFinished <- errors.New("proxy request returned " + resp.Status)
+				return
+			}
+			_, err = io.Copy(io.Discard, resp.Body)
+		}
+		proxyFinished <- err
+	}()
+	select {
+	case <-proxyStarted:
+	case err := <-proxyFinished:
+		t.Fatalf("request did not reach the remote proxy: %v", err)
+	case <-ctx.Done():
+		t.Fatal("remote proxy did not receive the request")
+	}
+
+	// The receiver is available over TLS while the HTTP proxy request is still in flight.
+	otlp := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{
+		"eventName":"claude_code.api_request",
+		"attributes":[
+			{"key":"event.timestamp","value":{"stringValue":"2026-01-01T00:00:00Z"}},
+			{"key":"model","value":{"stringValue":"telemetry-fixture"}},
+			{"key":"input_tokens","value":{"intValue":"10"}},
+			{"key":"output_tokens","value":{"intValue":"20"}}
+		]
+	}]}]}]}`
+	telemetryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+status.TelemetryListenAddr+"/v1/logs", strings.NewReader(otlp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetryReq.Header.Set("Content-Type", "application/json")
+	resp, err := meter.Client().Do(telemetryReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.TLS == nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTPS telemetry request returned %s", resp.Status)
+	}
+	close(releaseProxy)
+	if err := <-proxyFinished; err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.DrainAndStop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || !strings.Contains(<-reports, "telemetry-fixture") {
+		t.Fatal("expected only the telemetry report from the local outbox")
+	}
+	status = inst.Status()
+	if status.State != StateStopped || status.RequestsTotal != 2 || status.Outbox.Pending != 0 {
+		t.Fatalf("expected both requests and a drained relay: %+v", status)
+	}
+	for _, addr := range []string{status.ListenAddr, status.TelemetryListenAddr} {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("stopped relay still holds %s: %v", addr, err)
+		}
+		listener.Close()
+	}
+}
+
+func TestCombinedRelayRequiresDistinctLoopbackListeners(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:8765", "[::ffff:127.0.0.1]:8765", "0.0.0.0:4318"} {
+		t.Run(address, func(t *testing.T) {
+			cfg := Config{
+				Mode: ModeRemoteProxy, Listen: DefaultListen, TelemetryListen: address,
+				Target: "https://meter.test", Key: "fixture-key",
+			}
+			if err := Validate(cfg); err == nil {
+				t.Fatalf("accepted incompatible telemetry listener %s", address)
+			}
+			if _, err := New(cfg); err == nil {
+				t.Fatalf("created a relay with incompatible telemetry listener %s", address)
+			}
+		})
+	}
+}
+
+func TestCombinedRelayContainerBindings(t *testing.T) {
+	cfg := Config{
+		Mode: ModeUsageOnly, Listen: DefaultListen, Bind: "0.0.0.0:18765",
+		TelemetryListen: "127.0.0.1:4318", TelemetryBind: "0.0.0.0:14318",
+		Target: "https://meter.test", Key: "fixture-key",
+	}
+	proxyBind, telemetryBind, err := relayListenAddresses(cfg)
+	if err != nil || proxyBind != cfg.Bind || telemetryBind != cfg.TelemetryBind {
+		t.Fatalf("expected separate container bindings: %q %q %v", proxyBind, telemetryBind, err)
+	}
+	for _, bind := range []string{"0.0.0.0:18765", "0.0.0.0:0", "127.0.0.1:14318", "[::]:14318"} {
+		t.Run(bind, func(t *testing.T) {
+			cfg := cfg
+			cfg.TelemetryBind = bind
+			if err := Validate(cfg); err == nil {
+				t.Fatalf("accepted incompatible container telemetry bind %s", bind)
+			}
+		})
 	}
 }
 
