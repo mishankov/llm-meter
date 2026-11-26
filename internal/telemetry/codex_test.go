@@ -9,6 +9,7 @@ import (
 	"github.com/mishankov/llm-meter/internal/usagereport"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -107,5 +108,95 @@ func TestCodexUsageRejectsInvalidAndSkipsOtherEvents(t *testing.T) {
 	}
 	if _, matched, err := codexUsage(nil, &record); matched || err != nil {
 		t.Fatalf("unrelated stream event was handled as %t, %v", matched, err)
+	}
+}
+
+func TestCodexCompletionReasoningEffort(t *testing.T) {
+	strAttr := func(key, value string) *commonpb.KeyValue {
+		return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}}}
+	}
+	tests := []struct {
+		name          string
+		resourceAttrs []*commonpb.KeyValue
+		recordAttrs   []*commonpb.KeyValue
+		want          string
+	}{
+		{
+			name:        "model_reasoning_effort on completion log",
+			recordAttrs: []*commonpb.KeyValue{strAttr("model_reasoning_effort", "high")},
+			want:        "high",
+		},
+		{
+			name:        "model_reasoning_effort normalizes case and xhigh",
+			recordAttrs: []*commonpb.KeyValue{strAttr("model_reasoning_effort", " XHIGH ")},
+			want:        "xhigh",
+		},
+		{
+			name:        "record model_reasoning_effort beats reasoning_effort and resource",
+			resourceAttrs: []*commonpb.KeyValue{
+				strAttr("model_reasoning_effort", "low"),
+				strAttr("reasoning_effort", "minimal"),
+			},
+			recordAttrs: []*commonpb.KeyValue{
+				strAttr("reasoning_effort", "medium"),
+				strAttr("model_reasoning_effort", "high"),
+			},
+			want: "high",
+		},
+		{
+			name:        "reasoning_effort fallback on record",
+			recordAttrs: []*commonpb.KeyValue{strAttr("reasoning_effort", "medium")},
+			want:        "medium",
+		},
+		{
+			name: "resource model_reasoning_effort beats resource reasoning_effort",
+			resourceAttrs: []*commonpb.KeyValue{
+				strAttr("reasoning_effort", "low"),
+				strAttr("model_reasoning_effort", "minimal"),
+			},
+			want: "minimal",
+		},
+		{
+			name:        "unrecognized effort stays empty without rejecting event",
+			recordAttrs: []*commonpb.KeyValue{strAttr("model_reasoning_effort", "custom-effort")},
+			want:        "",
+		},
+		{
+			name: "absent effort stays empty",
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var record logspb.LogRecord
+			if err := protojson.Unmarshal([]byte(codexCompletionLog), &record); err != nil {
+				t.Fatal(err)
+			}
+			record.Attributes = append(record.Attributes, strAttr("auth_mode", "Chatgpt"))
+			record.Attributes = append(record.Attributes, tc.recordAttrs...)
+			var resource *resourcepb.Resource
+			if len(tc.resourceAttrs) > 0 {
+				resource = &resourcepb.Resource{Attributes: tc.resourceAttrs}
+			}
+			event, matched, err := codexUsage(resource, &record)
+			if err != nil || !matched {
+				t.Fatalf("codexUsage = matched:%t err:%v", matched, err)
+			}
+			if event.ReasoningLevel != tc.want {
+				t.Fatalf("ReasoningLevel = %q, want %q", event.ReasoningLevel, tc.want)
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := usagereport.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.ReasoningLevel != tc.want {
+				t.Fatalf("round-tripped ReasoningLevel = %q, want %q", decoded.ReasoningLevel, tc.want)
+			}
+		})
 	}
 }

@@ -175,10 +175,17 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	meter := &httpMeter{usage: usage, captureUsage: captureUsage}
 	request := r.WithContext(context.WithValue(r.Context(), meterContextKey{}, meter))
-	if request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) &&
-		request.Header.Get("Content-Encoding") == "" {
-		meter.request = &metadataCapture{}
-		request.Body = &observedBody{ReadCloser: request.Body, observer: meter.request}
+	if request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) {
+		switch singleContentEncoding(request.Header) {
+		case "", "identity":
+			meter.request = &metadataCapture{}
+			request.Body = &observedBody{ReadCloser: request.Body, observer: meter.request}
+		case "gzip":
+			meter.request = &metadataCapture{}
+			observer := newGzipMetadataObserver(meter.request)
+			meter.requestCloser = observer
+			request.Body = &observedBody{ReadCloser: request.Body, observer: observer}
+		}
 	}
 	defer func() {
 		meter.finish()
@@ -286,6 +293,23 @@ func hasPrefix(path, prefix string) bool {
 func isJSON(contentType string) bool {
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+func singleContentEncoding(header http.Header) string {
+	var encoding string
+	for _, value := range header.Values("Content-Encoding") {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.ToLower(strings.TrimSpace(part))
+			if part == "" {
+				continue
+			}
+			if encoding != "" {
+				return "unsupported"
+			}
+			encoding = part
+		}
+	}
+	return encoding
 }
 
 func removeLocalHeaders(header http.Header) {

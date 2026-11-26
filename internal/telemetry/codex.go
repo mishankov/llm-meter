@@ -43,12 +43,36 @@ func codexUsage(resource *resourcepb.Resource, record *logspb.LogRecord) (usager
 	}
 
 	model, authMode := fields["model"].GetStringValue(), fields["auth_mode"].GetStringValue()
+	reasoningEffort := fields["model_reasoning_effort"].GetStringValue()
+	if reasoningEffort == "" {
+		reasoningEffort = fields["reasoning_effort"].GetStringValue()
+	}
+	var resourceModelEffort, resourceEffort string
 	for _, attr := range resource.GetAttributes() {
-		switch {
-		case model == "" && attr.GetKey() == "model":
-			model = attr.GetValue().GetStringValue()
-		case authMode == "" && attr.GetKey() == "auth_mode":
-			authMode = attr.GetValue().GetStringValue()
+		switch attr.GetKey() {
+		case "model":
+			if model == "" {
+				model = attr.GetValue().GetStringValue()
+			}
+		case "auth_mode":
+			if authMode == "" {
+				authMode = attr.GetValue().GetStringValue()
+			}
+		case "model_reasoning_effort":
+			if resourceModelEffort == "" {
+				resourceModelEffort = attr.GetValue().GetStringValue()
+			}
+		case "reasoning_effort":
+			if resourceEffort == "" {
+				resourceEffort = attr.GetValue().GetStringValue()
+			}
+		}
+	}
+	if reasoningEffort == "" {
+		if resourceModelEffort != "" {
+			reasoningEffort = resourceModelEffort
+		} else {
+			reasoningEffort = resourceEffort
 		}
 	}
 	// API-key mode can send requests to custom endpoints and does not identify their provider.
@@ -70,6 +94,7 @@ func codexUsage(resource *resourcepb.Resource, record *logspb.LogRecord) (usager
 		At:                at,
 		Provider:          provider,
 		Model:             model,
+		ReasoningLevel:    proxy.NormalizeReasoningLevel(reasoningEffort),
 		Endpoint:          usagereport.CodexTelemetryEndpoint,
 		Method:            http.MethodPost,
 		Status:            http.StatusOK,

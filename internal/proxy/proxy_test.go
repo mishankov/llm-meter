@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -407,6 +408,7 @@ func TestHTTPProxyExtractsReasoningLevelAcrossProviders(t *testing.T) {
 		requestBody  string
 		responseBody string
 		want         string
+		wantModel    string
 	}{
 		{
 			name:         "openai responses request effort",
@@ -460,6 +462,74 @@ func TestHTTPProxyExtractsReasoningLevelAcrossProviders(t *testing.T) {
 			want:         "none",
 		},
 		{
+			name:         "antigravity thinkingBudget -1 maps to adaptive",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-pro","request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":-1}}}}`,
+			responseBody: `{"response":{"responseId":"g2b","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "adaptive",
+		},
+		{
+			name:         "antigravity null thinkingBudget stays empty",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-pro","request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":null}}}}`,
+			responseBody: `{"response":{"responseId":"g2n","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "",
+			wantModel:    "gemini-2.5-pro",
+		},
+		{
+			name:         "antigravity positive thinkingBudget does not invent level",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-pro","request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}}`,
+			responseBody: `{"response":{"responseId":"g2c","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "",
+		},
+		{
+			name:         "antigravity protobuf enum prefix THINKING_LEVEL_XHIGH",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:streamGenerateContent",
+			requestBody:  `{"model":"gemini-4-neon","request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"THINKING_LEVEL_XHIGH"}}}}`,
+			responseBody: `{"response":{"responseId":"g2d","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "xhigh",
+		},
+		{
+			name:         "antigravity protobuf enum THINKING_LEVEL_UNSPECIFIED stays empty",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-4-neon","request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"THINKING_LEVEL_UNSPECIFIED"}}}}`,
+			responseBody: `{"response":{"responseId":"g2e","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "",
+		},
+		{
+			name:         "antigravity snake_case generation_config thinking_level",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-4-neon","request":{"generation_config":{"thinking_config":{"thinking_level":"MEDIUM"}}}}`,
+			responseBody: `{"response":{"responseId":"g2f","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "medium",
+			wantModel:    "gemini-4-neon",
+		},
+		{
+			name:         "antigravity numeric ProtoJSON thinking_level preserves request model",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-4-neon","request":{"generation_config":{"thinking_config":{"thinking_level":0}}}}`,
+			responseBody: `{"response":{"responseId":"g2g","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "",
+			wantModel:    "gemini-4-neon",
+		},
+		{
+			name:         "antigravity numeric ProtoJSON thinkingLevel preserves request model",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-4-neon","request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":0}}}}`,
+			responseBody: `{"response":{"responseId":"g2h","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "",
+			wantModel:    "gemini-4-neon",
+		},
+		{
 			name:         "antigravity thinkingLevel survives large responseSchema past capture limit",
 			antigravity:  true,
 			path:         "/antigravity/v1internal:generateContent",
@@ -506,8 +576,160 @@ func TestHTTPProxyExtractsReasoningLevelAcrossProviders(t *testing.T) {
 			if got.ReasoningLevel != tc.want {
 				t.Fatalf("ReasoningLevel = %q, want %q", got.ReasoningLevel, tc.want)
 			}
+			if tc.wantModel != "" && got.Model != tc.wantModel {
+				t.Fatalf("Model = %q, want %q", got.Model, tc.wantModel)
+			}
 		})
 	}
+}
+
+func TestHTTPProxyHandlesCompressedJSONRequests(t *testing.T) {
+	gzipBytes := func(t *testing.T, plain string) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := io.WriteString(zw, plain); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	antigravityJSON := `{"model":"gemini-4-neon","request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}}}}`
+	openaiJSON := `{"model":"gpt-5.4","reasoning":{"effort":"medium"}}`
+
+	tests := []struct {
+		name         string
+		antigravity  bool
+		path         string
+		encodings    []string
+		body         []byte
+		responseBody string
+		wantLevel    string
+		wantModel    string
+	}{
+		{
+			name:         "gzip antigravity request extracts level and forwards compressed bytes",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:streamGenerateContent",
+			encodings:    []string{"gzip"},
+			body:         gzipBytes(t, antigravityJSON),
+			responseBody: `{"response":{"responseId":"g-gz","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			wantLevel:    "high",
+			wantModel:    "gemini-4-neon",
+		},
+		{
+			name:         "identity openai request extracts level",
+			path:         "/v1/responses",
+			encodings:    []string{"Identity"},
+			body:         []byte(openaiJSON),
+			responseBody: `{"id":"resp_id","usage":{"input_tokens":10,"output_tokens":5}}`,
+			wantLevel:    "medium",
+			wantModel:    "gpt-5.4",
+		},
+		{
+			name:         "corrupt gzip request still forwards without failing",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			encodings:    []string{"gzip"},
+			body:         []byte("not-actually-gzip-bytes"),
+			responseBody: `{"response":{"responseId":"g-bad","usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}}`,
+			wantLevel:    "",
+			wantModel:    "",
+		},
+		{
+			name:         "stacked gzip encoding skipped safely",
+			path:         "/v1/responses",
+			encodings:    []string{"gzip", "gzip"},
+			body:         gzipBytes(t, openaiJSON),
+			responseBody: `{"id":"resp_stack","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":5}}`,
+			wantLevel:    "",
+			wantModel:    "gpt-5.4",
+		},
+		{
+			name:         "unsupported br encoding skipped safely",
+			path:         "/v1/responses",
+			encodings:    []string{"br"},
+			body:         []byte("compressed-br-payload"),
+			responseBody: `{"id":"resp_br","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":5}}`,
+			wantLevel:    "",
+			wantModel:    "gpt-5.4",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var received []byte
+			var receivedEncoding []string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var err error
+				received, err = io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read upstream body: %v", err)
+				}
+				receivedEncoding = append([]string(nil), r.Header.Values("Content-Encoding")...)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.responseBody)
+			}))
+			defer upstream.Close()
+
+			records := make(chan Usage, 1)
+			base := parseURL(t, upstream.URL)
+			var handler http.Handler
+			if tc.antigravity {
+				h := NewAntigravity(*base, func(u Usage) { records <- u })
+				handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					h.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
+				})
+			} else {
+				handler = testProxy(base, records)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			for _, enc := range tc.encodings {
+				req.Header.Add("Content-Encoding", enc)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d", w.Code)
+			}
+			if !bytes.Equal(received, tc.body) {
+				t.Fatalf("upstream body was altered: got %d bytes, want %d bytes", len(received), len(tc.body))
+			}
+			if len(receivedEncoding) != len(tc.encodings) {
+				t.Fatalf("upstream Content-Encoding = %v, want %v", receivedEncoding, tc.encodings)
+			}
+			got := nextRecord(t, records)
+			if got.ReasoningLevel != tc.wantLevel || got.Model != tc.wantModel {
+				t.Fatalf("got level=%q model=%q, want level=%q model=%q", got.ReasoningLevel, got.Model, tc.wantLevel, tc.wantModel)
+			}
+		})
+	}
+
+	t.Run("gzip request with unreachable upstream exits cleanly", func(t *testing.T) {
+		closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		closedURL := closed.URL
+		closed.Close()
+
+		records := make(chan Usage, 1)
+		handler := testProxy(parseURL(t, closedURL), records)
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(gzipBytes(t, openaiJSON)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", w.Code)
+		}
+		got := nextRecord(t, records)
+		if got.Status != http.StatusBadGateway {
+			t.Fatalf("recorded status = %d, want 502", got.Status)
+		}
+	})
 }
 
 func testProxy(api *url.URL, records chan<- Usage) http.Handler {
