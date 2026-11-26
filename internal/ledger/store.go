@@ -307,6 +307,9 @@ func (s *Store) RecordRelay(ctx context.Context, clientID, eventID string, usage
 	if eventID == "" {
 		return errors.New("relay event ID is required")
 	}
+	if proxy.IsServiceRequest(usage) {
+		usage.Status = 0
+	}
 	usage.ClientID = clientID
 	if usage.ResponseID != "" {
 		// Uploaded identifiers can only correlate responses reported for this

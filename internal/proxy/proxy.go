@@ -169,13 +169,12 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	if u.prefix == AntigravityPrefix {
 		captureUsage = captureUsage && (suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent")
 	} else {
-		responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
-		usage.UsageUpdate = r.Method == http.MethodGet && isResponse && responsePath != "" && !strings.Contains(responsePath, "/")
+		usage.UsageUpdate = r.Method == http.MethodGet && isResponseItemPath(suffix)
 		captureUsage = captureUsage || usage.UsageUpdate
 	}
 	meter := &httpMeter{usage: usage, captureUsage: captureUsage}
 	request := r.WithContext(context.WithValue(r.Context(), meterContextKey{}, meter))
-	if request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) {
+	if captureUsage && request.Body != nil && request.ContentLength != 0 && isJSON(request.Header.Get("Content-Type")) {
 		switch singleContentEncoding(request.Header) {
 		case "", "identity":
 			meter.request = &metadataCapture{}
@@ -189,6 +188,12 @@ func (u *upstream) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		meter.finish()
+		if !meter.captureUsage {
+			if len(meter.usage.RateLimits) == 0 {
+				return
+			}
+			meter.usage.Status = 0
+		}
 		u.record(meter.usage)
 	}()
 	u.http.ServeHTTP(w, request)
@@ -229,6 +234,9 @@ func upstreamProvider(prefix string, baseURL url.URL) string {
 func (u *upstream) observeResponse(response *http.Response) error {
 	meter := response.Request.Context().Value(meterContextKey{}).(*httpMeter)
 	meter.usage.Status = response.StatusCode
+	if !meter.captureUsage {
+		return nil
+	}
 	meter.usage.Model = response.Header.Get("OpenAI-Model")
 	if meter.usage.Model == "" {
 		meter.usage.Model = response.Header.Get("X-OpenAI-Model")
@@ -284,6 +292,55 @@ func (u *upstream) targetURL(incoming *url.URL) url.URL {
 // IsAntigravityEndpoint reports whether a recorded endpoint uses Cloud Code Assist.
 func IsAntigravityEndpoint(path string) bool {
 	return hasPrefix(path, AntigravityPrefix)
+}
+
+// IsServiceRequest reports whether a relay usage event describes a
+// non-generation proxy route (such as model discovery or Antigravity account
+// RPCs) that should not be logged as a row in the requests table.
+func IsServiceRequest(usage Usage) bool {
+	path, _, _ := strings.Cut(usage.Endpoint, "?")
+	if IsAntigravityEndpoint(path) {
+		suffix := strings.TrimPrefix(path, AntigravityPrefix)
+		return !(usage.Method == http.MethodPost &&
+			(suffix == "/v1internal:generateContent" || suffix == "/v1internal:streamGenerateContent"))
+	}
+	if hasPrefix(path, apiPrefix) {
+		suffix := strings.TrimPrefix(path, apiPrefix)
+		switch usage.Method {
+		case http.MethodPost:
+			return false
+		case http.MethodGet:
+			if usage.UsageUpdate && isResponseItemPath(suffix) {
+				return false
+			}
+			if isWebSocketUsage(suffix, usage) {
+				return false
+			}
+			return true
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func isResponseItemPath(suffix string) bool {
+	responsePath, isResponse := strings.CutPrefix(suffix, "/responses/")
+	return isResponse && responsePath != "" && !strings.Contains(responsePath, "/")
+}
+
+func isWebSocketUsage(suffix string, usage Usage) bool {
+	if usage.Status == http.StatusSwitchingProtocols {
+		return true
+	}
+	if suffix == "/realtime" {
+		return true
+	}
+	if suffix == "/responses" {
+		return usage.HasUsage || usage.ReportedCost != nil || usage.ReportedListCost != nil ||
+			usage.ResponseID != "" || usage.Status >= 400
+	}
+	return false
 }
 
 func hasPrefix(path, prefix string) bool {

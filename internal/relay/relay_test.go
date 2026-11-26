@@ -387,16 +387,10 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 					t.Fatalf("incorrect route for %s: HTTP %d", request.provider, response.Code)
 				}
 			}
-			if mode == ModeUsageOnly {
-				if len(observed) != len(requests) {
-					t.Fatalf("got %d local observations, want %d", len(observed), len(requests))
+			if len(observed) != 0 {
+				if mode == ModeUsageOnly {
+					t.Fatalf("usage-only mode recorded service requests: %+v", observed)
 				}
-				for i, usage := range observed {
-					if usage.Endpoint != requests[i].remotePath || usage.Status != http.StatusOK {
-						t.Errorf("unexpected observation for %s: %+v", requests[i].provider, usage)
-					}
-				}
-			} else if len(observed) != 0 {
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
 			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
@@ -975,5 +969,104 @@ func TestDrainFinishesInFlightUsageAndCanResumeOffline(t *testing.T) {
 	}
 	if got := <-reports; got != "persisted-fixture" {
 		t.Fatalf("unexpected offline report: %q", got)
+	}
+}
+
+func TestUsageOnlyRelayDoesNotUploadServiceRequests(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	reports := make(chan string, 4)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":[{"id":"gpt-5.4"}]}`)
+		case "/v1/responses":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":7,"output_tokens":2}}`)
+		case "/v1internal:loadCodeAssist":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"cloudaicompanionProject":"fixture"}`)
+		case "/v1internal:generateContent":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"response":{"responseId":"ag_1","modelVersion":"gemini-4-neon","usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":3}}}`)
+		case "/api/usage/events":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+			}
+			reports <- string(body)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+	defer func() { http.DefaultTransport = oldTransport }()
+
+	inst, err := New(Config{
+		Mode: ModeUsageOnly, Listen: "127.0.0.1:0",
+		Target: server.URL, Key: "llmm_fixture", DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range inst.config.routes {
+		inst.config.routes[i].target.Scheme = fixtureURL.Scheme
+		inst.config.routes[i].target.Host = fixtureURL.Host
+	}
+	if err := inst.Start(); err != nil {
+		t.Fatal(err)
+	}
+	listen := inst.Status().ListenAddr
+
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodGet, "/v1/models", ""},
+		{http.MethodPost, "/v1internal:loadCodeAssist", `{}`},
+		{http.MethodPost, "/v1/responses", `{"model":"gpt-5.4"}`},
+		{http.MethodPost, "/v1internal:generateContent", `{"model":"gemini-4-neon"}`},
+	} {
+		req, err := http.NewRequestWithContext(ctx, tc.method, "http://"+listen+tc.path, strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer provider-credential")
+		if tc.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: status %d", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+
+	if err := inst.DrainAndStop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("uploaded %d reports, want 2 (only generation requests)", len(reports))
+	}
+	got := []string{<-reports, <-reports}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, `"/v1/responses"`) || !strings.Contains(joined, `"/antigravity/v1internal:generateContent"`) {
+		t.Fatalf("missing expected generation reports: %v", got)
+	}
+	if strings.Contains(joined, `"/v1/models"`) || strings.Contains(joined, `loadCodeAssist`) {
+		t.Fatalf("service request leaked into uploaded reports: %v", got)
 	}
 }

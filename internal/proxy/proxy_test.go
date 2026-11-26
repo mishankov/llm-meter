@@ -91,17 +91,15 @@ func TestHTTPForwardsTheOriginalCredentialsAndMetersNewUsage(t *testing.T) {
 		if w.Code != http.StatusOK || w.Body.String() != response {
 			t.Fatalf("HTTP response = %d %s", w.Code, w.Body.String())
 		}
+		if method == http.MethodGet {
+			assertNoRecord(t, records)
+			continue
+		}
 		record := nextRecord(t, records)
 		if record.Method != method || record.Source != "api" || record.ClientID != "client-1" ||
 			record.Endpoint != "/v1/responses/resp/1" || record.Status != http.StatusOK ||
 			record.Model != "gpt-example" || record.ServiceTier != "priority" {
 			t.Fatalf("unexpected metadata: %+v", record)
-		}
-		if method == http.MethodGet {
-			if record.HasUsage || record.ResponseID != "" {
-				t.Fatalf("retrieval counted previously incurred usage: %+v", record)
-			}
-			continue
 		}
 		if !record.HasUsage || record.ResponseID != "resp_1" || record.InputTokens != 13 ||
 			record.CachedInputTokens != 3 || record.CacheWriteTokens != 2 || record.OutputTokens != 5 ||
@@ -294,6 +292,10 @@ func TestResponsesFallbackPreservesOtherResponses(t *testing.T) {
 			if response.Code != tc.status || response.Header().Get("Content-Type") != tc.contentType || response.Body.String() != tc.body {
 				t.Fatalf("proxy changed upstream response: status %d, content type %q, body length %d", response.Code,
 					response.Header().Get("Content-Type"), response.Body.Len())
+			}
+			if tc.method != http.MethodPost {
+				assertNoRecord(t, records)
+				return
 			}
 			record := nextRecord(t, records)
 			wantUsage := tc.wantResponseID != ""
@@ -732,11 +734,265 @@ func TestHTTPProxyHandlesCompressedJSONRequests(t *testing.T) {
 	})
 }
 
+func TestServiceRequestsSkippedAndUnparsed(t *testing.T) {
+	serviceRoutes := []struct {
+		name        string
+		antigravity bool
+		method      string
+		path        string
+		status      int
+		contentType string
+		respBody    string
+	}{
+		{"list models", false, http.MethodGet, "/v1/models", http.StatusOK, "application/json", `{"data":[{"id":"gpt-5.4"}]}`},
+		{"get model", false, http.MethodGet, "/v1/models/gpt-5.4", http.StatusOK, "application/json", `{"id":"gpt-5.4"}`},
+		{"get usage", false, http.MethodGet, "/v1/usage", http.StatusOK, "application/json", `{"usage":{"input_tokens":999}}`},
+		{"get responses list", false, http.MethodGet, "/v1/responses", http.StatusOK, "application/json", `{"data":[]}`},
+		{"get response input items", false, http.MethodGet, "/v1/responses/resp_1/input_items", http.StatusOK, "application/json", `{"data":[]}`},
+		{"delete response", false, http.MethodDelete, "/v1/responses/resp_1", http.StatusOK, "application/json", `{"deleted":true}`},
+		{"service error status", false, http.MethodGet, "/v1/models", http.StatusInternalServerError, "application/json", `{"error":"upstream failure"}`},
+		{"antigravity loadCodeAssist", true, http.MethodPost, "/antigravity/v1internal:loadCodeAssist", http.StatusOK, "application/json", `{"usageMetadata":{"promptTokenCount":999}}`},
+		{"antigravity fetchAvailableModels", true, http.MethodPost, "/antigravity/v1internal:fetchAvailableModels", http.StatusOK, "application/json", `{"models":[]}`},
+		{"antigravity fetchUserInfo", true, http.MethodPost, "/antigravity/v1internal:fetchUserInfo", http.StatusOK, "application/json", `{"email":"user@example.test"}`},
+		{"antigravity retrieveUserQuotaSummary", true, http.MethodPost, "/antigravity/v1internal:retrieveUserQuotaSummary", http.StatusOK, "application/json", `{"buckets":[]}`},
+		{"antigravity listExperiments", true, http.MethodPost, "/antigravity/v1internal:listExperiments", http.StatusOK, "application/json", `{"experiments":[]}`},
+		{"antigravity fetchAdminControls", true, http.MethodPost, "/antigravity/v1internal:fetchAdminControls", http.StatusOK, "application/json", `{"controls":{}}`},
+		{"antigravity writeTrajectoryAcls", true, http.MethodPost, "/antigravity/v1internal:writeTrajectoryAcls", http.StatusOK, "application/json", `{}`},
+		{"antigravity service SSE", true, http.MethodPost, "/antigravity/v1internal:loadCodeAssist", http.StatusOK, "text/event-stream", "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":99}}}\n\n"},
+		{"antigravity service error", true, http.MethodPost, "/antigravity/v1internal:fetchAvailableModels", http.StatusServiceUnavailable, "application/json", `{"error":"unavailable"}`},
+		{"antigravity GET generateContent", true, http.MethodGet, "/antigravity/v1internal:generateContent", http.StatusMethodNotAllowed, "application/json", `{}`},
+	}
+
+	for _, tc := range serviceRoutes {
+		t.Run(tc.name, func(t *testing.T) {
+			const reqBody = `{"model":"should-not-be-parsed"}`
+			upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.method == http.MethodPost {
+					body, err := io.ReadAll(r.Body)
+					if err != nil || string(body) != reqBody {
+						t.Errorf("upstream body = %q, err %v", body, err)
+					}
+				}
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.respBody)
+			}))
+			defer upstreamServer.Close()
+
+			records := make(chan Usage, 1)
+			base := parseURL(t, upstreamServer.URL)
+			var route *upstream
+			if tc.antigravity {
+				route = newUpstream(AntigravityPrefix, *base, func(u Usage) { records <- u })
+			} else {
+				route = newUpstream(apiPrefix, *base, func(u Usage) { records <- u })
+			}
+			// Verify no request/response metadata parser is attached for service routes.
+			origModify := route.http.ModifyResponse
+			route.http.ModifyResponse = func(resp *http.Response) error {
+				if err := origModify(resp); err != nil {
+					return err
+				}
+				meter := resp.Request.Context().Value(meterContextKey{}).(*httpMeter)
+				if meter.request != nil || meter.requestCloser != nil || meter.response != nil || meter.sse != nil {
+					t.Errorf("service route attached body parser: req=%v resp=%v sse=%v", meter.request != nil, meter.response != nil, meter.sse != nil)
+				}
+				if _, wrapped := resp.Body.(*observedBody); wrapped {
+					t.Errorf("service route wrapped response body")
+				}
+				return nil
+			}
+
+			var body io.Reader
+			if tc.method == http.MethodPost {
+				body = strings.NewReader(reqBody)
+			}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			req = req.WithContext(WithClient(req.Context(), "client-1"))
+			if tc.method == http.MethodPost {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			route.serve(w, req)
+			if w.Code != tc.status || w.Body.String() != tc.respBody {
+				t.Fatalf("response = %d %q, want %d %q", w.Code, w.Body.String(), tc.status, tc.respBody)
+			}
+			assertNoRecord(t, records)
+		})
+	}
+
+	t.Run("service route with rate limits emits quota-only update", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		}))
+		defer upstream.Close()
+		records := make(chan Usage, 1)
+		route := newUpstream(apiPrefix, *parseURL(t, upstream.URL), func(u Usage) { records <- u })
+		origModify := route.http.ModifyResponse
+		route.http.ModifyResponse = func(resp *http.Response) error {
+			if err := origModify(resp); err != nil {
+				return err
+			}
+			meter := resp.Request.Context().Value(meterContextKey{}).(*httpMeter)
+			meter.usage.RateLimits = []RateLimit{{ID: "codex", Window: "primary", WindowMinutes: 300, UsedPercent: 40}}
+			return nil
+		}
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req = req.WithContext(WithClient(req.Context(), "client-1"))
+		w := httptest.NewRecorder()
+		route.serve(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		got := nextRecord(t, records)
+		if got.Status != 0 || len(got.RateLimits) != 1 || got.RateLimits[0].UsedPercent != 40 {
+			t.Fatalf("expected quota-only update with status 0, got %+v", got)
+		}
+	})
+
+	t.Run("service route unreachable upstream is skipped", func(t *testing.T) {
+		closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		closedURL := closed.URL
+		closed.Close()
+
+		records := make(chan Usage, 1)
+		handler := testProxy(parseURL(t, closedURL), records)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+		if w.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502", w.Code)
+		}
+		assertNoRecord(t, records)
+	})
+}
+
+func TestGenerationRequestsIncludingErrorsAreRecorded(t *testing.T) {
+	cases := []struct {
+		name        string
+		antigravity bool
+		method      string
+		path        string
+		status      int
+		body        string
+	}{
+		{"responses 400", false, http.MethodPost, "/v1/responses", http.StatusBadRequest, `{"model":"gpt-5.4"}`},
+		{"responses 429", false, http.MethodPost, "/v1/responses", http.StatusTooManyRequests, `{"model":"gpt-5.4"}`},
+		{"chat completions 500", false, http.MethodPost, "/v1/chat/completions", http.StatusInternalServerError, `{"model":"gpt-5.4"}`},
+		{"messages 429", false, http.MethodPost, "/v1/messages", http.StatusTooManyRequests, `{"model":"claude-sonnet-4-6"}`},
+		{"post models 405", false, http.MethodPost, "/v1/models", http.StatusMethodNotAllowed, `{}`},
+		{"post usage 400", false, http.MethodPost, "/v1/usage", http.StatusBadRequest, `{}`},
+		{"gemini models generateContent 503", false, http.MethodPost, "/v1/models/gemini-2.5-pro:generateContent", http.StatusServiceUnavailable, `{}`},
+		{"background response poll", false, http.MethodGet, "/v1/responses/resp_bg", http.StatusOK, ""},
+		{"antigravity generateContent 429", true, http.MethodPost, "/antigravity/v1internal:generateContent", http.StatusTooManyRequests, `{"model":"gemini-4-neon"}`},
+		{"antigravity streamGenerateContent 500", true, http.MethodPost, "/antigravity/v1internal:streamGenerateContent", http.StatusInternalServerError, `{"model":"gemini-4-neon"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, `{"error":"fixture"}`)
+			}))
+			defer upstream.Close()
+
+			records := make(chan Usage, 1)
+			base := parseURL(t, upstream.URL)
+			var handler http.Handler
+			if tc.antigravity {
+				h := NewAntigravity(*base, func(u Usage) { records <- u })
+				handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					h.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
+				})
+			} else {
+				handler = testProxy(base, records)
+			}
+
+			var reqBody io.Reader
+			if tc.body != "" {
+				reqBody = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(tc.method, tc.path, reqBody)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d", w.Code, tc.status)
+			}
+			got := nextRecord(t, records)
+			if got.Status != tc.status || got.Endpoint != tc.path || got.Method != tc.method {
+				t.Fatalf("unexpected record: %+v", got)
+			}
+		})
+	}
+}
+
+func TestIsServiceRequest(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage Usage
+		want  bool
+	}{
+		{"GET /v1/models", Usage{Method: http.MethodGet, Endpoint: "/v1/models", Status: 200}, true},
+		{"GET /v1/models/:id", Usage{Method: http.MethodGet, Endpoint: "/v1/models/:id", Status: 200}, true},
+		{"GET /v1/models/gpt-5.4", Usage{Method: http.MethodGet, Endpoint: "/v1/models/gpt-5.4", Status: 200}, true},
+		{"GET /v1/usage", Usage{Method: http.MethodGet, Endpoint: "/v1/usage", Status: 200}, true},
+		{"POST /v1/models", Usage{Method: http.MethodPost, Endpoint: "/v1/models", Status: 405}, false},
+		{"POST /v1/usage", Usage{Method: http.MethodPost, Endpoint: "/v1/usage", Status: 405}, false},
+		{"POST /v1/models/:id gemini", Usage{Method: http.MethodPost, Endpoint: "/v1/models/:id", Status: 200}, false},
+		{"POST /v1/responses", Usage{Method: http.MethodPost, Endpoint: "/v1/responses", Status: 500}, false},
+		{"POST /v1/chat/completions", Usage{Method: http.MethodPost, Endpoint: "/v1/chat/completions", Status: 429}, false},
+		{"POST /v1 fallback", Usage{Method: http.MethodPost, Endpoint: "/v1", Status: 200}, false},
+		{"GET /v1 fallback", Usage{Method: http.MethodGet, Endpoint: "/v1", Status: 200}, true},
+		{"GET /v1/responses/:id usage update", Usage{Method: http.MethodGet, Endpoint: "/v1/responses/:id", Status: 200, UsageUpdate: true}, false},
+		{"GET /v1/responses/:id without usage update", Usage{Method: http.MethodGet, Endpoint: "/v1/responses/:id", Status: 200, UsageUpdate: false}, true},
+		{"DELETE /v1/responses/:id", Usage{Method: http.MethodDelete, Endpoint: "/v1/responses/:id", Status: 200}, true},
+		{"GET /v1/responses plain HTTP 200", Usage{Method: http.MethodGet, Endpoint: "/v1/responses", Status: 200}, true},
+		{"GET /v1/responses plain HTTP 200 with model header", Usage{Method: http.MethodGet, Endpoint: "/v1/responses", Status: 200, Model: "gpt-5.4"}, true},
+		{"GET /v1/responses websocket 101", Usage{Method: http.MethodGet, Endpoint: "/v1/responses", Status: http.StatusSwitchingProtocols}, false},
+		{"GET /v1/responses websocket error", Usage{Method: http.MethodGet, Endpoint: "/v1/responses", Status: 400, Model: "gpt-ws"}, false},
+		{"GET /v1/realtime websocket", Usage{Method: http.MethodGet, Endpoint: "/v1/realtime", Status: http.StatusSwitchingProtocols}, false},
+		{"POST antigravity generateContent", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:generateContent", Status: 200}, false},
+		{"POST antigravity streamGenerateContent", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:streamGenerateContent", Status: 500}, false},
+		{"POST antigravity loadCodeAssist", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:loadCodeAssist", Status: 200}, true},
+		{"POST antigravity fetchAvailableModels", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:fetchAvailableModels", Status: 200}, true},
+		{"POST antigravity fetchUserInfo", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:fetchUserInfo", Status: 200}, true},
+		{"POST antigravity retrieveUserQuotaSummary", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:retrieveUserQuotaSummary", Status: 200}, true},
+		{"POST antigravity listExperiments", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:listExperiments", Status: 200}, true},
+		{"POST antigravity fetchAdminControls", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:fetchAdminControls", Status: 200}, true},
+		{"POST antigravity writeTrajectoryAcls", Usage{Method: http.MethodPost, Endpoint: "/antigravity/v1internal:writeTrajectoryAcls", Status: 200}, true},
+		{"POST antigravity fallback", Usage{Method: http.MethodPost, Endpoint: "/antigravity", Status: 200}, true},
+		{"GET antigravity generateContent", Usage{Method: http.MethodGet, Endpoint: "/antigravity/v1internal:generateContent", Status: 405}, true},
+		{"telemetry claude", Usage{Method: http.MethodPost, Endpoint: "/claude-code/api-request", Status: 200}, false},
+		{"telemetry codex", Usage{Method: http.MethodPost, Endpoint: "/codex/telemetry", Status: 200}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsServiceRequest(tc.usage); got != tc.want {
+				t.Fatalf("IsServiceRequest(%+v) = %v, want %v", tc.usage, got, tc.want)
+			}
+		})
+	}
+}
+
 func testProxy(api *url.URL, records chan<- Usage) http.Handler {
 	proxy := New(api, func(usage Usage) { records <- usage })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxy.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
 	})
+}
+
+func assertNoRecord(t *testing.T, records <-chan Usage) {
+	t.Helper()
+	select {
+	case record := <-records:
+		t.Fatalf("unexpected usage record: %+v", record)
+	default:
+	}
 }
 
 func nextRecord(t *testing.T, records <-chan Usage) Usage {
