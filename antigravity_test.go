@@ -139,8 +139,11 @@ func TestAntigravityProxyStreamsAndAttributesUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dashboard.Summary.RequestCount != 5 || dashboard.Summary.InputTokens != 130 || dashboard.Summary.CachedInputTokens != 25 || dashboard.Summary.OutputTokens != 10 {
+	if dashboard.Summary.RequestCount != 2 || dashboard.Summary.PricedRequestCount != 2 || dashboard.Summary.InputTokens != 130 || dashboard.Summary.CachedInputTokens != 25 || dashboard.Summary.OutputTokens != 10 {
 		t.Fatalf("incorrect Antigravity totals: %+v", dashboard.Summary)
+	}
+	if len(dashboard.Requests) != 2 {
+		t.Fatalf("got %d Antigravity requests, want 2: %+v", len(dashboard.Requests), dashboard.Requests)
 	}
 	for i, expected := range []struct {
 		model string

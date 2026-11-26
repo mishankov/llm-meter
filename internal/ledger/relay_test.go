@@ -295,3 +295,88 @@ func TestRelayQueuedTokenAndCostCompletionsPreserveReasoningLevel(t *testing.T) 
 		}
 	}
 }
+
+func TestServiceRequestsSkippedWhilePreservingRateLimits(t *testing.T) {
+	store, err := Open(":memory:", pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := t.Context()
+	at := time.Now().UTC()
+	client, _, err := store.CreateClient(ctx, "Relay", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serviceEvents := []proxy.Usage{
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/models", Method: http.MethodGet, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/models/:id", Method: http.MethodGet, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/usage", Method: http.MethodGet, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/responses", Method: http.MethodGet, Status: http.StatusOK, Model: "gpt-5.4"},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:loadCodeAssist", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:fetchAvailableModels", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:fetchUserInfo", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:retrieveUserQuotaSummary", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:listExperiments", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:fetchAdminControls", Method: http.MethodPost, Status: http.StatusOK},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:writeTrajectoryAcls", Method: http.MethodPost, Status: http.StatusOK},
+	}
+	for i, usage := range serviceEvents {
+		if err := store.RecordRelay(ctx, client.ID, "svc-"+strings.Repeat("a", i+1), usage); err != nil {
+			t.Fatalf("RecordRelay service %d: %v", i, err)
+		}
+	}
+
+	var relayEventCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relay_events`).Scan(&relayEventCount); err != nil {
+		t.Fatal(err)
+	}
+	if relayEventCount != 0 {
+		t.Fatalf("service events without rate limits wrote %d rows to relay_events, want 0", relayEventCount)
+	}
+
+	// A service event carrying rate limits must still update allowances without adding a request row.
+	withQuota := proxy.Usage{
+		At: at, Source: "api", Provider: "openai", Endpoint: "/v1/models", Method: http.MethodGet, Status: http.StatusOK,
+		RateLimits: []proxy.RateLimit{{ID: "codex", Window: "primary", WindowMinutes: 300, UsedPercent: 35}},
+	}
+	if err := store.RecordRelay(ctx, client.ID, "svc-with-quota", withQuota); err != nil {
+		t.Fatalf("RecordRelay service with quota: %v", err)
+	}
+
+	// Live proxy records (including rejected non-4xx WebSocket handshakes) must not be reclassified by Record.
+	rejectedHandshake := proxy.Usage{
+		At: at, Source: "api", Provider: "openai", ClientID: client.ID,
+		Endpoint: "/v1/responses", Method: http.MethodGet, Status: http.StatusFound,
+	}
+	if err := store.Record(ctx, rejectedHandshake); err != nil {
+		t.Fatalf("Record live rejected WebSocket handshake: %v", err)
+	}
+
+	// Generation requests (including 4xx/5xx, Gemini POST /v1/models/:id, WebSocket) must still be recorded.
+	generationEvents := []proxy.Usage{
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/responses", Method: http.MethodPost, Status: http.StatusTooManyRequests, Model: "gpt-5.4"},
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/chat/completions", Method: http.MethodPost, Status: http.StatusInternalServerError, Model: "gpt-5.4"},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/v1/models/:id", Method: http.MethodPost, Status: http.StatusOK, Model: "gemini-2.5-pro", HasUsage: true, InputTokens: 10, OutputTokens: 5},
+		{At: at, Source: "api", Provider: "google", Endpoint: "/antigravity/v1internal:streamGenerateContent", Method: http.MethodPost, Status: http.StatusServiceUnavailable, Model: "gemini-4-neon"},
+		{At: at, Source: "api", Provider: "openai", Endpoint: "/v1/responses", Method: http.MethodGet, Status: http.StatusSwitchingProtocols, Model: "gpt-ws", HasUsage: true, InputTokens: 12, OutputTokens: 3},
+	}
+	for i, usage := range generationEvents {
+		if err := store.RecordRelay(ctx, client.ID, "gen-"+strings.Repeat("b", i+1), usage); err != nil {
+			t.Fatalf("RecordRelay generation %d: %v", i, err)
+		}
+	}
+
+	dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCount := int64(len(generationEvents) + 1)
+	if dashboard.Summary.RequestCount != wantCount {
+		t.Fatalf("RequestCount = %d, want %d (requests=%+v)", dashboard.Summary.RequestCount, wantCount, dashboard.Requests)
+	}
+	if len(dashboard.Allowance) != 1 || dashboard.Allowance[0].RemainingPercent != 65 {
+		t.Fatalf("allowance from service event was not saved: %+v", dashboard.Allowance)
+	}
+}
