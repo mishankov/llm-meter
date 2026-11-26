@@ -1,5 +1,6 @@
 export type Source = 'api' | 'codex';
 export type RequestOutcome = '' | 'succeeded' | 'failed';
+export const UNREPORTED_REASONING = 'unreported';
 
 export interface Key {
   id: string;
@@ -44,6 +45,7 @@ export interface UsageRequest extends TokenCounts {
   clientId: string;
   client: string;
   model: string;
+  reasoningLevel?: string;
   endpoint: string;
   method: string;
   status: number;
@@ -63,6 +65,11 @@ export interface UsageBucket extends TokenCounts {
   pricedRequestCount?: number;
 }
 
+export interface ReasoningMixEntry {
+  level: string;
+  share: number;
+}
+
 export interface UsageGroup {
   id: string;
   name: string;
@@ -70,6 +77,8 @@ export interface UsageGroup {
   tokens: number;
   requestCount?: number;
   pricedRequestCount?: number;
+  reasoningMix?: ReasoningMixEntry[];
+  transport?: string;
 }
 
 export interface GroupedUsageBucket {
@@ -95,9 +104,9 @@ export interface Usage extends RequestPage {
   summary: Omit<UsageBucket, 'start'> & { requestCount: number; pricedRequestCount: number };
   buckets: UsageBucket[];
   groupedBuckets?: { models: GroupedUsageBucket[]; clients: GroupedUsageBucket[] };
-  groups: { models: UsageGroup[]; clients: UsageGroup[] };
+  groups: { models: UsageGroup[]; clients: UsageGroup[]; reasoning?: UsageGroup[] };
   allowance: Allowance[];
-  filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[] };
+  filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[]; reasoning?: string[] };
 }
 
 export class APIError extends Error {

@@ -107,3 +107,86 @@ func TestUsageEndpointsCombineSelections(t *testing.T) {
 		t.Errorf("API-only summary count = %d, allowances = %d, want 2 and 0", apiOnly.Summary.RequestCount, len(apiOnly.Allowance))
 	}
 }
+
+func TestUsageEndpointsFilterAndGroupReasoningLevels(t *testing.T) {
+	ctx := t.Context()
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	proxyClient, _, err := store.CreateClient(ctx, "Work Laptop", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otlpClient, _, err := store.CreateClient(ctx, "Claude Code", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, req := range []proxy.Usage{
+		{At: now.Add(-4 * time.Minute), Source: "api", Provider: "openai", ClientID: proxyClient.ID, Model: "gpt-5.4", ReasoningLevel: "high", Endpoint: "/v1/responses", Method: http.MethodPost, Status: http.StatusOK, HasUsage: true, InputTokens: 100, OutputTokens: 20},
+		{At: now.Add(-3 * time.Minute), Source: "api", Provider: "openai", ClientID: proxyClient.ID, Model: "gpt-5.4", ReasoningLevel: "medium", Endpoint: "/v1/responses", Method: http.MethodPost, Status: http.StatusOK, HasUsage: true, InputTokens: 50, OutputTokens: 10},
+		{At: now.Add(-2 * time.Minute), Source: "api", Provider: "anthropic", ClientID: otlpClient.ID, Model: "claude-sonnet-4-6", ReasoningLevel: "", Endpoint: "/claude-code/api-request", Method: http.MethodPost, Status: http.StatusOK, HasUsage: true, InputTokens: 200, OutputTokens: 30},
+	} {
+		if err := store.Record(ctx, req); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+
+	handler := New(store, "dashboard-token", false, slog.New(slog.DiscardHandler))
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"token":"dashboard-token"}`)))
+	cookie := login.Result().Cookies()[0]
+
+	fetch := func(t *testing.T, rawQuery string, wantStatus int) ledger.Dashboard {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/usage?"+rawQuery, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != wantStatus {
+			t.Fatalf("status = %d, want %d (%s)", w.Code, wantStatus, w.Body.String())
+		}
+		var out ledger.Dashboard
+		if wantStatus == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+
+	all := fetch(t, "range=24h", http.StatusOK)
+	if !slices.Equal(all.Filters.Reasoning, []string{"high", "medium", ledger.UnreportedReasoning}) {
+		t.Fatalf("filters.reasoning = %v", all.Filters.Reasoning)
+	}
+	if len(all.Groups.Reasoning) != 3 || all.Groups.Reasoning[2].ID != ledger.UnreportedReasoning || all.Groups.Reasoning[2].Name != "Not reported" {
+		t.Fatalf("groups.reasoning = %+v", all.Groups.Reasoning)
+	}
+	for _, clientGroup := range all.Groups.Clients {
+		if clientGroup.ID == proxyClient.ID && clientGroup.Transport != "Proxy" {
+			t.Fatalf("proxy client transport = %q, want Proxy", clientGroup.Transport)
+		}
+		if clientGroup.ID == otlpClient.ID && clientGroup.Transport != "OTLP" {
+			t.Fatalf("otlp client transport = %q, want OTLP", clientGroup.Transport)
+		}
+	}
+
+	highOnly := fetch(t, "range=24h&reasoning=high", http.StatusOK)
+	if highOnly.Summary.RequestCount != 1 || len(highOnly.Requests) != 1 || highOnly.Requests[0].ReasoningLevel != "high" {
+		t.Fatalf("high filter mismatch: summary=%+v reqs=%+v", highOnly.Summary, highOnly.Requests)
+	}
+
+	unreportedOnly := fetch(t, "range=24h&reasoning=unreported", http.StatusOK)
+	if unreportedOnly.Summary.RequestCount != 1 || len(unreportedOnly.Requests) != 1 || unreportedOnly.Requests[0].ReasoningLevel != "" {
+		t.Fatalf("unreported filter mismatch: summary=%+v reqs=%+v", unreportedOnly.Summary, unreportedOnly.Requests)
+	}
+
+	combined := fetch(t, "range=24h&reasoning=high&reasoning=unreported", http.StatusOK)
+	if combined.Summary.RequestCount != 2 {
+		t.Fatalf("combined reasoning filter count = %d, want 2", combined.Summary.RequestCount)
+	}
+
+	fetch(t, "range=24h&reasoning="+strings.Repeat("x", 65), http.StatusBadRequest)
+}

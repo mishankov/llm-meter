@@ -113,6 +113,14 @@
     return providerLabels[request.provider ?? ''] ?? 'API';
   }
 
+  function isTelemetryEndpoint(endpoint: string) {
+    return endpoint === '/claude-code/api-request' ||
+      endpoint === '/codex/telemetry' ||
+      endpoint === '/gemini-cli/api-request' ||
+      endpoint === '/copilot/chat' ||
+      endpoint === '/opencode/telemetry';
+  }
+
   const rate = (n: number | null | undefined) => n == null ? '—' : money(n);
 </script>
 
@@ -177,7 +185,7 @@
       <table>
         <thead>
           <tr>
-            <th scope="col">Time<span class="compact-only"> / Status</span></th><th scope="col">Model</th><th scope="col" class="wide-only">Client</th>
+            <th scope="col">Time<span class="compact-only"> / Status</span></th><th scope="col">Model</th><th scope="col" class="wide-only">Reasoning</th><th scope="col" class="wide-only">Client</th>
             <th scope="col" class="wide-only">Status</th>
             <th scope="col" class="numeric wide-only">Tokens</th><th scope="col" class="numeric">Usage value (USD)</th><th scope="col" class="details-column"><span class="sr-only">Request actions</span></th>
           </tr>
@@ -194,8 +202,25 @@
                 <span class="compact-only compact-status">{@render requestStatus(request)}</span>
               </td>
               <td class="model-cell">
-                <span class="clip" title={request.model}>{request.model || '—'}</span>
+                <div class="model-line">
+                  <span class="clip" title={request.model}>{request.model || '—'}</span>
+                  <span class="compact-only compact-reasoning">
+                    {#if request.reasoningLevel}
+                      <span class="reasoning-pill" data-level={request.reasoningLevel}>{request.reasoningLevel}</span>
+                    {:else}
+                      <span class="reasoning-pill" data-level="unreported">—</span>
+                    {/if}
+                  </span>
+                </div>
                 <div class="compact-only">{@render attribution(request)}</div>
+              </td>
+              <td class="wide-only reasoning-cell">
+                {#if request.reasoningLevel}
+                  <span class="reasoning-pill" data-level={request.reasoningLevel}>{request.reasoningLevel}</span>
+                {:else}
+                  <span class="muted">—</span>
+                  <span class="reasoning-missing-note">Not reported</span>
+                {/if}
               </td>
               <td class="wide-only client-cell">{@render attribution(request)}</td>
               <td class="wide-only">{@render requestStatus(request)}</td>
@@ -256,6 +281,16 @@
         <div><dt>Client</dt><dd>{selected.client || '—'}</dd></div>
         <div><dt>Model</dt><dd>{selected.model || '—'}</dd></div>
         <div>
+          <dt>Reasoning</dt>
+          <dd>
+            {#if selected.reasoningLevel}
+              <span class="reasoning-pill" data-level={selected.reasoningLevel}>{selected.reasoningLevel}</span>
+            {:else}
+              <span class="muted">— · Not reported{isTelemetryEndpoint(selected.endpoint) ? ' (OpenTelemetry)' : ''}</span>
+            {/if}
+          </dd>
+        </div>
+        <div>
           <dt>Status</dt>
           <dd>{selected.status ? `${requestStatusLabel(selected.status)} · HTTP ${selected.status}` : requestStatusLabel(selected.status)}</dd>
         </div>
@@ -303,6 +338,8 @@
   td { vertical-align: top; }
   .clip, .client-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
   .clip, .request-client { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .model-line { display: flex; align-items: center; gap: 6px; min-inline-size: 0; }
+  .reasoning-missing-note { display: block; margin-block-start: 2px; font-size: 11px; color: var(--muted); }
   .request-source, .amount-method { display: block; margin-block-start: 3px; font-size: 12px; }
   .request-source { color: var(--api-light); }
   .request-source.codex { color: var(--codex-light); }
@@ -331,9 +368,10 @@
     .compact-only { display: inline; }
     th:first-child { inline-size: 25%; }
     .amount-cell, .request-source { overflow-wrap: anywhere; }
+    .model-line { display: block; }
     .model-cell :is(.clip, .request-client) { white-space: nowrap; }
-    .compact-time, .compact-status, div.compact-only { display: block; }
-    .compact-status { margin-block-start: 3px; overflow-wrap: anywhere; }
+    .compact-time, .compact-status, .compact-reasoning, div.compact-only { display: block; }
+    .compact-status, .compact-reasoning { margin-block-start: 3px; overflow-wrap: anywhere; }
     .details-column { inline-size: 68px; }
     :global(.row-details) { min-block-size: 44px; min-inline-size: 54px; padding-inline: 6px; }
     :global(.row-details > svg) { display: none; }

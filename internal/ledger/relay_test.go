@@ -157,3 +157,141 @@ func TestRelayBackgroundUpdatesInAnyOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestRelayCompletionReasoningOverridesRequestInAnyOrder(t *testing.T) {
+	for _, postMetered := range []bool{false, true} {
+		for _, completionFirst := range []bool{false, true} {
+			name := "unmetered-post/post-first"
+			if postMetered && completionFirst {
+				name = "metered-post/completion-first"
+			} else if postMetered {
+				name = "metered-post/post-first"
+			} else if completionFirst {
+				name = "unmetered-post/completion-first"
+			}
+			t.Run(name, func(t *testing.T) {
+				store, err := Open(":memory:", pricing.Catalog{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				ctx := t.Context()
+				at := time.Now().UTC()
+				client, _, err := store.CreateClient(ctx, "Relay", at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				post := proxy.Usage{
+					At: at, Source: "api", Provider: "openai", Method: http.MethodPost,
+					Endpoint: "/v1/responses", Model: "gpt-5.4", ReasoningLevel: "low", ResponseID: "resp-order", Status: http.StatusOK,
+				}
+				if postMetered {
+					post.HasUsage, post.InputTokens, post.OutputTokens = true, 20, 5
+				}
+				completion := proxy.Usage{
+					At: at.Add(time.Second), Source: "api", Provider: "openai", Method: http.MethodGet,
+					Endpoint: "/v1/responses/:id", Model: "gpt-5.4", ReasoningLevel: "high", ResponseID: "resp-order", Status: http.StatusOK,
+					UsageUpdate: true, HasUsage: true, InputTokens: 20, OutputTokens: 5,
+				}
+				if completionFirst {
+					if err := store.RecordRelay(ctx, client.ID, "evt-complete", completion); err != nil {
+						t.Fatal(err)
+					}
+					if err := store.RecordRelay(ctx, client.ID, "evt-post", post); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := store.RecordRelay(ctx, client.ID, "evt-post", post); err != nil {
+						t.Fatal(err)
+					}
+					if err := store.RecordRelay(ctx, client.ID, "evt-complete", completion); err != nil {
+						t.Fatal(err)
+					}
+				}
+				dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got Request
+				for _, req := range dashboard.Requests {
+					if req.Method == http.MethodPost {
+						got = req
+					}
+				}
+				if got.ReasoningLevel != "high" || !got.UsageAvailable || got.InputTokens != 20 || got.OutputTokens != 5 {
+					t.Fatalf("persisted POST request = %+v, want high with 20/5 tokens", got)
+				}
+			})
+		}
+	}
+}
+
+func TestRelayQueuedTokenAndCostCompletionsPreserveReasoningLevel(t *testing.T) {
+	orders := []string{
+		"post tokens cost",
+		"post cost tokens",
+		"tokens cost post",
+		"cost tokens post",
+		"tokens post cost",
+		"cost post tokens",
+	}
+	for _, postMetered := range []bool{false, true} {
+		mode := "unmetered-post"
+		if postMetered {
+			mode = "metered-post"
+		}
+		for _, order := range orders {
+			t.Run(mode+"/"+order, func(t *testing.T) {
+				store, err := Open(":memory:", pricing.Catalog{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				ctx := t.Context()
+				at := time.Now().UTC()
+				client, _, err := store.CreateClient(ctx, "Relay", at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				post := proxy.Usage{
+					At: at, Source: "api", Provider: "openai", Method: http.MethodPost,
+					Endpoint: "/v1/responses", Model: "gpt-5.4", ReasoningLevel: "low", ResponseID: "resp-split", Status: http.StatusOK,
+				}
+				if postMetered {
+					post.HasUsage, post.InputTokens, post.OutputTokens = true, 20, 5
+				}
+				tokens := proxy.Usage{
+					At: at.Add(time.Second), Source: "api", Provider: "openai", Method: http.MethodGet,
+					Endpoint: "/v1/responses/:id", Model: "gpt-5.4", ResponseID: "resp-split", Status: http.StatusOK,
+					UsageUpdate: true, HasUsage: true, InputTokens: 20, OutputTokens: 5,
+				}
+				charge := 0.12
+				cost := proxy.Usage{
+					At: at.Add(2 * time.Second), Source: "api", Provider: "openai", Method: http.MethodGet,
+					Endpoint: "/v1/responses/:id", Model: "gpt-5.4", ReasoningLevel: "high", ResponseID: "resp-split", Status: http.StatusOK,
+					UsageUpdate: true, ReportedCost: &charge,
+				}
+				events := map[string]proxy.Usage{"post": post, "tokens": tokens, "cost": cost}
+				for _, id := range strings.Fields(order) {
+					if err := store.RecordRelay(ctx, client.ID, "evt-"+id, events[id]); err != nil {
+						t.Fatal(err)
+					}
+				}
+				dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got Request
+				for _, req := range dashboard.Requests {
+					if req.Method == http.MethodPost {
+						got = req
+					}
+				}
+				if got.ReasoningLevel != "high" || !got.UsageAvailable || got.InputTokens != 20 || got.OutputTokens != 5 ||
+					got.ReportedCost == nil || *got.ReportedCost != charge {
+					t.Fatalf("persisted POST request = %+v, want high with 20/5 tokens and cost %.2f", got, charge)
+				}
+			})
+		}
+	}
+}

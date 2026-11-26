@@ -43,9 +43,10 @@
     range: string;
     selection: string;
     series?: ChartSeries[];
+    stackedTokens?: boolean;
     onSelect: (start: string) => void;
   }
-  let { buckets, kind, range, selection, series, onSelect }: Props = $props();
+  let { buckets, kind, range, selection, series, stackedTokens = true, onSelect }: Props = $props();
   const tooltip = createTooltipController<string>();
   let viewportWidth = $state(0);
   let plotWidth = $state(0);
@@ -99,7 +100,7 @@
   function describe(bucket: UsageBucket, coverage: string) {
     const values = kind === 'cost'
       ? 'Usage value ' + bucketAmount(bucket)
-      : series ? 'Tokens ' + count(tokens(bucket)) : tokenSeries.map((series, index) =>
+      : series || !stackedTokens ? 'Tokens ' + count(tokens(bucket)) : tokenSeries.map((series, index) =>
         (index ? series.label.toLowerCase() : series.label) + ' ' + count(series.value(bucket))
       ).join(', ');
     const breakdown = series?.flatMap((group) => {
@@ -148,7 +149,7 @@
                 {@render children?.(state)}
               </button>
             {/snippet}
-            <span class="bars" class:stacked={kind === 'tokens' || Boolean(series)} aria-hidden="true">
+            <span class="bars" class:stacked={(kind === 'tokens' && stackedTokens) || Boolean(series)} aria-hidden="true">
               {#if series && !(kind === 'cost' && unpricedBucket(bucket))}
                 {#each series as group (group.key)}
                   {@const amount = group.byStart.get(bucket.start) ?? 0}
@@ -156,6 +157,8 @@
                 {/each}
               {:else if kind === 'cost'}
                 <span class="bar usage-color" class:unpriced-bar={unpricedBucket(bucket)} style:height={height(bucket.estimatedCost)}></span>
+              {:else if !stackedTokens}
+                <span class="bar total-token-bar" style:height={height(tokens(bucket))}></span>
               {:else}
                 {#each tokenSeries as series (series.key)}
                   <span class={'bar ' + series.key + '-color'} data-series={series.key} style:height={height(series.value(bucket))}></span>
@@ -187,7 +190,7 @@
           {@const coverage = partialPricing(bucket)}
           <span>Usage value <b>{bucketAmount(bucket)}</b></span>
           {#if coverage}<span>{coverage}</span>{/if}
-        {:else if series}
+        {:else if series || !stackedTokens}
           <span>Tokens <b>{count(tokens(bucket))}</b></span>
         {:else}
           {#each tokenSeries as series (series.key)}
@@ -221,6 +224,7 @@
   :global(.chart-column:focus-visible) { z-index: 1; outline-offset: -2px; }
   .bars { block-size: 100%; display: flex; align-items: end; justify-content: center; pointer-events: none; }
   .bar { display: inline-block; inline-size: 74%; max-inline-size: 44px; border-radius: 2px 2px 0 0; }
+  .total-token-bar { background: var(--api-light); }
   .unpriced-bar { border-block-end: 2px dotted var(--muted); }
   .bars.stacked { flex-direction: column-reverse; justify-content: flex-start; align-items: center; }
   .stacked .bar { border-radius: 0; }

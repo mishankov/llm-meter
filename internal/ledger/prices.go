@@ -50,6 +50,7 @@ func preparePricing(db *sql.DB) error {
 		{"completion_window", "TEXT NOT NULL DEFAULT ''"},
 		{"service_tier", "TEXT NOT NULL DEFAULT ''"},
 		{"measurement_source", "TEXT NOT NULL DEFAULT 'proxy'"},
+		{"reasoning_level", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if columns[column.name] {
 			continue

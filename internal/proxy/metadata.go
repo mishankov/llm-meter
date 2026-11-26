@@ -56,7 +56,7 @@ type objectSelector struct {
 	key       []byte
 	name      string
 	escapeKey bool
-	flat      bool
+	depth     int
 	value     selectedValue
 }
 
@@ -118,11 +118,16 @@ func (s *objectSelector) feed(b byte) {
 		s.value = selectedValue{}
 		switch s.name {
 		case "type", "id", "model", "service_tier", "prompt_cache_retention", "background", "background_options", "usage", "rate_limits",
-			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId":
+			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId",
+			"reasoning", "reasoning_effort", "output_config", "thinking", "thinkingConfig":
 			s.value.keep = true
-		case "response", "session", "message":
-			if !s.flat && b == '{' {
-				s.value.nested = &objectSelector{flat: true}
+		case "response", "session", "message", "request":
+			if s.depth == 0 && b == '{' {
+				s.value.nested = &objectSelector{depth: s.depth + 1}
+			}
+		case "generationConfig":
+			if s.depth <= 1 && b == '{' {
+				s.value.nested = &objectSelector{depth: s.depth + 1}
 			}
 		}
 		s.value.start(b)

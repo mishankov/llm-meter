@@ -12,27 +12,31 @@ const response: Usage = {
   ],
   groups: {
     models: [
-      { id: 'gpt-api', name: 'gpt-api', estimatedCost: 0, tokens: 330, pricedRequestCount: 1 },
-      { id: 'gpt-codex', name: 'gpt-codex', estimatedCost: .016, tokens: 70 },
+      { id: 'gpt-api', name: 'gpt-api', estimatedCost: 0, tokens: 330, pricedRequestCount: 1, reasoningMix: [{ level: 'high', share: 1 }] },
+      { id: 'gpt-codex', name: 'gpt-codex', estimatedCost: .016, tokens: 70, reasoningMix: [{ level: 'unreported', share: 1 }] },
       { id: 'gpt-6-luna', name: 'gpt-6-luna', estimatedCost: .001346, tokens: 10 },
       { id: 'gpt-unpriced', name: 'gpt-unpriced', estimatedCost: 0, tokens: 0, requestCount: 2, pricedRequestCount: 0 }
     ],
-    clients: [{ id: 'open-code', name: 'OpenCode', estimatedCost: 0, tokens: 330, requestCount: 3, pricedRequestCount: 1 }]
+    clients: [{ id: 'open-code', name: 'OpenCode', estimatedCost: 0, tokens: 330, requestCount: 3, pricedRequestCount: 1, transport: 'Proxy' }],
+    reasoning: [
+      { id: 'high', name: 'high', estimatedCost: 0, tokens: 330, requestCount: 1, pricedRequestCount: 1 },
+      { id: 'unreported', name: 'Not reported', estimatedCost: .016, tokens: 70, requestCount: 3, pricedRequestCount: 1 }
+    ]
   },
   requests: [
-    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
-    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/codex/responses', method: 'WS', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
+    { id: 1, at: '2026-11-20T12:12:00Z', source: 'api', provider: 'opencode-go', clientId: 'open-code', client: 'OpenCode', model: 'gpt-api', reasoningLevel: 'high', endpoint: '/opencode-go/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 300, cachedInputTokens: 60, cacheWriteTokens: 100, outputTokens: 30, cost: 0, rates: null, priceSource: 'provider-reported', reportedListCost: .045, reportedAllowance: .018 },
+    { id: 2, at: '2026-11-20T13:02:00Z', source: 'codex', clientId: '', client: '', model: 'gpt-codex', endpoint: '/codex/telemetry', method: 'POST', status: 200, usageAvailable: true, inputTokens: 60, cachedInputTokens: 0, outputTokens: 10, cost: .016, rates },
     { id: 3, at: '2026-11-20T14:03:00Z', source: 'api', provider: 'google', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/antigravity/v1internal:streamGenerateContent', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null },
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
   ],
   allowance: [{ id: 'open-code-window', label: '5-hour window', remainingPercent: 77, resetsAt: '2026-11-20T16:00:00Z' }],
-  filters: { models: ['gpt-api', 'gpt-codex'], clients: [{ id: 'open-code', name: 'OpenCode' }] },
+  filters: { models: ['gpt-api', 'gpt-codex'], clients: [{ id: 'open-code', name: 'OpenCode' }], reasoning: ['high', 'unreported'] },
   nextCursor: null
 };
 
 async function mockAPI(page: Page, {
-  empty = false, initialClients = [], extraRequests = [], groupedBuckets
-}: { empty?: boolean; initialClients?: Client[]; extraRequests?: UsageRequest[]; groupedBuckets?: Usage['groupedBuckets'] } = {}) {
+  empty = false, initialClients = [], extraRequests = [], extraModels = [], groupedBuckets
+}: { empty?: boolean; initialClients?: Client[]; extraRequests?: UsageRequest[]; extraModels?: Usage['groups']['models']; groupedBuckets?: Usage['groupedBuckets'] } = {}) {
   let authorized = false;
   let keyCount = 0;
   const clients = [...initialClients];
@@ -68,17 +72,22 @@ async function mockAPI(page: Page, {
       for (const { id, name } of clients) filterClients.set(id, { id, name });
       const data = empty ? {
         ...response,
-        summary: { estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, requestCount: 0, pricedRequestCount: 0 },
-        buckets: [], groups: { models: [], clients: [] }, requests: [],
-        filters: { models: [], clients: clients.map(({ id, name }) => ({ id, name })) }
+        summary: { estimatedCost: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0, requestCount: 0, pricedRequestCount: 0 },
+        buckets: [], groups: { models: [], clients: [], reasoning: [] }, requests: [],
+        filters: { models: [], clients: clients.map(({ id, name }) => ({ id, name })), reasoning: [] }
       } : {
         ...response,
         groupedBuckets,
+        groups: {
+          ...response.groups,
+          models: [...response.groups.models, ...extraModels]
+        },
         summary: { ...response.summary, requestCount: response.summary.requestCount + extraRequests.length },
         requests: [...response.requests, ...extraRequests],
         filters: {
           models: [...new Set([...response.filters.models, ...extraRequests.map(({ model }) => model).filter(Boolean)])],
-          clients: [...filterClients.values()]
+          clients: [...filterClients.values()],
+          reasoning: response.filters.reasoning
         }
       };
       const cursor = url.searchParams.get('cursor');
@@ -86,6 +95,7 @@ async function mockAPI(page: Page, {
       const clientIds = url.searchParams.getAll('client').filter(Boolean);
       const sources = url.searchParams.getAll('source').filter(Boolean);
       const models = url.searchParams.getAll('model').filter(Boolean);
+      const reasonings = url.searchParams.getAll('reasoning').filter(Boolean);
       const outcome = url.searchParams.get('outcome');
       const days = url.searchParams.get('range') === '30d' ? 31 : url.searchParams.get('range') === '7d' ? 8 : 0;
       const buckets = days && !empty ? Array.from({ length: days }, (_, index) => ({
@@ -98,6 +108,7 @@ async function mockAPI(page: Page, {
         (!clientIds.length || clientIds.includes(request.clientId)) &&
         (!sources.length || sources.includes(request.source)) &&
         (!models.length || models.includes(request.model)) &&
+        (!reasonings.length || reasonings.includes(request.reasoningLevel || 'unreported')) &&
         (outcome !== 'failed' || request.status === 0 || request.status >= 400) &&
         (outcome !== 'succeeded' || (request.status >= 200 && request.status < 300)) &&
         (!cursor || request.source === 'codex')
@@ -304,6 +315,8 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
     await expect(page.getByRole('button', { name: 'Lock dashboard' })).toBeInViewport({ ratio: 1 });
   }
   await page.setViewportSize({ width: 300, height: 900 });
+  const firstModel = page.locator('#request-table tbody tr').first().locator('.model-cell .clip');
+  expect((await firstModel.boundingBox())!.width).toBeGreaterThan(20);
   await page.getByRole('button', { name: /Show .* more requests/ }).click();
   const provider = page.getByRole('cell', { name: /model-list-value/ }).getByText('OpenRouter', { exact: true });
   const providerFits = await provider.evaluate((element) => {
@@ -377,36 +390,64 @@ test('switches between Tokens and Usage value charts with the keyboard', async (
   await expect(requests.getByText('4 requests on this page')).toBeVisible();
 });
 
-test('groups the timeline by models or clients and puts both breakdowns before the request preview', async ({ page }) => {
-  await mockAPI(page, { groupedBuckets: {
-    models: [
-      { start: initialStart, id: 'gpt-api', tokens: 320, estimatedCost: 0 },
-      { start: initialStart, id: 'gpt-6-luna', tokens: 10, estimatedCost: 0 }
-    ],
-    clients: [{ start: initialStart, id: 'open-code', tokens: 330, estimatedCost: 0 }]
-  }});
+test('splits timeline token mix from reasoning levels and puts breakdowns before the request preview', async ({ page }) => {
+  const { usageQueries } = await mockAPI(page, {
+    extraModels: [
+      { id: 'gpt-extra-1', name: 'gpt-extra-1', estimatedCost: .0002, tokens: 8, pricedRequestCount: 1 },
+      { id: 'gpt-extra-2', name: 'gpt-extra-2', estimatedCost: .0001, tokens: 4, pricedRequestCount: 1 }
+    ]
+  });
   await unlock(page);
   const chart = page.getByRole('region', { name: 'Tokens over time' });
-  const grouping = page.getByRole('radiogroup', { name: 'Group timeline by' });
+  const barStyle = page.getByRole('radiogroup', { name: 'Token bar style' });
   const firstBucket = chart.getByRole('button').first();
-  await expect(firstBucket).toHaveAccessibleName(/Tokens 330 · gpt-6-luna 10, gpt-api 320$/);
+  await expect(firstBucket).toHaveAccessibleName(/Uncached input 140, cached input 60, cache writes 100, output 30$/);
+  const coverage = page.getByRole('region', { name: 'Reasoning coverage', exact: true });
+  await expect(coverage.getByText('25% reported')).toBeVisible();
+  await expect(coverage.getByText('high 25%', { exact: true })).toBeVisible();
+  await expect(coverage.getByText('N/R 75%', { exact: true })).toBeVisible();
   await page.emulateMedia({ forcedColors: 'active' });
-  const backgrounds = (selector: string) => chart.locator(selector).evaluateAll((elements) =>
+  const fills = await chart.locator('.chart-column:first-child .bar').evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).backgroundImage));
-  const fills = await backgrounds('.chart-column:first-child .group-bar');
-  expect(new Set(fills).size).toBe(2);
-  expect(await backgrounds('.group-swatch')).toEqual(fills);
+  expect(new Set(fills).size).toBeGreaterThanOrEqual(3);
   await page.emulateMedia({ forcedColors: 'none' });
-  await grouping.getByRole('radio', { name: 'Models' }).press('ArrowRight');
-  await expect(grouping.getByRole('radio', { name: 'Clients' })).toBeChecked();
-  await expect(chart.getByRole('button').first()).toHaveAccessibleName(/Tokens 330 · OpenCode 330$/);
+  await barStyle.getByRole('radio', { name: 'Token mix' }).press('ArrowRight');
+  await expect(barStyle.getByRole('radio', { name: 'Total' })).toBeChecked();
+  await expect(firstBucket.locator('.bars > span')).toHaveCount(1);
+  await expect(firstBucket).toHaveAccessibleName(/Tokens 330$/);
 
-  const breakdown = page.getByRole('region', { name: 'Period totals and shares' });
+  const reasoningSection = page.getByRole('region', { name: 'Reasoning levels' });
+  const hideUnreported = reasoningSection.getByRole('button', { name: 'Hide unreported' });
+  await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toBeVisible();
+  await hideUnreported.press('Enter');
+  await expect(hideUnreported).toHaveAttribute('aria-pressed', 'true');
+  await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toHaveCount(0);
+  await hideUnreported.press('Space');
+  await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toBeVisible();
+
+  const highBar = reasoningSection.getByRole('button', { name: 'Filter by reasoning high' });
+  await highBar.press('Enter');
+  await expect(highBar).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Reasoning' })).toBeFocused();
+  await expect.poll(() => usageQueries.at(-1)?.get('reasoning')).toBe('high');
+  await page.getByRole('button', { name: 'Reset filters' }).click();
+  await expect.poll(() => usageQueries.at(-1)?.get('reasoning')).toBeNull();
+
+  const breakdown = page.getByRole('region', { name: 'Breakdown by model & client' });
   const model = breakdown.getByRole('row', { name: /gpt-codex/ });
+  await expect(model.getByText('Not reported', { exact: true })).toBeVisible();
   await expect(model.getByText('$0.02', { exact: true })).toBeVisible();
   await expect(model.getByText('70', { exact: true })).toBeVisible();
   await expect(model.getByText('17.5%', { exact: true })).toBeVisible();
+  const otherRow = breakdown.getByRole('row', { name: /Other \(1 model\)/ });
+  await expect(otherRow.getByText('Unpriced', { exact: true })).toBeVisible();
+  const toggleModels = breakdown.getByRole('button', { name: 'Show all 6' });
+  await toggleModels.focus();
+  await toggleModels.press('Enter');
+  await expect(breakdown.getByRole('button', { name: 'Show top 5' })).toBeFocused();
   await expect(breakdown.getByRole('row', { name: /gpt-unpriced/ }).getByText('Unpriced', { exact: true })).toBeVisible();
+  await breakdown.getByRole('button', { name: 'Show top 5' }).press('Space');
+  await expect(breakdown.getByRole('button', { name: 'Show all 6' })).toBeFocused();
   const mixed = breakdown.getByRole('row', { name: /OpenCode/ });
   await expect(mixed.getByText('$0.00', { exact: true })).toBeVisible();
   await expect(mixed.getByText('1 of 3 priced', { exact: true })).toBeVisible();
@@ -420,6 +461,7 @@ test('groups the timeline by models or clients and puts both breakdowns before t
   const more = requests.getByRole('button', { name: 'Show 1 more request' });
   await expect(rows).toHaveCount(3);
   await expect(requests.getByText('Showing 3 of 4 requests on this page')).toBeVisible();
+  await expect(rows.first().locator('.reasoning-cell').getByText('high', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'View requests' }).press('Enter');
   await expect(requests.getByRole('heading', { name: 'Requests' })).toBeFocused();
   await more.press('Enter');
@@ -431,12 +473,22 @@ test('groups the timeline by models or clients and puts both breakdowns before t
   await fewer.press('Space');
   await expect(rows).toHaveCount(3);
   await expect(more).toBeFocused();
+
+  await requests.getByRole('button', { name: /Details for gpt-api/ }).press('Enter');
+  const detail = page.getByRole('dialog', { name: 'Request details' });
+  await expect(detail.getByText('Reasoning', { exact: true })).toBeVisible();
+  await expect(detail.getByText('high', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await requests.getByRole('button', { name: /Details for gpt-codex/ }).press('Enter');
+  await expect(detail.getByText(/Not reported \(OpenTelemetry\)/)).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
 test('aligns breakdown amounts and keeps model filters keyboard-operable', async ({ page }) => {
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
-  const breakdown = page.getByRole('region', { name: 'By model' });
+  const breakdown = page.getByRole('region', { name: 'By model', exact: true });
   const amounts = breakdown.locator('tbody td:nth-child(2)');
   await expect(amounts).toHaveCount(4);
 

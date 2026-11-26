@@ -134,7 +134,7 @@
   }
 
   function viewUsage(id: string, outcome: RequestOutcome = '') {
-    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id ? [id] : [], source: [], model: [], bucket: '', outcome }, outcome !== '');
+    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id ? [id] : [], source: [], model: [], reasoning: [], bucket: '', outcome }, outcome !== '');
   }
 
   function filtersChanged<Name extends keyof UsageFilters>(name: Name, value: UsageFilters[Name]) {

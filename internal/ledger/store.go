@@ -414,14 +414,15 @@ func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage
 	}
 	// A replay of an Antigravity stream can report more usage for the same response.
 	// Keep the original request and replace its usage and price together.
-	_, err := tx.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, endpoint,
+	_, err := tx.ExecContext(ctx, `INSERT INTO requests (time, source, client_id, model, reasoning_level, endpoint,
         method, status, response_id, usage_available, input_tokens, cached_input_tokens,
         cache_write_tokens, cache_write_12h_tokens, output_tokens, cost, input_rate, cached_input_rate,
 		cache_write_rate, cache_write_12h_rate, output_rate, provider, price_source,
 		reported_cost, reported_list_cost, reported_allowance, service_tier, completion_window, measurement_source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO UPDATE SET
             model = COALESCE(NULLIF(excluded.model, ''), requests.model),
+            reasoning_level = COALESCE(NULLIF(excluded.reasoning_level, ''), requests.reasoning_level),
             input_tokens = excluded.input_tokens, cached_input_tokens = excluded.cached_input_tokens,
             cache_write_tokens = excluded.cache_write_tokens, cache_write_12h_tokens = excluded.cache_write_12h_tokens,
             output_tokens = excluded.output_tokens, cost = excluded.cost, input_rate = excluded.input_rate,
@@ -441,7 +442,7 @@ func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage
                 OR excluded.cache_write_tokens > requests.cache_write_tokens
                 OR excluded.cache_write_12h_tokens > requests.cache_write_12h_tokens
                 OR excluded.output_tokens > requests.output_tokens)`,
-		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.Endpoint, usage.Method, usage.Status,
+		at.UnixMilli(), usage.Source, usage.ClientID, usage.Model, usage.ReasoningLevel, usage.Endpoint, usage.Method, usage.Status,
 		usage.ResponseID, usage.HasUsage, usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteTokens,
 		usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate, write12hRate, outputRate,
 		usage.Provider, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, usage.ServiceTier, usage.CompletionWindow, measurementSource)

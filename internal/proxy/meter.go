@@ -35,6 +35,9 @@ func (m *httpMeter) finish() {
 	if m.request != nil {
 		request := m.request.message()
 		m.usage.applyFallback(request.wireMetadata)
+		if request.Request != nil {
+			m.usage.applyFallback(*request.Request)
+		}
 		if m.usage.Method == http.MethodPost && m.usage.Endpoint == "/v1/responses" && request.Background && request.BackgroundOptions != nil {
 			switch request.BackgroundOptions.CompletionWindow {
 			case "2h", "8h":
@@ -53,9 +56,91 @@ func (m *httpMeter) observeEvent(message wireMessage) {
 }
 
 type wireMetadata struct {
-	Model          string `json:"model"`
-	ServiceTier    string `json:"service_tier"`
-	CacheRetention string `json:"prompt_cache_retention"`
+	Model            string                `json:"model"`
+	ServiceTier      string                `json:"service_tier"`
+	CacheRetention   string                `json:"prompt_cache_retention"`
+	ReasoningEffort  string                `json:"reasoning_effort"`
+	Reasoning        *wireReasoning        `json:"reasoning"`
+	OutputConfig     *wireOutputConfig     `json:"output_config"`
+	Thinking         *wireThinking         `json:"thinking"`
+	GenerationConfig *wireGenerationConfig `json:"generationConfig"`
+}
+
+type wireReasoning struct {
+	Effort string `json:"effort"`
+}
+
+type wireOutputConfig struct {
+	Effort string `json:"effort"`
+}
+
+type wireThinking struct {
+	Type string `json:"type"`
+}
+
+type wireGenerationConfig struct {
+	ThinkingConfig *struct {
+		ThinkingLevel  string `json:"thinkingLevel"`
+		ThinkingBudget *int64 `json:"thinkingBudget"`
+	} `json:"thinkingConfig"`
+}
+
+func (m wireMetadata) reasoningLevel() string {
+	if level := NormalizeReasoningLevel(m.ReasoningEffort); level != "" {
+		return level
+	}
+	if m.Reasoning != nil {
+		if level := NormalizeReasoningLevel(m.Reasoning.Effort); level != "" {
+			return level
+		}
+	}
+	if m.OutputConfig != nil {
+		if level := NormalizeReasoningLevel(m.OutputConfig.Effort); level != "" {
+			return level
+		}
+	}
+	if m.GenerationConfig != nil && m.GenerationConfig.ThinkingConfig != nil {
+		tc := m.GenerationConfig.ThinkingConfig
+		if level := NormalizeReasoningLevel(tc.ThinkingLevel); level != "" {
+			return level
+		}
+		if tc.ThinkingBudget != nil && *tc.ThinkingBudget == 0 {
+			return "none"
+		}
+	}
+	if m.Thinking != nil {
+		switch strings.ToLower(strings.TrimSpace(m.Thinking.Type)) {
+		case "disabled":
+			return "none"
+		case "adaptive":
+			return "adaptive"
+		}
+	}
+	return ""
+}
+
+// NormalizeReasoningLevel maps provider reasoning effort labels to canonical lowercase values.
+func NormalizeReasoningLevel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "disabled", "off":
+		return "none"
+	case "minimal":
+		return "minimal"
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh":
+		return "xhigh"
+	case "max":
+		return "max"
+	case "adaptive":
+		return "adaptive"
+	default:
+		return ""
+	}
 }
 
 type wireResult struct {
@@ -76,6 +161,7 @@ type wireMessage struct {
 	Response          *wireResult     `json:"response"`
 	Message           *wireResult     `json:"message"`
 	Session           *wireMetadata   `json:"session"`
+	Request           *wireMetadata   `json:"request"`
 	Background        bool            `json:"background"`
 	BackgroundOptions *struct {
 		CompletionWindow string `json:"completion_window"`
@@ -169,6 +255,9 @@ func (u *Usage) applyResult(result wireResult, captureUsage bool) {
 	}
 	if result.CacheRetention != "" {
 		u.CacheRetention = result.CacheRetention
+	}
+	if level := result.reasoningLevel(); level != "" {
+		u.ReasoningLevel = level
 	}
 	if !captureUsage {
 		return
@@ -317,6 +406,9 @@ func (u *Usage) applyFallback(metadata wireMetadata) {
 	}
 	if u.CacheRetention == "" {
 		u.CacheRetention = metadata.CacheRetention
+	}
+	if u.ReasoningLevel == "" {
+		u.ReasoningLevel = metadata.reasoningLevel()
 	}
 }
 
