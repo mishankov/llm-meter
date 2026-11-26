@@ -119,13 +119,13 @@ func (s *objectSelector) feed(b byte) {
 		switch s.name {
 		case "type", "id", "model", "service_tier", "prompt_cache_retention", "background", "background_options", "usage", "rate_limits",
 			"metered_limit_name", "limit_name", "stream_id", "status", "usageMetadata", "modelVersion", "responseId",
-			"reasoning", "reasoning_effort", "output_config", "thinking", "thinkingConfig":
+			"reasoning", "reasoning_effort", "output_config", "thinking", "thinkingConfig", "thinking_config":
 			s.value.keep = true
 		case "response", "session", "message", "request":
 			if s.depth == 0 && b == '{' {
 				s.value.nested = &objectSelector{depth: s.depth + 1}
 			}
-		case "generationConfig":
+		case "generationConfig", "generation_config":
 			if s.depth <= 1 && b == '{' {
 				s.value.nested = &objectSelector{depth: s.depth + 1}
 			}

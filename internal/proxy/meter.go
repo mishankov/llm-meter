@@ -2,21 +2,30 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 )
 
+const maxGzipRequestMetadataBytes = 32 << 20
+
 type httpMeter struct {
-	usage        Usage
-	captureUsage bool
-	request      *metadataCapture
-	response     *metadataCapture
-	sse          *eventStream
+	usage         Usage
+	captureUsage  bool
+	request       *metadataCapture
+	requestCloser io.Closer
+	response      *metadataCapture
+	sse           *eventStream
 }
 
 func (m *httpMeter) finish() {
+	if m.requestCloser != nil {
+		_ = m.requestCloser.Close()
+	}
 	if m.response != nil {
 		message := m.response.message()
 		m.usage.applyMessage(message, m.captureUsage)
@@ -56,14 +65,15 @@ func (m *httpMeter) observeEvent(message wireMessage) {
 }
 
 type wireMetadata struct {
-	Model            string                `json:"model"`
-	ServiceTier      string                `json:"service_tier"`
-	CacheRetention   string                `json:"prompt_cache_retention"`
-	ReasoningEffort  string                `json:"reasoning_effort"`
-	Reasoning        *wireReasoning        `json:"reasoning"`
-	OutputConfig     *wireOutputConfig     `json:"output_config"`
-	Thinking         *wireThinking         `json:"thinking"`
-	GenerationConfig *wireGenerationConfig `json:"generationConfig"`
+	Model                 string            `json:"model"`
+	ServiceTier           string            `json:"service_tier"`
+	CacheRetention        string            `json:"prompt_cache_retention"`
+	ReasoningEffort       string            `json:"reasoning_effort"`
+	Reasoning             *wireReasoning    `json:"reasoning"`
+	OutputConfig          *wireOutputConfig `json:"output_config"`
+	Thinking              *wireThinking     `json:"thinking"`
+	GenerationConfig      json.RawMessage   `json:"generationConfig"`
+	GenerationConfigSnake json.RawMessage   `json:"generation_config"`
 }
 
 type wireReasoning struct {
@@ -76,13 +86,6 @@ type wireOutputConfig struct {
 
 type wireThinking struct {
 	Type string `json:"type"`
-}
-
-type wireGenerationConfig struct {
-	ThinkingConfig *struct {
-		ThinkingLevel  string `json:"thinkingLevel"`
-		ThinkingBudget *int64 `json:"thinkingBudget"`
-	} `json:"thinkingConfig"`
 }
 
 func (m wireMetadata) reasoningLevel() string {
@@ -99,13 +102,9 @@ func (m wireMetadata) reasoningLevel() string {
 			return level
 		}
 	}
-	if m.GenerationConfig != nil && m.GenerationConfig.ThinkingConfig != nil {
-		tc := m.GenerationConfig.ThinkingConfig
-		if level := NormalizeReasoningLevel(tc.ThinkingLevel); level != "" {
+	for _, raw := range []json.RawMessage{m.GenerationConfig, m.GenerationConfigSnake} {
+		if level := generationConfigReasoningLevel(raw); level != "" {
 			return level
-		}
-		if tc.ThinkingBudget != nil && *tc.ThinkingBudget == 0 {
-			return "none"
 		}
 	}
 	if m.Thinking != nil {
@@ -119,9 +118,58 @@ func (m wireMetadata) reasoningLevel() string {
 	return ""
 }
 
+func generationConfigReasoningLevel(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var gc struct {
+		ThinkingConfig      json.RawMessage `json:"thinkingConfig"`
+		ThinkingConfigSnake json.RawMessage `json:"thinking_config"`
+	}
+	if json.Unmarshal(raw, &gc) != nil {
+		return ""
+	}
+	for _, tcRaw := range []json.RawMessage{gc.ThinkingConfig, gc.ThinkingConfigSnake} {
+		if len(tcRaw) == 0 {
+			continue
+		}
+		var tc struct {
+			ThinkingLevel       json.RawMessage `json:"thinkingLevel"`
+			ThinkingLevelSnake  json.RawMessage `json:"thinking_level"`
+			ThinkingBudget      json.RawMessage `json:"thinkingBudget"`
+			ThinkingBudgetSnake json.RawMessage `json:"thinking_budget"`
+		}
+		if json.Unmarshal(tcRaw, &tc) != nil {
+			continue
+		}
+		for _, levelRaw := range []json.RawMessage{tc.ThinkingLevel, tc.ThinkingLevelSnake} {
+			var s string
+			if len(levelRaw) != 0 && json.Unmarshal(levelRaw, &s) == nil {
+				if level := NormalizeReasoningLevel(s); level != "" {
+					return level
+				}
+			}
+		}
+		for _, budgetRaw := range []json.RawMessage{tc.ThinkingBudget, tc.ThinkingBudgetSnake} {
+			var budget *int64
+			if len(budgetRaw) != 0 && json.Unmarshal(budgetRaw, &budget) == nil && budget != nil {
+				switch *budget {
+				case 0:
+					return "none"
+				case -1:
+					return "adaptive"
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // NormalizeReasoningLevel maps provider reasoning effort labels to canonical lowercase values.
 func NormalizeReasoningLevel(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.TrimPrefix(normalized, "thinking_level_")
+	switch normalized {
 	case "none", "disabled", "off":
 		return "none"
 	case "minimal":
@@ -527,4 +575,43 @@ func (s *eventStream) emit() {
 		s.handle(s.data.message())
 		s.data = nil
 	}
+}
+
+type gzipMetadataObserver struct {
+	pw   *io.PipeWriter
+	done chan struct{}
+	once sync.Once
+}
+
+func newGzipMetadataObserver(dst io.Writer) *gzipMetadataObserver {
+	pr, pw := io.Pipe()
+	g := &gzipMetadataObserver{
+		pw:   pw,
+		done: make(chan struct{}),
+	}
+	go func() {
+		defer close(g.done)
+		defer pr.Close()
+		zr, err := gzip.NewReader(pr)
+		if err != nil {
+			return
+		}
+		defer zr.Close()
+		_, _ = io.Copy(dst, io.LimitReader(zr, maxGzipRequestMetadataBytes))
+	}()
+	return g
+}
+
+func (g *gzipMetadataObserver) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	_, _ = g.pw.Write(p)
+	return len(p), nil
+}
+
+func (g *gzipMetadataObserver) Close() error {
+	g.once.Do(func() { _ = g.pw.Close() })
+	<-g.done
+	return nil
 }
