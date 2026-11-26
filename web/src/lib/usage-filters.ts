@@ -1,7 +1,7 @@
 import type { RequestOutcome } from './api';
 
 export const defaultFilters = {
-  range: '24h', source: [] as string[], client: [] as string[], model: [] as string[],
+  range: '24h', source: [] as string[], client: [] as string[], model: [] as string[], reasoning: [] as string[],
   bucket: '', outcome: '' as RequestOutcome
 };
 
@@ -10,7 +10,7 @@ export type UsageFilterChange = <Name extends keyof UsageFilters>(name: Name, va
 
 export function overviewParams(filters: UsageFilters) {
   const query = new URLSearchParams({ range: filters.range });
-  for (const name of ['source', 'client', 'model'] as const) {
+  for (const name of ['source', 'client', 'model', 'reasoning'] as const) {
     for (const value of filters[name]) query.append(name, value);
   }
   return query;
@@ -37,6 +37,7 @@ export function parseUsageFilters(params: URLSearchParams): UsageFilters {
     source: [...new Set(params.getAll('source').filter((source) => source === 'api' || source === 'codex'))],
     client: filterText(params.getAll('client'), 100),
     model: filterText(params.getAll('model'), 500),
+    reasoning: filterText(params.getAll('reasoning'), 64),
     bucket: params.get('bucket') ?? '',
     outcome: outcome === 'succeeded' || outcome === 'failed' ? outcome : ''
   };

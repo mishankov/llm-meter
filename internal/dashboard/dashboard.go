@@ -252,7 +252,8 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	f := ledger.Filter{
 		End: now, Interval: time.Hour,
 		Sources: selectedValues(values["source"]), Clients: selectedValues(values["client"]), Models: selectedValues(values["model"]),
-		Outcome: values.Get("outcome"),
+		Reasonings: selectedValues(values["reasoning"]),
+		Outcome:    values.Get("outcome"),
 	}
 	switch values.Get("range") {
 	case "", "24h":
@@ -275,8 +276,9 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 		return f, errors.New("Invalid request outcome")
 	}
 	if slices.ContainsFunc(f.Clients, func(client string) bool { return len(client) > 100 }) ||
-		slices.ContainsFunc(f.Models, func(model string) bool { return len(model) > 500 }) {
-		return f, errors.New("Invalid client or model filter")
+		slices.ContainsFunc(f.Models, func(model string) bool { return len(model) > 500 }) ||
+		slices.ContainsFunc(f.Reasonings, func(level string) bool { return len(level) > 64 }) {
+		return f, errors.New("Invalid client, model, or reasoning filter")
 	}
 	if value := values.Get("bucket"); value != "" {
 		start, err := time.Parse(time.RFC3339, value)

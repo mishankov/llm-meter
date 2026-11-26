@@ -103,3 +103,30 @@ func TestAntigravityRelayReportsGoogleUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestReasoningLevelValidationAndRoundTrip(t *testing.T) {
+	event, err := NewEvent(proxy.Usage{
+		At: time.Now(), Provider: "openai", Endpoint: "/v1/responses", Method: http.MethodPost,
+		Status: http.StatusOK, Model: "gpt-5.4", ReasoningLevel: "HIGH", HasUsage: true, InputTokens: 20, OutputTokens: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.ReasoningLevel != "high" {
+		t.Fatalf("normalized ReasoningLevel = %q, want high", event.ReasoningLevel)
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Decode(bytes.NewReader(payload))
+	if err != nil || decoded.Usage().ReasoningLevel != "high" {
+		t.Fatalf("round-trip failed: decoded=%+v, err=%v", decoded, err)
+	}
+
+	event.ReasoningLevel = "not-a-valid-level"
+	badPayload, _ := json.Marshal(event)
+	if _, err := Decode(bytes.NewReader(badPayload)); err == nil {
+		t.Fatal("accepted an unknown reasoning level")
+	}
+}

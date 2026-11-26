@@ -34,6 +34,7 @@ type Event struct {
 	At                    time.Time   `json:"at"`
 	Provider              string      `json:"provider,omitempty"`
 	Model                 string      `json:"model,omitempty"`
+	ReasoningLevel        string      `json:"reasoningLevel,omitempty"`
 	Endpoint              string      `json:"endpoint"`
 	Method                string      `json:"method"`
 	Status                int         `json:"status"`
@@ -70,6 +71,7 @@ var (
 	identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@+~-]{0,255}$`)
 	providers  = []string{"openai", "opencode-go", "openrouter", "opencode", "anthropic", "deepseek", "groq", "mistral", "xai", "google"}
 	tiers      = []string{"auto", "default", "standard", "scale", "batch", "flex", "fast", "priority", "ultrafast", "unknown"}
+	reasonings = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "adaptive"}
 	methods    = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions, "OTHER"}
 )
 
@@ -79,6 +81,7 @@ func NewEvent(usage proxy.Usage) (Event, error) {
 	e := Event{
 		ID: rand.Text(), At: usage.At.UTC(), Provider: usage.Provider, Endpoint: endpointName(usage.Endpoint),
 		Method: usage.Method, Status: usage.Status,
+		ReasoningLevel:   knownValue(proxy.NormalizeReasoningLevel(usage.ReasoningLevel), reasonings),
 		ServiceTier:      serviceTier(usage.ServiceTier),
 		CompletionWindow: knownValue(usage.CompletionWindow, []string{"2h", "8h"}),
 		CacheRetention:   knownValue(usage.CacheRetention, []string{"12h"}),
@@ -134,7 +137,8 @@ func (e Event) validate() error {
 		return errors.New("invalid request metadata")
 	}
 	if e.ServiceTier != knownValue(e.ServiceTier, tiers) || e.CompletionWindow != knownValue(e.CompletionWindow, []string{"2h", "8h"}) ||
-		e.CacheRetention != knownValue(e.CacheRetention, []string{"12h"}) || (e.UsageUpdate && e.Method != http.MethodGet) {
+		e.CacheRetention != knownValue(e.CacheRetention, []string{"12h"}) || e.ReasoningLevel != knownValue(e.ReasoningLevel, reasonings) ||
+		(e.UsageUpdate && e.Method != http.MethodGet) {
 		return errors.New("invalid pricing metadata")
 	}
 	if (e.Status == 0 && len(e.RateLimits) == 0) || (e.Status != 0 && (e.Status < 100 || e.Status > 599)) || len(e.RateLimits) > 32 {
@@ -199,7 +203,7 @@ func (e Event) Usage() proxy.Usage {
 		provider = "google"
 	}
 	usage := proxy.Usage{
-		At: e.At, Source: source, Provider: provider, Model: e.Model, Endpoint: e.Endpoint, Method: e.Method, Status: e.Status,
+		At: e.At, Source: source, Provider: provider, Model: e.Model, ReasoningLevel: e.ReasoningLevel, Endpoint: e.Endpoint, Method: e.Method, Status: e.Status,
 		ResponseID: e.ResponseIDHash, ServiceTier: e.ServiceTier, CompletionWindow: e.CompletionWindow, CacheRetention: e.CacheRetention,
 		InputTokens: e.InputTokens, CachedInputTokens: e.CachedInputTokens, CacheWriteTokens: e.CacheWriteTokens,
 		CacheWrite12hTokens: e.CacheWrite12hTokens, OutputTokens: e.OutputTokens,

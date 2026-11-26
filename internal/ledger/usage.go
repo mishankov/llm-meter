@@ -16,17 +16,18 @@ import (
 )
 
 type Filter struct {
-	Start, End               time.Time
-	Interval                 time.Duration
-	Sources, Clients, Models []string
-	Outcome                  string
-	Bucket                   *time.Time
-	Cursor                   int64
+	Start, End                           time.Time
+	Interval                             time.Duration
+	Sources, Clients, Models, Reasonings []string
+	Outcome                              string
+	Bucket                               *time.Time
+	Cursor                               int64
 }
 
 const (
-	OutcomeSucceeded = "succeeded"
-	OutcomeFailed    = "failed"
+	OutcomeSucceeded    = "succeeded"
+	OutcomeFailed       = "failed"
+	UnreportedReasoning = "unreported"
 )
 
 type Totals struct {
@@ -44,13 +45,20 @@ type Bucket struct {
 	Totals
 }
 
+type ReasoningMixEntry struct {
+	Level string  `json:"level"`
+	Share float64 `json:"share"`
+}
+
 type Group struct {
-	ID                 string  `json:"id"`
-	Name               string  `json:"name"`
-	EstimatedCost      float64 `json:"estimatedCost"`
-	Tokens             int64   `json:"tokens"`
-	RequestCount       int64   `json:"requestCount"`
-	PricedRequestCount int64   `json:"pricedRequestCount"`
+	ID                 string              `json:"id"`
+	Name               string              `json:"name"`
+	EstimatedCost      float64             `json:"estimatedCost"`
+	Tokens             int64               `json:"tokens"`
+	RequestCount       int64               `json:"requestCount"`
+	PricedRequestCount int64               `json:"pricedRequestCount"`
+	ReasoningMix       []ReasoningMixEntry `json:"reasoningMix,omitempty"`
+	Transport          string              `json:"transport,omitempty"`
 }
 
 type GroupedBucket struct {
@@ -74,6 +82,7 @@ type Request struct {
 	ClientID            string         `json:"clientId"`
 	Client              string         `json:"client"`
 	Model               string         `json:"model"`
+	ReasoningLevel      string         `json:"reasoningLevel,omitempty"`
 	Endpoint            string         `json:"endpoint"`
 	Method              string         `json:"method"`
 	Status              int            `json:"status"`
@@ -107,8 +116,9 @@ type Dashboard struct {
 	Summary Totals   `json:"summary"`
 	Buckets []Bucket `json:"buckets"`
 	Groups  struct {
-		Models  []Group `json:"models"`
-		Clients []Group `json:"clients"`
+		Models    []Group `json:"models"`
+		Clients   []Group `json:"clients"`
+		Reasoning []Group `json:"reasoning"`
 	} `json:"groups"`
 	GroupedBuckets struct {
 		Models  []GroupedBucket `json:"models"`
@@ -117,8 +127,9 @@ type Dashboard struct {
 	RequestPage
 	Allowance []Allowance `json:"allowance"`
 	Filters   struct {
-		Models  []string `json:"models"`
-		Clients []Group  `json:"clients"`
+		Models    []string `json:"models"`
+		Clients   []Group  `json:"clients"`
+		Reasoning []string `json:"reasoning"`
 	} `json:"filters"`
 }
 
@@ -153,7 +164,19 @@ func (f Filter) conditions() (string, []any) {
 	args := []any{f.Start.UnixMilli(), f.End.UnixMilli()}
 	where, args = withSelection(where, args, "r.source", f.Sources)
 	where, args = withSelection(where, args, "r.client_id", f.Clients)
-	return withSelection(where, args, "r.model", f.Models)
+	where, args = withSelection(where, args, "r.model", f.Models)
+	if len(f.Reasonings) == 0 {
+		return where, args
+	}
+	mapped := make([]string, len(f.Reasonings))
+	for i, value := range f.Reasonings {
+		if value == UnreportedReasoning {
+			mapped[i] = ""
+		} else {
+			mapped[i] = value
+		}
+	}
+	return withSelection(where, args, "r.reasoning_level", mapped)
 }
 
 func withSelection(where string, args []any, column string, values []string) (string, []any) {
@@ -170,24 +193,28 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 	for at := first; !at.After(filter.End); at = at.Add(filter.Interval) {
 		result.Buckets = append(result.Buckets, Bucket{Start: at})
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.time / ?, r.client_id, c.name, r.model,
+	rows, err := s.db.QueryContext(ctx, `SELECT r.time / ?, r.client_id, c.name, r.model, r.reasoning_level,
+        CASE WHEN r.endpoint IN ('/claude-code/api-request', '/codex/telemetry', '/gemini-cli/api-request', '/copilot/chat', '/opencode/telemetry') THEN 1 ELSE 0 END,
         COALESCE(SUM(r.cost), 0), SUM(CASE WHEN r.usage_available THEN r.input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cached_input_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.cache_write_tokens ELSE 0 END),
         SUM(CASE WHEN r.usage_available THEN r.output_tokens ELSE 0 END), COUNT(*), COUNT(r.cost)
         FROM requests r JOIN clients c ON c.id = r.client_id`+where+
-		` GROUP BY 1, 2, 3, 4`, append([]any{filter.Interval.Milliseconds()}, args...)...)
+		` GROUP BY 1, 2, 3, 4, 5, 6`, append([]any{filter.Interval.Milliseconds()}, args...)...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	models, clients := make(map[string]Group), make(map[string]Group)
+	models, clients, reasonings := make(map[string]Group), make(map[string]Group), make(map[string]Group)
+	modelReasoningCounts := make(map[string]map[string]int64)
+	clientTransports := make(map[string]uint8)
 	modelBuckets, clientBuckets := make(map[groupedBucketKey]GroupedBucket), make(map[groupedBucketKey]GroupedBucket)
 	for rows.Next() {
 		var timeBucket int64
-		var client, name, model string
+		var client, name, model, reasoningLevel string
+		var isOTLP int
 		var totals Totals
-		if err := rows.Scan(&timeBucket, &client, &name, &model, &totals.EstimatedCost, &totals.InputTokens,
+		if err := rows.Scan(&timeBucket, &client, &name, &model, &reasoningLevel, &isOTLP, &totals.EstimatedCost, &totals.InputTokens,
 			&totals.CachedInputTokens, &totals.CacheWriteTokens, &totals.OutputTokens, &totals.RequestCount, &totals.PricedRequestCount); err != nil {
 			return err
 		}
@@ -199,13 +226,57 @@ func (s *Store) collectTotals(ctx context.Context, filter Filter, where string, 
 		if modelName == "" {
 			modelName = "Unknown model"
 		}
+		reasoningID, reasoningName := reasoningLevel, reasoningLevel
+		if reasoningID == "" {
+			reasoningID, reasoningName = UnreportedReasoning, "Not reported"
+		}
 		addGroup(models, model, modelName, totals)
 		addGroup(clients, client, name, totals)
+		addGroup(reasonings, reasoningID, reasoningName, totals)
+		if modelReasoningCounts[model] == nil {
+			modelReasoningCounts[model] = make(map[string]int64)
+		}
+		modelReasoningCounts[model][reasoningID] += totals.RequestCount
+		if isOTLP == 1 {
+			clientTransports[client] |= 1
+		} else {
+			clientTransports[client] |= 2
+		}
 		addGroupedBucket(modelBuckets, bucket.Start, model, totals)
 		addGroupedBucket(clientBuckets, bucket.Start, client, totals)
 	}
+	for id, group := range models {
+		counts := modelReasoningCounts[id]
+		if len(counts) == 0 || group.RequestCount == 0 {
+			continue
+		}
+		mix := make([]ReasoningMixEntry, 0, len(counts))
+		for level, n := range counts {
+			mix = append(mix, ReasoningMixEntry{Level: level, Share: float64(n) / float64(group.RequestCount)})
+		}
+		sort.Slice(mix, func(i, j int) bool {
+			if mix[i].Share != mix[j].Share {
+				return mix[i].Share > mix[j].Share
+			}
+			return reasoningRank(mix[i].Level) < reasoningRank(mix[j].Level)
+		})
+		group.ReasoningMix = mix
+		models[id] = group
+	}
+	for id, group := range clients {
+		switch clientTransports[id] {
+		case 1:
+			group.Transport = "OTLP"
+		case 2:
+			group.Transport = "Proxy"
+		case 3:
+			group.Transport = "Proxy · OTLP"
+		}
+		clients[id] = group
+	}
 	result.Groups.Models = groupList(models)
 	result.Groups.Clients = groupList(clients)
+	result.Groups.Reasoning = reasoningGroupList(reasonings)
 	result.GroupedBuckets.Models = groupedBucketList(modelBuckets)
 	result.GroupedBuckets.Clients = groupedBucketList(clientBuckets)
 	return rows.Err()
@@ -229,6 +300,46 @@ func addGroup(groups map[string]Group, id, name string, totals Totals) {
 	group.RequestCount += totals.RequestCount
 	group.PricedRequestCount += totals.PricedRequestCount
 	groups[id] = group
+}
+
+func reasoningRank(level string) int {
+	switch level {
+	case "max":
+		return 0
+	case "xhigh":
+		return 1
+	case "high":
+		return 2
+	case "medium":
+		return 3
+	case "low":
+		return 4
+	case "minimal":
+		return 5
+	case "adaptive":
+		return 6
+	case "none":
+		return 7
+	case UnreportedReasoning:
+		return 99
+	default:
+		return 50
+	}
+}
+
+func reasoningGroupList(groups map[string]Group) []Group {
+	list := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		list = append(list, group)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		ri, rj := reasoningRank(list[i].ID), reasoningRank(list[j].ID)
+		if ri != rj {
+			return ri < rj
+		}
+		return list[i].ID < list[j].ID
+	})
+	return list
 }
 
 func groupList(groups map[string]Group) []Group {
@@ -277,7 +388,7 @@ func (s *Store) collectRequests(ctx context.Context, filter Filter, where string
 		where += ` AND (r.time, r.id) < (SELECT time, id FROM requests WHERE id = ?)`
 		args = append(args, filter.Cursor)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.time, r.source, r.client_id, c.name, r.model, r.endpoint,
+	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.time, r.source, r.client_id, c.name, r.model, r.reasoning_level, r.endpoint,
         r.method, r.status, r.usage_available, r.input_tokens, r.cached_input_tokens, r.cache_write_tokens,
         r.cache_write_12h_tokens, r.output_tokens, r.cost, r.input_rate, r.cached_input_rate, r.cache_write_rate,
         r.cache_write_12h_rate, r.output_rate, r.provider, r.price_source,
@@ -302,7 +413,7 @@ func (s *Store) collectRequests(ctx context.Context, filter Filter, where string
 		var input, cached, write, write12h, output sql.NullFloat64
 		var reported, list, allowance sql.NullFloat64
 		if err := rows.Scan(&last, &requestTime, &request.Source, &request.ClientID, &request.Client, &request.Model,
-			&request.Endpoint, &request.Method, &request.Status, &request.UsageAvailable, &request.InputTokens,
+			&request.ReasoningLevel, &request.Endpoint, &request.Method, &request.Status, &request.UsageAvailable, &request.InputTokens,
 			&request.CachedInputTokens, &request.CacheWriteTokens, &request.CacheWrite12hTokens, &request.OutputTokens,
 			&cost, &input, &cached, &write, &write12h, &output, &request.Provider, &request.PriceSource,
 			&reported, &list, &allowance, &request.MeasurementSource); err != nil {
@@ -368,6 +479,36 @@ func (s *Store) collectFilters(ctx context.Context, filter Filter, result *Dashb
 		return err
 	}
 	_ = rows.Close()
+
+	result.Filters.Reasoning = []string{}
+	rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT reasoning_level FROM requests WHERE time >= ? AND time <= ?`,
+		filter.Start.UnixMilli(), filter.End.UnixMilli())
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var level string
+		if err := rows.Scan(&level); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if level == "" {
+			level = UnreportedReasoning
+		}
+		result.Filters.Reasoning = append(result.Filters.Reasoning, level)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	sort.Slice(result.Filters.Reasoning, func(i, j int) bool {
+		ri, rj := reasoningRank(result.Filters.Reasoning[i]), reasoningRank(result.Filters.Reasoning[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return result.Filters.Reasoning[i] < result.Filters.Reasoning[j]
+	})
 
 	result.Filters.Clients = []Group{}
 	rows, err = s.db.QueryContext(ctx, `SELECT id, name FROM clients ORDER BY name, id`)

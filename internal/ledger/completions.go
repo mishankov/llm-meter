@@ -32,6 +32,11 @@ func (s *Store) completeRequest(ctx context.Context, tx *sql.Tx, usage *proxy.Us
 		}
 	}
 	if alreadyMetered {
+		if usage.ReasoningLevel != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE requests SET reasoning_level = ? WHERE id = ?`, usage.ReasoningLevel, id); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
 	}
 	usage.CompletionWindow = completionWindow
@@ -50,12 +55,13 @@ func (s *Store) completeRequest(ctx context.Context, tx *sql.Tx, usage *proxy.Us
 		inputRate, cachedRate, writeRate, write12hRate, outputRate = &rates.Input, &rates.CachedInput, &rates.CacheWrite, &rates.CacheWrite12h, &rates.Output
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE OR IGNORE requests SET usage_available = ?,
-        model = COALESCE(NULLIF(?, ''), model), input_tokens = ?, cached_input_tokens = ?, cache_write_tokens = ?,
+        model = COALESCE(NULLIF(?, ''), model), reasoning_level = COALESCE(NULLIF(?, ''), reasoning_level),
+        input_tokens = ?, cached_input_tokens = ?, cache_write_tokens = ?,
         cache_write_12h_tokens = ?, output_tokens = ?, cost = COALESCE(cost, ?), input_rate = ?, cached_input_rate = ?,
         cache_write_rate = ?, cache_write_12h_rate = ?, output_rate = ?,
         price_source = COALESCE(NULLIF(price_source, ''), ?), reported_cost = COALESCE(reported_cost, ?),
         reported_list_cost = COALESCE(reported_list_cost, ?), reported_allowance = COALESCE(reported_allowance, ?)
-        WHERE id = ? AND usage_available = 0`, usage.HasUsage, usage.Model, usage.InputTokens, usage.CachedInputTokens,
+        WHERE id = ? AND usage_available = 0`, usage.HasUsage, usage.Model, usage.ReasoningLevel, usage.InputTokens, usage.CachedInputTokens,
 		usage.CacheWriteTokens, usage.CacheWrite12hTokens, usage.OutputTokens, cost, inputRate, cachedRate, writeRate,
 		write12hRate, outputRate, priceSource, usage.ReportedCost, usage.ReportedListCost, usage.ReportedAllowance, id)
 	return true, err
@@ -124,12 +130,18 @@ func saveRelayCompletion(ctx context.Context, tx *sql.Tx, usage proxy.Usage) err
 func mergeRelayCompletion(saved, observed proxy.Usage) proxy.Usage {
 	mergeReportedAmounts(&saved, observed)
 	if saved.HasUsage || !observed.HasUsage {
+		if observed.ReasoningLevel != "" {
+			saved.ReasoningLevel = observed.ReasoningLevel
+		}
 		return saved
 	}
 	observed.ReportedCost, observed.ReportedCostEstimated = saved.ReportedCost, saved.ReportedCostEstimated
 	observed.ReportedListCost, observed.ReportedAllowance = saved.ReportedListCost, saved.ReportedAllowance
 	if observed.Model == "" {
 		observed.Model = saved.Model
+	}
+	if observed.ReasoningLevel == "" {
+		observed.ReasoningLevel = saved.ReasoningLevel
 	}
 	if observed.ServiceTier == "" {
 		observed.ServiceTier = saved.ServiceTier
@@ -159,6 +171,11 @@ func mergePendingWithPost(ctx context.Context, tx *sql.Tx, post proxy.Usage) (pr
 	post.ReportedListCost, post.ReportedAllowance = observed.ReportedListCost, observed.ReportedAllowance
 	if observed.Model != "" {
 		post.Model = observed.Model
+	}
+	if pending.ReasoningLevel != "" {
+		post.ReasoningLevel = pending.ReasoningLevel
+	} else if observed.ReasoningLevel != "" {
+		post.ReasoningLevel = observed.ReasoningLevel
 	}
 	if observed.ServiceTier != "" {
 		post.ServiceTier = observed.ServiceTier

@@ -399,6 +399,117 @@ func TestSocketMeterRecordsAnErrorAfterASuccess(t *testing.T) {
 	}
 }
 
+func TestHTTPProxyExtractsReasoningLevelAcrossProviders(t *testing.T) {
+	tests := []struct {
+		name         string
+		antigravity  bool
+		path         string
+		requestBody  string
+		responseBody string
+		want         string
+	}{
+		{
+			name:         "openai responses request effort",
+			path:         "/v1/responses",
+			requestBody:  `{"model":"gpt-5.4","reasoning":{"effort":"high"},"input":"private"}`,
+			responseBody: `{"id":"resp_1","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":5}}`,
+			want:         "high",
+		},
+		{
+			name:         "openai responses response effort overrides",
+			path:         "/v1/responses",
+			requestBody:  `{"model":"gpt-5.4","reasoning":{"effort":"low"}}`,
+			responseBody: `{"id":"resp_2","model":"gpt-5.4","reasoning":{"effort":"xhigh"},"usage":{"input_tokens":10,"output_tokens":5}}`,
+			want:         "xhigh",
+		},
+		{
+			name:         "openai chat completions reasoning_effort",
+			path:         "/v1/chat/completions",
+			requestBody:  `{"model":"o3-mini","reasoning_effort":"medium","messages":[{"role":"user","content":"hi"}]}`,
+			responseBody: `{"id":"chat_1","model":"o3-mini","usage":{"prompt_tokens":8,"completion_tokens":4}}`,
+			want:         "medium",
+		},
+		{
+			name:         "anthropic output_config effort",
+			path:         "/v1/messages",
+			requestBody:  `{"model":"claude-sonnet-4-6","output_config":{"effort":"max"},"messages":[]}`,
+			responseBody: `{"type":"message","id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"output_tokens":4}}`,
+			want:         "max",
+		},
+		{
+			name:         "anthropic thinking adaptive",
+			path:         "/v1/messages",
+			requestBody:  `{"model":"claude-sonnet-4-6","thinking":{"type":"adaptive"}}`,
+			responseBody: `{"type":"message","id":"msg_2","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"output_tokens":4}}`,
+			want:         "adaptive",
+		},
+		{
+			name:         "antigravity nested generationConfig thinkingLevel",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-pro","request":{"contents":[{"parts":[{"text":"private"}]}],"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}}}}`,
+			responseBody: `{"response":{"responseId":"g1","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "high",
+		},
+		{
+			name:         "antigravity thinkingBudget zero maps to none",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-flash","request":{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}}`,
+			responseBody: `{"response":{"responseId":"g2","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "none",
+		},
+		{
+			name:         "antigravity thinkingLevel survives large responseSchema past capture limit",
+			antigravity:  true,
+			path:         "/antigravity/v1internal:generateContent",
+			requestBody:  `{"model":"gemini-2.5-pro","request":{"generationConfig":{"responseSchema":"` + strings.Repeat("x", 70<<10) + `","thinkingConfig":{"thinkingLevel":"HIGH"}}}}`,
+			responseBody: `{"response":{"responseId":"g3","usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5}}}`,
+			want:         "high",
+		},
+		{
+			name:         "unrecognized effort ignored",
+			path:         "/v1/responses",
+			requestBody:  `{"model":"gpt-5.4","reasoning":{"effort":"secret-prompt"}}`,
+			responseBody: `{"id":"resp_3","model":"gpt-5.4","usage":{"input_tokens":10,"output_tokens":5}}`,
+			want:         "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.responseBody)
+			}))
+			defer upstream.Close()
+			records := make(chan Usage, 1)
+			base := parseURL(t, upstream.URL)
+			var handler http.Handler
+			if tc.antigravity {
+				h := NewAntigravity(*base, func(u Usage) { records <- u })
+				handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					h.ServeHTTP(w, r.WithContext(WithClient(r.Context(), "client-1")))
+				})
+			} else {
+				handler = testProxy(base, records)
+			}
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.requestBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d", w.Code)
+			}
+			got := nextRecord(t, records)
+			if got.ReasoningLevel != tc.want {
+				t.Fatalf("ReasoningLevel = %q, want %q", got.ReasoningLevel, tc.want)
+			}
+		})
+	}
+}
+
 func testProxy(api *url.URL, records chan<- Usage) http.Handler {
 	proxy := New(api, func(usage Usage) { records <- usage })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

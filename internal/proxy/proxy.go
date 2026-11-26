@@ -29,6 +29,7 @@ type Usage struct {
 	Provider              string
 	ClientID              string
 	Model                 string
+	ReasoningLevel        string
 	Endpoint              string
 	Method                string
 	ResponseID            string
