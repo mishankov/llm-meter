@@ -38,7 +38,6 @@
         <a href="#overview">Overview</a>
         <a href="#clients">Clients</a>
         <a href="#quickstart">Quickstart</a>
-        <a href="#pricing">Pricing</a>
       </nav>
 
       <div class="header-actions">
@@ -450,89 +449,6 @@ gemini</code></pre>
               Also supports GitHub Copilot CLI, OpenCode, and signed-in Antigravity. See all snippets in the
               <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#5-connect-clients" target="_blank" rel="noopener noreferrer">Configuration Guide</a>.
             </p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="pricing" class="band-section">
-      <div class="container">
-        <div class="ledger-grid">
-          <div class="pricing-column">
-            <h2>Deterministic USD pricing, cached locally.</h2>
-            <p class="section-lead">
-              Every request resolves cost through a four-step hierarchy. Requests without complete rate data are labeled <strong>Unpriced</strong>—never fabricated.
-            </p>
-
-            <ol class="precedence-list">
-              <li>
-                <strong>Provider-reported amounts</strong>
-                <span>Preserves exact charges reported by the client or provider, including <code>$0</code>, alongside provider list values.</span>
-              </li>
-              <li>
-                <strong><code>PRICING_FILE</code> overrides</strong>
-                <span>Matches <code>provider/model</code> first, then <code>model</code>, in USD per million tokens for private gateways or custom contracts.</span>
-              </li>
-              <li>
-                <strong>Automatic daily catalogs</strong>
-                <span>Syncs Models.dev and OpenCode Go at startup and every 24 hours, persisted in SQLite so upstream feed outages never lose rates.</span>
-              </li>
-              <li>
-                <strong>Built-in OpenAI rates</strong>
-                <span>Includes long-context (&gt;272k input) multipliers, service tiers (<code>batch</code>, <code>flex</code>, <code>fast</code>, <code>priority</code>), and background completion discounts.</span>
-              </li>
-            </ol>
-
-            <div class="code-panel code-panel-compact">
-              <div class="code-bar">
-                <span class="code-lang">json · optional PRICING_FILE (USD / 1M tokens)</span>
-                <button type="button" class="copy-btn" data-copy-target="code-pricing-json">
-                  <span class="copy-label">Copy</span>
-                </button>
-              </div>
-              <pre><code id="code-pricing-json">{
-  "my-model": {
-    "input": 2,
-    "cachedInput": 0.1,
-    "output": 10,
-    "cacheWrite": 2.5
-  }
-}</code></pre>
-            </div>
-          </div>
-
-          <div class="specs-column">
-            <h2>One Go binary. One SQLite file.</h2>
-            <p class="section-lead">
-              Engineered to run quietly on a homelab box, VPS, or laptop with no external database or background maintenance.
-            </p>
-
-            <dl class="specs-ledger">
-              <div class="spec-row">
-                <dt>Server runtime</dt>
-                <dd>Single Go binary serving dashboard UI (<code>-tags embedui</code>), OTLP receiver, HTTP proxy, and <code>/healthz</code> on one port.</dd>
-              </div>
-              <div class="spec-row">
-                <dt>Storage</dt>
-                <dd>Embedded SQLite in WAL mode (<code>llm-meter.db</code>) for clients, SHA-256 key digests, request ledger, and cached pricing snapshots.</dd>
-              </div>
-              <div class="spec-row">
-                <dt>Container images</dt>
-                <dd>Multi-arch <code>ghcr.io/mishankov/llm-meter:latest</code> and <code>llm-meter-relay:latest</code> for <code>linux/amd64</code> and <code>linux/arm64</code>, running non-root.</dd>
-              </div>
-              <div class="spec-row">
-                <dt>macOS menu bar app</dt>
-                <dd>Native menu bar relay with Keychain key storage, local HTTPS certificate settings, durable outbox queues, and one-keystroke setup snippets.</dd>
-              </div>
-              <div class="spec-row">
-                <dt>Reasoning &amp; cache depth</dt>
-                <dd>Breaks down uncached input, cached input, cache writes, output, prompt cache USD savings, and reasoning effort levels per request.</dd>
-              </div>
-              <div class="spec-row">
-                <dt>Key lifecycle</dt>
-                <dd>Issue multiple concurrent keys per client for zero-downtime rotation, rename clients without breaking keys, and archive while preserving history.</dd>
-              </div>
-            </dl>
           </div>
         </div>
       </div>
