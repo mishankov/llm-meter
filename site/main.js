@@ -415,12 +415,17 @@
         panel.hidden = panel.getAttribute("data-panel") !== snippet;
       });
 
+      document.querySelectorAll('[data-foot-group="' + group + '"]').forEach(function (foot) {
+        var panels = (foot.getAttribute("data-foot-panels") || "").split(/\s+/);
+        foot.hidden = panels.indexOf(snippet) === -1;
+      });
+
       var parentGroup = tab.closest(".sliding-group");
       updateSlidingPill(parentGroup, false);
     });
   });
 
-  // 11. Copy-to-clipboard buttons
+  // 11. Copy-to-clipboard buttons & contextual keyboard shortcut (C)
   function copyText(text) {
     if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
       return navigator.clipboard.writeText(text);
@@ -447,6 +452,7 @@
   document.querySelectorAll(".copy-btn").forEach(function (btn) {
     var resetTimer = null;
     btn.addEventListener("click", function () {
+      if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return;
       var raw = btn.getAttribute("data-copy");
       var targetId = btn.getAttribute("data-copy-target");
       var text = raw;
@@ -471,6 +477,44 @@
         announce("Could not copy to clipboard");
       });
     });
+  });
+
+  function isEditableTarget(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    var tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
+  function findContextualCopyButton(activeEl) {
+    if (!activeEl) return null;
+    var panel = activeEl.closest(".code-panel, .hero-command");
+    if (panel && !panel.hidden) {
+      return panel.querySelector(".copy-btn");
+    }
+    var tablist = activeEl.closest('.step-block [role="tablist"]');
+    if (tablist) {
+      var stepBlock = tablist.closest(".step-block");
+      var visiblePanel = stepBlock ? stepBlock.querySelector(".code-panel:not([hidden])") : null;
+      if (visiblePanel) return visiblePanel.querySelector(".copy-btn");
+    }
+    return null;
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    if (event.code !== "KeyC" && String(event.key || "").toLowerCase() !== "c") return;
+    if (isEditableTarget(event.target)) return;
+    if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (sel && sel.toString().length > 0) return;
+
+    var copyBtn = findContextualCopyButton(document.activeElement);
+    if (!copyBtn || copyBtn.disabled || copyBtn.getAttribute("aria-disabled") === "true") return;
+
+    event.preventDefault();
+    copyBtn.click();
   });
 
   // Position all sliding pills once fonts & layout settle

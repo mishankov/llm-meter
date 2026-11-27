@@ -126,6 +126,8 @@
                   class="copy-btn copy-btn-inline"
                   data-copy-target="code-hero-docker"
                   aria-label="Copy Docker quickstart command"
+                  aria-keyshortcuts="c"
+                  title="Copy command (C)"
                 >
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
@@ -135,6 +137,7 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-hero-docker"><span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
@@ -274,7 +277,7 @@
             <div class="code-panel glow-panel" data-panel-group="server" data-panel="docker">
               <div class="code-bar">
                 <span class="code-lang">sh · local Docker</span>
-                <button type="button" class="copy-btn" data-copy-target="code-server-docker">
+                <button type="button" class="copy-btn" data-copy-target="code-server-docker" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -283,6 +286,7 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-server-docker"><span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
@@ -297,7 +301,7 @@
             <div class="code-panel glow-panel" data-panel-group="server" data-panel="compose" hidden>
               <div class="code-bar">
                 <span class="code-lang">yaml · compose.yaml behind HTTPS</span>
-                <button type="button" class="copy-btn" data-copy-target="code-server-compose">
+                <button type="button" class="copy-btn" data-copy-target="code-server-compose" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -306,6 +310,7 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-server-compose"><span class="tok-key">services:</span>
@@ -326,8 +331,8 @@
 
             <div class="code-panel glow-panel" data-panel-group="server" data-panel="binary" hidden>
               <div class="code-bar">
-                <span class="code-lang">sh · install via Go</span>
-                <button type="button" class="copy-btn" data-copy-target="code-server-binary">
+                <span class="code-lang">sh · build &amp; install via Go (with embedded UI)</span>
+                <button type="button" class="copy-btn" data-copy-target="code-server-binary" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -336,9 +341,12 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
-              <pre><code id="code-server-binary"><span class="tok-cmd">go</span> install <span class="tok-img">github.com/mishankov/llm-meter@latest</span>
+              <pre><code id="code-server-binary"><span class="tok-cmd">git</span> clone <span class="tok-img">https://github.com/mishankov/llm-meter.git</span> &amp;&amp; <span class="tok-cmd">cd</span> llm-meter
+<span class="tok-cmd">npm</span> ci <span class="tok-flag">--prefix</span> web &amp;&amp; <span class="tok-cmd">npm</span> run build <span class="tok-flag">--prefix</span> web
+<span class="tok-var">CGO_ENABLED</span>=<span class="tok-val">0</span> <span class="tok-cmd">go</span> install <span class="tok-flag">-tags</span> <span class="tok-val">embedui</span> .
 
 <span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
 <span class="tok-cmd">echo</span> <span class="tok-str">"Dashboard token: $DASHBOARD_TOKEN"</span>
@@ -347,8 +355,11 @@
   <span class="tok-var">DATA_DIR</span>=<span class="tok-val">./data</span> <span class="tok-cmd">llm-meter</span></code></pre>
             </div>
 
-            <p class="step-foot">
+            <p class="step-foot" data-foot-group="server" data-foot-panels="docker binary">
               Open <code>http://localhost:8080</code>, unlock with <code>DASHBOARD_TOKEN</code>, then open <strong>Clients</strong> to issue a client key (<code>llmm_...</code>).
+            </p>
+            <p class="step-foot" data-foot-group="server" data-foot-panels="compose" hidden>
+              Set a persistent <code>DASHBOARD_TOKEN</code> in a <code>0600</code> <code>.env</code> file beside <code>compose.yaml</code>, start with <code>docker compose up -d llm-meter</code>, then open your HTTPS ingress URL, unlock with <code>DASHBOARD_TOKEN</code>, and issue a client key (<code>llmm_...</code>) in <strong>Clients</strong>.
             </p>
           </div>
 
@@ -370,7 +381,7 @@
             <div class="code-panel glow-panel" data-panel-group="client" data-panel="claude">
               <div class="code-bar">
                 <span class="code-lang">sh · Claude Code (direct OTLP, prompt capture off)</span>
-                <button type="button" class="copy-btn" data-copy-target="code-client-claude">
+                <button type="button" class="copy-btn" data-copy-target="code-client-claude" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -379,22 +390,25 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
-              <pre><code id="code-client-claude"><span class="tok-kw">export</span> <span class="tok-var">CLAUDE_CODE_ENABLE_TELEMETRY</span>=<span class="tok-val">1</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_LOGS_EXPORTER</span>=<span class="tok-val">otlp</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_METRICS_EXPORTER</span>=<span class="tok-val">none</span> <span class="tok-var">OTEL_TRACES_EXPORTER</span>=<span class="tok-val">none</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_PROTOCOL</span>=<span class="tok-val">http/protobuf</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</span>=<span class="tok-img">http://localhost:8080/otlp/v1/logs</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_HEADERS</span>=<span class="tok-str">"X-LLM-Meter-Key=&lt;your-key&gt;"</span>
-<span class="tok-kw">export</span> <span class="tok-var">OTEL_LOG_USER_PROMPTS</span>=<span class="tok-val">0</span> <span class="tok-var">OTEL_LOG_ASSISTANT_RESPONSES</span>=<span class="tok-val">0</span>
-<span class="tok-cmd">claude</span></code></pre>
+              <pre><code id="code-client-claude">(
+  <span class="tok-kw">unset</span> <span class="tok-var">OTEL_LOG_RAW_API_BODIES</span> <span class="tok-var">OTEL_EXPORTER_OTLP_HEADERS</span>
+  <span class="tok-kw">export</span> <span class="tok-var">CLAUDE_CODE_ENABLE_TELEMETRY</span>=<span class="tok-val">1</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_LOGS_EXPORTER</span>=<span class="tok-val">otlp</span> <span class="tok-var">OTEL_METRICS_EXPORTER</span>=<span class="tok-val">none</span> <span class="tok-var">OTEL_TRACES_EXPORTER</span>=<span class="tok-val">none</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_PROTOCOL</span>=<span class="tok-val">http/protobuf</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</span>=<span class="tok-img">http://localhost:8080/otlp/v1/logs</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_HEADERS</span>=<span class="tok-str">"X-LLM-Meter-Key=&lt;your-key&gt;"</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_LOG_USER_PROMPTS</span>=<span class="tok-val">0</span> <span class="tok-var">OTEL_LOG_ASSISTANT_RESPONSES</span>=<span class="tok-val">0</span>
+  <span class="tok-cmd">claude</span>
+)</code></pre>
             </div>
 
             <div class="code-panel glow-panel" data-panel-group="client" data-panel="codex" hidden>
               <div class="code-bar">
                 <span class="code-lang">toml · ~/.codex/config.toml</span>
-                <button type="button" class="copy-btn" data-copy-target="code-client-codex">
+                <button type="button" class="copy-btn" data-copy-target="code-client-codex" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -403,25 +417,20 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-client-codex"><span class="tok-key">[otel]</span>
+<span class="tok-var">exporter</span> = { <span class="tok-key">otlp-http</span> = { <span class="tok-var">endpoint</span> = <span class="tok-str">"http://localhost:8080/otlp/v1/logs"</span>, <span class="tok-var">protocol</span> = <span class="tok-str">"json"</span>, <span class="tok-var">headers</span> = { <span class="tok-str">"X-LLM-Meter-Key"</span> = <span class="tok-str">"&lt;your-key&gt;"</span> } } }
 <span class="tok-var">log_user_prompt</span> = <span class="tok-val">false</span>
 <span class="tok-var">log_agent_responses</span> = <span class="tok-val">false</span>
-<span class="tok-var">log_sse_deltas</span> = <span class="tok-val">false</span>
-
-<span class="tok-key">[otel.exporter."otlp-http"]</span>
-<span class="tok-var">endpoint</span> = <span class="tok-str">"http://localhost:8080/otlp/v1/logs"</span>
-<span class="tok-var">protocol</span> = <span class="tok-str">"json"</span>
-
-<span class="tok-key">[otel.exporter."otlp-http".headers]</span>
-<span class="tok-str">"X-LLM-Meter-Key"</span> = <span class="tok-str">"${LLM_METER_KEY}"</span></code></pre>
+<span class="tok-var">log_sse_deltas</span> = <span class="tok-val">false</span></code></pre>
             </div>
 
             <div class="code-panel glow-panel" data-panel-group="client" data-panel="opencode" hidden>
               <div class="code-bar">
                 <span class="code-lang">sh · OpenCode (direct OTLP traces)</span>
-                <button type="button" class="copy-btn" data-copy-target="code-client-opencode">
+                <button type="button" class="copy-btn" data-copy-target="code-client-opencode" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -430,6 +439,7 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-client-opencode"><span class="tok-var">OTEL_EXPORTER_OTLP_ENDPOINT</span>=<span class="tok-img">http://localhost:8080/otlp</span> \
@@ -440,7 +450,7 @@
             <div class="code-panel glow-panel" data-panel-group="client" data-panel="antigravity" hidden>
               <div class="code-bar">
                 <span class="code-lang">sh · Signed-in Antigravity (via local relay)</span>
-                <button type="button" class="copy-btn" data-copy-target="code-client-antigravity">
+                <button type="button" class="copy-btn" data-copy-target="code-client-antigravity" aria-keyshortcuts="c" title="Copy command (C)">
                   <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -449,6 +459,7 @@
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
                   <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
                 </button>
               </div>
               <pre><code id="code-client-antigravity"><span class="tok-comment"># With llm-meter-relay or the macOS menu bar app running locally:</span>
@@ -456,9 +467,12 @@
   <span class="tok-flag">--cloud_code_endpoint</span> <span class="tok-img">http://127.0.0.1:8765/antigravity</span></code></pre>
             </div>
 
-            <p class="step-foot">
-              Also supports Gemini CLI, GitHub Copilot CLI, generic OpenAI-compatible SDKs/CLIs, and the local relay. See all snippets in the
+            <p class="step-foot" data-foot-group="client" data-foot-panels="claude codex opencode">
+              Replace <code>&lt;your-key&gt;</code> with the client key issued in step 1 (when using remote HTTPS Compose, also replace <code>http://localhost:8080</code> with your HTTPS ingress origin, keeping the <code>/otlp</code> path). Also supports Gemini CLI, GitHub Copilot CLI, generic OpenAI-compatible SDKs/CLIs, and the local relay — see the
               <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#5-connect-clients" target="_blank" rel="noopener noreferrer">Configuration Guide</a>.
+            </p>
+            <p class="step-foot" data-foot-group="client" data-foot-panels="antigravity" hidden>
+              Prerequisite: run the local relay (CLI, Docker, or <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/desktop/README.md" target="_blank" rel="noopener noreferrer">macOS menu bar app</a>) pointed at an <strong>HTTPS</strong> LLM Meter server target (<code>--target https://...</code>). See <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#4-run-the-local-relay" target="_blank" rel="noopener noreferrer">Run the Local Relay</a>.
             </p>
           </div>
         </div>
