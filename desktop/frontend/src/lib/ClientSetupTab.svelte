@@ -145,7 +145,7 @@
             {copiedKey === "telemetry" ? "Copied" : "Copy endpoint"}
           </Button>
         </div>
-        <p class="hint muted">Use this for <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>. For signal-specific settings, append <code>/v1/logs</code> or <code>/v1/traces</code>.</p>
+        <p class="hint muted">Use this for <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> (already ends in <code>/otlp</code>). For signal-specific settings, append <code>/v1/logs</code> or <code>/v1/traces</code>.</p>
       </div>
       <p class="hint muted">Configure Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode using the <a class="guide-link" href={telemetryGuide} onclick={(event) => openGuide(event, telemetryGuide)}>OpenTelemetry setup guide</a>.</p>
     </section>

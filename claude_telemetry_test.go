@@ -131,7 +131,7 @@ func TestClaudeCodeTelemetryReachesLedger(t *testing.T) {
 		{"application/x-protobuf", "gzip", compressed.Bytes()},
 		{"application/json", "", []byte(legacy)},
 	} {
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+inst.Status().ListenAddr+"/v1/logs", bytes.NewReader(export.payload))
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+inst.Status().ListenAddr+"/otlp/v1/logs", bytes.NewReader(export.payload))
 		if err != nil {
 			t.Fatal(err)
 		}

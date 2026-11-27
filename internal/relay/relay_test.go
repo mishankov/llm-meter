@@ -118,6 +118,8 @@ func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 		status                            int
 	}{
 		{"implicit port 80", "127.0.0.1:80", "127.0.0.1", rpc, authorized, http.StatusNoContent},
+		{"prefixed antigravity rpc", host, host, "/antigravity" + rpc, authorized, http.StatusNoContent},
+		{"prefixed antigravity missing auth", host, host, "/antigravity" + rpc, nil, http.StatusUnauthorized},
 		{"wrong port", "127.0.0.1:80", host, rpc, authorized, http.StatusForbidden},
 		{"unexpected host", host, "example.test", rpc, authorized, http.StatusForbidden},
 		{"browser origin", host, host, rpc, http.Header{"Origin": {"", "https://example.test"}}, http.StatusForbidden},
@@ -125,6 +127,12 @@ func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 		{"missing authorization", host, host, rpc, nil, http.StatusUnauthorized},
 		{"dashboard route", host, host, "/api/clients", authorized, http.StatusNotFound},
 		{"encoded slash", host, host, rpc + "%2f..%2fapi", authorized, http.StatusNotFound},
+		{"double antigravity prefix", host, host, "/antigravity/antigravity" + rpc, authorized, http.StatusNotFound},
+		{"antigravity unknown path", host, host, "/antigravity/unknown", authorized, http.StatusNotFound},
+		{"antigravity bare prefix", host, host, "/antigravity", authorized, http.StatusNotFound},
+		{"antigravity trailing slash", host, host, "/antigravity/", authorized, http.StatusNotFound},
+		{"antigravity traversal", host, host, "/antigravity/.." + rpc, authorized, http.StatusNotFound},
+		{"antigravity encoded slash", host, host, "/antigravity%2fv1internal:loadCodeAssist", authorized, http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "http://"+test.requestHost+test.path, nil)
@@ -260,6 +268,7 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 		name, provider, authHeader, localPath, proxyPath, directPath, response string
 	}{
 		{"antigravity", "antigravity", "Authorization", "/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
+		{"antigravity prefixed", "antigravity", "Authorization", "/antigravity/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
 		{"openai", "openai", "Authorization", "/v1/responses", "/v1/responses", "/direct/responses", usage},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -327,12 +336,13 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 		provider, method, localPath, remotePath, directPath string
 	}{
 		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
+		{"antigravity", http.MethodPost, "/antigravity/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
 		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
 	}
 	for _, mode := range []string{ModeRemoteProxy, ModeUsageOnly} {
 		t.Run(mode, func(t *testing.T) {
 			config, err := configureRelay(Config{Mode: mode, Target: "https://proxy.test/"})
-			if err != nil || len(config.routes) != len(requests) {
+			if err != nil || len(config.routes) != len(providerOrder) {
 				t.Fatalf("expected all provider routes, got %+v (%v)", config.routes, err)
 			}
 			check := func(r *http.Request) string {
@@ -393,7 +403,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 				}
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
-			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
+			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models", "/antigravity/antigravity/v1internal:loadCodeAssist", "/antigravity/unknown"} {
 				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 				r.Header.Set("Authorization", authorization)
 				response := httptest.NewRecorder()
@@ -570,15 +580,18 @@ func TestTelemetryRelayOnlyAcceptsLocalOTLPExports(t *testing.T) {
 		headers                  http.Header
 		status                   int
 	}{
-		{name: "local export", method: http.MethodPost, path: "/v1/logs", status: http.StatusOK},
-		{name: "trace export", method: http.MethodPost, path: "/v1/traces", status: http.StatusOK},
-		{name: "metric export", method: http.MethodPost, path: "/v1/metrics", status: http.StatusOK},
+		{name: "local export", method: http.MethodPost, path: "/otlp/v1/logs", status: http.StatusOK},
+		{name: "trace export", method: http.MethodPost, path: "/otlp/v1/traces", status: http.StatusOK},
+		{name: "metric export", method: http.MethodPost, path: "/otlp/v1/metrics", status: http.StatusOK},
+		{name: "legacy logs", method: http.MethodPost, path: "/v1/logs", status: http.StatusNotFound},
+		{name: "legacy traces", method: http.MethodPost, path: "/v1/traces", status: http.StatusNotFound},
+		{name: "legacy metrics", method: http.MethodPost, path: "/v1/metrics", status: http.StatusNotFound},
 		{name: "model traffic", method: http.MethodPost, path: "/v1/messages", status: http.StatusNotFound},
-		{name: "path suffix", method: http.MethodPost, path: "/v1/logs/", status: http.StatusNotFound},
-		{name: "wrong method", method: http.MethodGet, path: "/v1/logs", status: http.StatusMethodNotAllowed},
-		{name: "wrong host", method: http.MethodPost, path: "/v1/logs", host: "example.test", status: http.StatusForbidden},
-		{name: "browser origin", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
-		{name: "fetch metadata", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
+		{name: "path suffix", method: http.MethodPost, path: "/otlp/v1/logs/", status: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: "/otlp/v1/logs", status: http.StatusMethodNotAllowed},
+		{name: "wrong host", method: http.MethodPost, path: "/otlp/v1/logs", host: "example.test", status: http.StatusForbidden},
+		{name: "browser origin", method: http.MethodPost, path: "/otlp/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
+		{name: "fetch metadata", method: http.MethodPost, path: "/otlp/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, err := http.NewRequestWithContext(ctx, test.method, "http://"+inst.Status().ListenAddr+test.path,
@@ -629,7 +642,7 @@ func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/v1/traces", strings.NewReader("{}"))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/otlp/v1/traces", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,7 +771,7 @@ func TestProxyAndTelemetryListenersRunTogether(t *testing.T) {
 			{"key":"output_tokens","value":{"intValue":"20"}}
 		]
 	}]}]}]}`
-	telemetryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+status.TelemetryListenAddr+"/v1/logs", strings.NewReader(otlp))
+	telemetryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+status.TelemetryListenAddr+"/otlp/v1/logs", strings.NewReader(otlp))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +846,7 @@ func TestCombinedRelayContainerBindings(t *testing.T) {
 }
 
 func TestRelayGuardAcceptsDefaultHTTPSPort(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/v1/traces", nil)
+	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/otlp/v1/traces", nil)
 	response := httptest.NewRecorder()
 	guardClient("127.0.0.1:443", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

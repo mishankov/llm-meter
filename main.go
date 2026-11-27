@@ -27,8 +27,6 @@ import (
 	"github.com/mishankov/llm-meter/internal/usagereport"
 )
 
-const otlpPrefix = "/otlp"
-
 type otlpClientKey struct{}
 
 func main() {
@@ -134,7 +132,7 @@ func routes(store *ledger.Store, ui fs.FS, api, antigravity *url.URL, dashboardT
 		mux.Handle(proxy.AntigravityPrefix, antigravityAccess)
 		mux.Handle(proxy.AntigravityPrefix+"/", antigravityAccess)
 	}
-	otlpEvents := telemetry.EventHandler(otlpPrefix, func(ctx context.Context, events []usagereport.Event) error {
+	otlpEvents := telemetry.EventHandler(telemetry.Prefix, func(ctx context.Context, events []usagereport.Event) error {
 		clientID, _ := ctx.Value(otlpClientKey{}).(string)
 		batch := make([]ledger.RelayEvent, len(events))
 		for i, event := range events {
@@ -163,7 +161,7 @@ func routes(store *ledger.Store, ui fs.FS, api, antigravity *url.URL, dashboardT
 }
 
 func isOTLPPath(u *url.URL) bool {
-	return u.Path == otlpPrefix || strings.HasPrefix(u.Path, otlpPrefix+"/")
+	return u.Path == telemetry.Prefix || strings.HasPrefix(u.Path, telemetry.Prefix+"/")
 }
 
 func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http.Handler {

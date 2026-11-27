@@ -57,7 +57,7 @@ jobs:
               llm-meter-relay:smoke --mode "$mode" --target https://llm-meter.invalid \
               --key-file /run/secrets/proxy-key --bind 0.0.0.0:8765 --data-dir /data \
               --telemetry-listen 127.0.0.1:4318 --telemetry-bind 0.0.0.0:4318)
-            for check in 401:/v1internal:loadCodeAssist 401:/v1/models 404:/codex/models 404:/opencode-go/models; do
+            for check in 401:/v1internal:loadCodeAssist 401:/antigravity/v1internal:loadCodeAssist 401:/v1/models 404:/codex/models 404:/opencode-go/models; do
               expected=${check%%:*}
               path=${check#*:}
               if ! status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
@@ -70,7 +70,7 @@ jobs:
             done
             if ! curl --silent --show-error --fail --output /dev/null --max-time 2 \
                 --header 'Content-Type: application/json' --data '{}' \
-                http://127.0.0.1:4318/v1/logs; then
+                http://127.0.0.1:4318/otlp/v1/logs; then
               docker logs "$container"
               exit 1
             fi

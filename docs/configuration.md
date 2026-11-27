@@ -220,9 +220,9 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 | Provider | Direct to LLM Meter server | Via local relay (`127.0.0.1:8765`) | Server path (`remote-proxy`) | Provider auth accepted by relay | Default upstream |
 | --- | --- | --- | --- | --- | --- |
 | **OpenAI-compatible** (`openai`) | `https://proxy.example.com/v1` | `http://127.0.0.1:8765/v1` | `/v1` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://api.openai.com/v1` |
-| **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765` | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
+| **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765/antigravity` (or root `http://127.0.0.1:8765`) | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
 
-> **Note on Antigravity's local relay URL:** Point Antigravity at the relay root `http://127.0.0.1:8765` (without `/antigravity`). The relay matches Cloud Code RPC paths (`/v1internal:<Method>`) and rewrites them to `/antigravity/v1internal:<Method>` in `remote-proxy` mode or sends `/v1internal:<Method>` directly to the Antigravity upstream in `usage-only` mode.
+> **Note on Antigravity's local relay URL:** The local relay accepts both `/antigravity/v1internal:<Method>` (matching the server) and root `/v1internal:<Method>` (for origin-only `--cloud_code_endpoint http://127.0.0.1:8765` callers such as Antigravity ACP). In `remote-proxy` mode it forwards to `/antigravity/v1internal:<Method>` on the server; in `usage-only` mode it sends `/v1internal:<Method>` directly to the Antigravity upstream.
 >
 > Use `127.0.0.1` in client URLs with the default listener. The relay checks the request's `Host` against `--listen`. Using `localhost:8765` with the default listener returns `403 Forbidden`.
 
@@ -390,7 +390,7 @@ Positional arguments are rejected; pass all options as flags.
 
 | Client | Direct to server | Via local relay (`127.0.0.1:8765`) | Upstream credentials |
 | --- | --- | --- | --- |
-| **Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode** | [Direct OpenTelemetry](#53-opentelemetry) to `https://proxy.example.com/otlp` (or `http://localhost:8080/otlp`; Copilot CLI requires HTTPS) + `X-LLM-Meter-Key` header (model traffic goes directly to the provider) | [OpenTelemetry exporter](#53-opentelemetry) points to the local relay (`127.0.0.1:4318`) | Existing provider credentials |
+| **Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode** | [Direct OpenTelemetry](#53-opentelemetry) to `https://proxy.example.com/otlp` (or `http://localhost:8080/otlp`; Copilot CLI requires HTTPS) + `X-LLM-Meter-Key` header (model traffic goes directly to the provider) | [OpenTelemetry exporter](#53-opentelemetry) points to the local relay (`http://127.0.0.1:4318/otlp`) | Existing provider credentials |
 | **Generic OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Meter-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
 | **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Meter-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
 
@@ -448,7 +448,7 @@ Use the local telemetry relay instead of direct `/otlp` when you want content st
 
 Update both the server and relay before enabling telemetry. Run the relay on the same machine as the harness.
 
-On macOS, open the [desktop app](../desktop/README.md), enter the server's HTTPS origin and dashboard client key in **Settings**, and enable **OpenTelemetry** under **Local listeners**. Save with ⌘S, start the relay if it is stopped, and use ⌘⇧E in **Client Setup** to copy the endpoint. Use that endpoint's scheme, host, and port in the exporter examples below.
+On macOS, open the [desktop app](../desktop/README.md), enter the server's HTTPS origin and dashboard client key in **Settings**, and enable **OpenTelemetry** under **Local listeners**. Save with ⌘S, start the relay if it is stopped, and use ⌘⇧E in **Client Setup** to copy the endpoint. Use that endpoint URL (which ends in `/otlp`) in the exporter examples below.
 
 ```sh
 ./llm-meter-relay \
@@ -461,7 +461,7 @@ On macOS, open the [desktop app](../desktop/README.md), enter the server's HTTPS
 
 To enable the proxy alongside OpenTelemetry, omit `--proxy=false` and choose `--mode=usage-only` or the default `remote-proxy`. The two listeners share the upload destination, key, and queue. Existing `--mode=telemetry` commands still work. If you already run a telemetry relay, reuse its `--data-dir` with the same target and key so pending reports can finish uploading.
 
-The local relay accepts OTLP over HTTP or HTTPS, with JSON or protobuf payloads, at `POST /v1/logs` and `POST /v1/traces`, and acknowledges and discards `POST /v1/metrics`. Harnesses can share the same receiver when they use its configured transport. Every report from an instance is attributed to the dashboard client that owns its key. For separate attribution, use a second loopback port, key, and data directory (or separate client keys when exporting directly to `/otlp`).
+The local relay accepts OTLP over HTTP or HTTPS, with JSON or protobuf payloads, at `POST /otlp/v1/logs` and `POST /otlp/v1/traces`, and acknowledges and discards `POST /otlp/v1/metrics` — matching the server's `/otlp` paths. Harnesses can share the same receiver when they use its configured transport. Every report from an instance is attributed to the dashboard client that owns its key. For separate attribution, use a second loopback port, key, and data directory (or separate client keys when exporting directly to `/otlp`).
 
 After a successful model request, look under **Usage** for that client. Exporters may batch reports. LLM Meter records model names, token counts, cache counts where available, and Claude Code's reported cost estimates. Other costs are estimated from the ledger's rates when available. Other telemetry including content fields is discarded.
 
@@ -491,7 +491,7 @@ Or point it at the local telemetry relay (no custom header needed):
   export CLAUDE_CODE_ENABLE_TELEMETRY=1
   export OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=none OTEL_TRACES_EXPORTER=none
   export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
-  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/otlp/v1/logs
   export OTEL_LOG_USER_PROMPTS=0 OTEL_LOG_ASSISTANT_RESPONSES=0
   export OTEL_LOG_TOOL_DETAILS=0 OTEL_LOG_TOOL_CONTENT=0
   claude
@@ -520,7 +520,7 @@ Or via the local telemetry relay (no custom header needed):
 
 ```toml
 [otel]
-exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/otlp/v1/logs", protocol = "json" } }
 log_user_prompt = false
 log_agent_responses = false
 log_guardian_assessments = false
@@ -556,7 +556,7 @@ Or via the local telemetry relay:
   unset OTEL_EXPORTER_OTLP_HEADERS OTEL_EXPORTER_OTLP_LOGS_HEADERS
   export GEMINI_TELEMETRY_ENABLED=true GEMINI_TELEMETRY_TARGET=local
   export GEMINI_TELEMETRY_OTLP_PROTOCOL=http
-  export GEMINI_TELEMETRY_OTLP_ENDPOINT=http://127.0.0.1:4318
+  export GEMINI_TELEMETRY_OTLP_ENDPOINT=http://127.0.0.1:4318/otlp
   export GEMINI_TELEMETRY_LOG_PROMPTS=false GEMINI_TELEMETRY_TRACES_ENABLED=false
   gemini
 )
@@ -610,7 +610,7 @@ With the relay running, start Copilot CLI in another terminal.
 ```sh
 COPILOT_OTEL_ENABLED=true \
 COPILOT_OTEL_EXPORTER_TYPE=otlp-http \
-OTEL_EXPORTER_OTLP_ENDPOINT=https://127.0.0.1:4318 \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://127.0.0.1:4318/otlp \
 OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
 OTEL_EXPORTER_OTLP_CERTIFICATE="$HOME/.config/llm-meter/relay/local-tls/rootCA.pem" \
 OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=NO_CONTENT \
@@ -637,7 +637,7 @@ Or via the local telemetry relay:
 ```sh
 (
   unset OTEL_EXPORTER_OTLP_HEADERS
-  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 opencode --standalone
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/otlp opencode --standalone
 )
 ```
 

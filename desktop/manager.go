@@ -15,6 +15,7 @@ import (
 
 	"github.com/mishankov/llm-meter/internal/relay"
 	"github.com/mishankov/llm-meter/internal/relayoutbox"
+	"github.com/mishankov/llm-meter/internal/telemetry"
 )
 
 const maxLogEntries = 200
@@ -679,7 +680,7 @@ func buildEndpoints(cfg AppConfig, proxyAddr, telemetryAddr string) []ClientEndp
 		if cfg.TLSCert != "" && cfg.TLSKey != "" {
 			scheme = "https://"
 		}
-		endpoints = append(endpoints, ClientEndpoint{Provider: relay.ModeTelemetry, Label: "OTLP/HTTP", URL: scheme + telemetryAddr})
+		endpoints = append(endpoints, ClientEndpoint{Provider: relay.ModeTelemetry, Label: "OTLP/HTTP", URL: scheme + telemetryAddr + telemetry.Prefix})
 	}
 	return endpoints
 }

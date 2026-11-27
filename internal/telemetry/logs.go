@@ -23,6 +23,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Prefix is the shared URL path prefix for OTLP/HTTP endpoints on both the
+// LLM Meter server and the local relay.
+const Prefix = "/otlp"
+
 const (
 	mediaProtobuf = "application/x-protobuf"
 	mediaJSON     = "application/json"
@@ -32,10 +36,11 @@ const (
 
 type deliverBatch func(context.Context, *usageBatch) error
 
-// Handler receives OTLP/HTTP logs, traces, and metrics. It takes usage from one
-// signal per harness and acknowledges metrics for exporters that also send them.
+// Handler receives OTLP/HTTP logs, traces, and metrics under Prefix. It takes
+// usage from one signal per harness and acknowledges metrics for exporters
+// that also send them.
 func Handler(enqueue func(context.Context, [][]byte) error, onRequest func()) http.Handler {
-	return newHandler("", func(ctx context.Context, batch *usageBatch) error {
+	return newHandler(Prefix, func(ctx context.Context, batch *usageBatch) error {
 		payloads := make([][]byte, 0, len(batch.events))
 		for _, event := range batch.events {
 			payload, err := json.Marshal(event)

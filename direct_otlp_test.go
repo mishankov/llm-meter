@@ -439,7 +439,7 @@ func TestDirectOTLPAuthPathsMethodsAndProxyIsolation(t *testing.T) {
 		relayPayloads = append(relayPayloads, payloads...)
 		return nil
 	}, nil)
-	capReq := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(claudeJSON))
+	capReq := httptest.NewRequest(http.MethodPost, "/otlp/v1/logs", bytes.NewReader(claudeJSON))
 	capReq.Header.Set("Content-Type", "application/json")
 	capRec := httptest.NewRecorder()
 	relayCollector.ServeHTTP(capRec, capReq)

@@ -243,7 +243,7 @@ func TestOccupiedTelemetryPortKeepsRunningProxy(t *testing.T) {
 	if err := mgr.SaveConfig(t.Context(), SaveConfigRequest{Config: cfg}); err != nil {
 		t.Fatal(err)
 	}
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+cfg.TelemetryListen+"/v1/logs", strings.NewReader("{}"))
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+cfg.TelemetryListen+"/otlp/v1/logs", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestDesktopTelemetryAndProxyRunTogether(t *testing.T) {
 		snap.Status.ListenAddr == snap.Status.TelemetryListenAddr || snap.Status.Outbox == nil ||
 		len(snap.Endpoints) != 2 || snap.Endpoints[0].Provider != "openai" || snap.Endpoints[1].Provider != relay.ModeTelemetry ||
 		snap.Endpoints[0].URL != "http://"+snap.Status.ListenAddr+"/v1" ||
-		snap.Endpoints[1].URL != "https://"+snap.Status.TelemetryListenAddr {
+		snap.Endpoints[1].URL != "https://"+snap.Status.TelemetryListenAddr+"/otlp" {
 		t.Fatalf("unexpected combined listener snapshot: %+v", snap)
 	}
 	saved, err := store.LoadConfig()
@@ -614,7 +614,7 @@ func TestDesktopTelemetryAndProxyRunTogether(t *testing.T) {
 	}
 	snap = mgr.Snapshot()
 	if snap.Status.State != relay.StateRunning || snap.Status.ListenAddr != "" || snap.Status.TelemetryListenAddr == "" ||
-		len(snap.Endpoints) != 1 || snap.Endpoints[0].URL != "https://"+snap.Status.TelemetryListenAddr ||
+		len(snap.Endpoints) != 1 || snap.Endpoints[0].URL != "https://"+snap.Status.TelemetryListenAddr+"/otlp" ||
 		snap.Config.Provider != "openai" {
 		t.Fatalf("telemetry did not stay enabled when turning off the proxy: %+v", snap)
 	}
@@ -664,7 +664,7 @@ func TestDesktopTelemetrySharesAndRetainsUsageQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snap := mgr.Snapshot(); snap.KeptQueues != 0 || snap.PendingOnDisk != 1 ||
-		len(snap.Endpoints) != 3 || snap.Endpoints[2].URL != "http://"+defaultTelemetryListen {
+		len(snap.Endpoints) != 3 || snap.Endpoints[2].URL != "http://"+defaultTelemetryListen+"/otlp" {
 		t.Fatalf("telemetry did not inherit the active usage queue: %+v", snap)
 	}
 

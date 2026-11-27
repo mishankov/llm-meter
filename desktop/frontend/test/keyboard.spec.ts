@@ -147,7 +147,7 @@ test("enable both listeners and copy their separate addresses with the keyboard"
     endpoints: [{ provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" }],
     logs: [], providers: [], antigravityBin: "", launcherPath: "",
   };
-  const endpoint = "https://127.0.0.1:4318";
+  const endpoint = "https://127.0.0.1:4318/otlp";
   const saves: SaveConfigRequest[] = [];
   const copies: string[] = [];
 
