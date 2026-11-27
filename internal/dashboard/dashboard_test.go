@@ -190,3 +190,167 @@ func TestUsageEndpointsFilterAndGroupReasoningLevels(t *testing.T) {
 
 	fetch(t, "range=24h&reasoning="+strings.Repeat("x", 65), http.StatusBadRequest)
 }
+
+func TestUsageSupports1hRangeCacheSavingsAndProviders(t *testing.T) {
+	ctx := t.Context()
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Minute)
+	client, _, err := store.CreateClient(ctx, "Live Client", now.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, req := range []proxy.Usage{
+		{
+			At: now.Add(-10 * time.Minute), Source: "api", Provider: "openai", ClientID: client.ID,
+			Model: "gpt-5.4", ReasoningLevel: "high", Endpoint: "/v1/responses", Method: http.MethodPost,
+			Status: http.StatusOK, HasUsage: true, InputTokens: 200_000, CachedInputTokens: 100_000, OutputTokens: 10_000,
+		},
+		{
+			At: now.Add(-5 * time.Minute), Source: "codex", Provider: "openai", ClientID: client.ID,
+			Model: "gpt-5.3-codex", Endpoint: "/codex/telemetry", Method: http.MethodPost,
+			Status: http.StatusOK, HasUsage: true, InputTokens: 50_000, CachedInputTokens: 0, OutputTokens: 5_000,
+		},
+	} {
+		if err := store.Record(ctx, req); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+
+	handler := New(store, "dashboard-token", false, slog.New(slog.DiscardHandler))
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"token":"dashboard-token"}`)))
+	cookie := login.Result().Cookies()[0]
+
+	req := httptest.NewRequest(http.MethodGet, "/api/usage?range=1h", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var out ledger.Dashboard
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Buckets) < 12 || len(out.Buckets) > 13 {
+		t.Fatalf("1h bucket count = %d, want 12 or 13", len(out.Buckets))
+	}
+	if out.Summary.CacheSavings <= 0 {
+		t.Fatalf("summary.cacheSavings = %v, want > 0", out.Summary.CacheSavings)
+	}
+	if len(out.Groups.Providers) != 2 {
+		t.Fatalf("groups.providers = %+v, want 2 providers (Codex subscription + OpenAI API)", out.Groups.Providers)
+	}
+	if len(out.Filters.Providers) != 2 {
+		t.Fatalf("filters.providers = %+v, want 2 provider filter options", out.Filters.Providers)
+	}
+
+	// Filtering by provider=openai returns only the OpenAI API request (not codex)
+	reqOpenAI := httptest.NewRequest(http.MethodGet, "/api/usage?range=1h&provider=openai", nil)
+	reqOpenAI.AddCookie(cookie)
+	wOpenAI := httptest.NewRecorder()
+	handler.ServeHTTP(wOpenAI, reqOpenAI)
+	if wOpenAI.Code != http.StatusOK {
+		t.Fatalf("provider=openai status = %d", wOpenAI.Code)
+	}
+	var openAIOut ledger.Dashboard
+	if err := json.Unmarshal(wOpenAI.Body.Bytes(), &openAIOut); err != nil {
+		t.Fatal(err)
+	}
+	if openAIOut.Summary.RequestCount != 1 || openAIOut.Requests[0].Model != "gpt-5.4" {
+		t.Fatalf("provider=openai mismatch: %+v", openAIOut.Requests)
+	}
+
+	// Filtering by provider=codex returns only the Codex subscription request
+	reqCodex := httptest.NewRequest(http.MethodGet, "/api/usage?range=1h&provider=codex", nil)
+	reqCodex.AddCookie(cookie)
+	wCodex := httptest.NewRecorder()
+	handler.ServeHTTP(wCodex, reqCodex)
+	if wCodex.Code != http.StatusOK {
+		t.Fatalf("provider=codex status = %d", wCodex.Code)
+	}
+	var codexOut ledger.Dashboard
+	if err := json.Unmarshal(wCodex.Body.Bytes(), &codexOut); err != nil {
+		t.Fatal(err)
+	}
+	if codexOut.Summary.RequestCount != 1 || codexOut.Requests[0].Model != "gpt-5.3-codex" {
+		t.Fatalf("provider=codex mismatch: %+v", codexOut.Requests)
+	}
+}
+
+func TestUsageSupportsCustomDateTimeRange(t *testing.T) {
+	ctx := t.Context()
+	store, err := ledger.Open(filepath.Join(t.TempDir(), "test.sqlite"), pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	client, _, err := store.CreateClient(ctx, "Range Client", base.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, at := range []time.Time{
+		base.Add(-time.Minute),  // before from (excluded)
+		base,                    // exact from (included)
+		base.Add(45 * time.Minute),
+		base.Add(2*time.Hour - time.Second), // inside [from, to)
+		base.Add(2 * time.Hour),             // exact to (excluded: half-open)
+	} {
+		if err := store.Record(ctx, proxy.Usage{
+			At: at, Source: "api", Provider: "openai", ClientID: client.ID,
+			Model: "gpt-5.4", Endpoint: "/v1/responses", Method: http.MethodPost,
+			Status: http.StatusOK, HasUsage: true, InputTokens: 100, OutputTokens: 20,
+		}); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+
+	handler := New(store, "dashboard-token", false, slog.New(slog.DiscardHandler))
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"token":"dashboard-token"}`)))
+	cookie := login.Result().Cookies()[0]
+
+	get := func(rawQuery string, wantStatus int) ledger.Dashboard {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/usage?"+rawQuery, nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != wantStatus {
+			t.Fatalf("%s status = %d, want %d (%s)", rawQuery, w.Code, wantStatus, w.Body.String())
+		}
+		var out ledger.Dashboard
+		if wantStatus == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+
+	q := url.Values{
+		"from": {base.Format(time.RFC3339)},
+		"to":   {base.Add(2 * time.Hour).Format(time.RFC3339)},
+	}
+	res := get(q.Encode(), http.StatusOK)
+	if res.Summary.RequestCount != 3 {
+		t.Fatalf("custom range requestCount = %d, want 3 (half-open [from, to))", res.Summary.RequestCount)
+	}
+	if res.BucketSeconds != 300 {
+		t.Fatalf("2h custom range bucketSeconds = %d, want 300 (5m)", res.BucketSeconds)
+	}
+	if len(res.Buckets) != 24 {
+		t.Fatalf("2h custom range bucket count = %d, want 24", len(res.Buckets))
+	}
+
+	// Validation errors
+	get("from="+base.Format(time.RFC3339), http.StatusBadRequest)
+	get("to="+base.Format(time.RFC3339), http.StatusBadRequest)
+	get("from="+base.Format(time.RFC3339)+"&to="+base.Add(-time.Minute).Format(time.RFC3339), http.StatusBadRequest)
+	get("from="+base.Format(time.RFC3339)+"&to="+base.AddDate(2, 0, 0).Format(time.RFC3339), http.StatusBadRequest)
+}

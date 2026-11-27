@@ -30,7 +30,16 @@ const response: Usage = {
     { id: 4, at: '2026-11-20T12:13:00Z', source: 'api', clientId: 'open-code', client: 'OpenCode', model: 'gpt-unpriced', endpoint: '/v1/responses', method: 'POST', status: 200, usageAvailable: true, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, cost: null, rates: null }
   ],
   allowance: [{ id: 'open-code-window', label: '5-hour window', remainingPercent: 77, resetsAt: '2026-11-20T16:00:00Z' }],
-  filters: { models: ['gpt-api', 'gpt-codex'], clients: [{ id: 'open-code', name: 'OpenCode' }], reasoning: ['high', 'unreported'] },
+  filters: {
+    models: ['gpt-api', 'gpt-codex'],
+    clients: [{ id: 'open-code', name: 'OpenCode' }],
+    providers: [
+      { id: 'codex', name: 'Codex subscription' },
+      { id: 'google', name: 'Google' },
+      { id: 'opencode-go', name: 'OpenCode Go' }
+    ],
+    reasoning: ['high', 'unreported']
+  },
   nextCursor: null
 };
 
@@ -87,6 +96,7 @@ async function mockAPI(page: Page, {
         filters: {
           models: [...new Set([...response.filters.models, ...extraRequests.map(({ model }) => model).filter(Boolean)])],
           clients: [...filterClients.values()],
+          providers: response.filters.providers,
           reasoning: response.filters.reasoning
         }
       };
@@ -94,19 +104,27 @@ async function mockAPI(page: Page, {
       const bucket = url.searchParams.get('bucket');
       const clientIds = url.searchParams.getAll('client').filter(Boolean);
       const sources = url.searchParams.getAll('source').filter(Boolean);
+      const providers = url.searchParams.getAll('provider').filter(Boolean);
       const models = url.searchParams.getAll('model').filter(Boolean);
       const reasonings = url.searchParams.getAll('reasoning').filter(Boolean);
       const outcome = url.searchParams.get('outcome');
-      const days = url.searchParams.get('range') === '30d' ? 31 : url.searchParams.get('range') === '7d' ? 8 : 0;
-      const buckets = days && !empty ? Array.from({ length: days }, (_, index) => ({
-        ...data.buckets[0],
-        start: new Date(Date.UTC(2026, 10, 20 + index)).toISOString()
-      })) : data.buckets;
+      const rangeParam = url.searchParams.get('range');
+      const days = rangeParam === '30d' ? 31 : rangeParam === '7d' ? 8 : 0;
+      const buckets = rangeParam === '1h' && !empty
+        ? Array.from({ length: 12 }, (_, index) => ({
+            ...data.buckets[0],
+            start: new Date(Date.UTC(2026, 10, 20, 12, index * 5)).toISOString()
+          }))
+        : days && !empty ? Array.from({ length: days }, (_, index) => ({
+            ...data.buckets[0],
+            start: new Date(Date.UTC(2026, 10, 20 + index)).toISOString()
+          })) : data.buckets;
       const bucketStart = bucket ? Date.parse(bucket) : null;
       const requests = data.requests.filter((request) =>
         (bucketStart === null || (Date.parse(request.at) >= bucketStart && Date.parse(request.at) < bucketStart + (days ? 86_400_000 : 3_600_000))) &&
         (!clientIds.length || clientIds.includes(request.clientId)) &&
         (!sources.length || sources.includes(request.source)) &&
+        (!providers.length || providers.includes(request.source === 'codex' ? 'codex' : (request.provider || 'api'))) &&
         (!models.length || models.includes(request.model)) &&
         (!reasonings.length || reasonings.includes(request.reasoningLevel || 'unreported')) &&
         (outcome !== 'failed' || request.status === 0 || request.status >= 400) &&
@@ -241,10 +259,9 @@ test('filters requests from a chart and inspects and pages through them with the
   const requests = page.getByRole('region', { name: 'Requests' });
   await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex allowance', exact: true })).toHaveCount(0);
-  await requests.getByRole('button', { name: 'Show 1 more request' }).press('Enter');
   await expect(requests.getByText('Google', { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(requests.getByText('Unpriced', { exact: true })).toHaveCount(2);
-  await page.getByRole('radio', { name: 'Usage value' }).click();
+  await page.getByRole('radiogroup', { name: 'Chart metric' }).getByRole('radio', { name: 'Usage value' }).click();
   const chart = page.getByRole('region', { name: 'Usage value over time' });
   const firstBucket = chart.getByRole('button').first();
   const secondBucket = chart.getByRole('button').nth(1);
@@ -317,7 +334,6 @@ test('keeps horizontal table scrolling inside the dashboard at narrow widths', a
   await page.setViewportSize({ width: 300, height: 900 });
   const firstModel = page.locator('#request-table tbody tr').first().locator('.model-cell .clip');
   expect((await firstModel.boundingBox())!.width).toBeGreaterThan(20);
-  await page.getByRole('button', { name: /Show .* more requests/ }).click();
   const provider = page.getByRole('cell', { name: /model-list-value/ }).getByText('OpenRouter', { exact: true });
   const providerFits = await provider.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
@@ -340,7 +356,6 @@ test('keeps long request names compact while exposing cache writes and full deta
   await expect(chart.getByRole('button').first()).toHaveAccessibleName(
     /Uncached input 140, cached input 60, cache writes 100, output 30$/
   );
-  await page.getByRole('button', { name: /Show .* more requests/ }).click();
   const row = page.getByRole('row').filter({ hasText: model });
   const detailButton = row.getByRole('button', { name: /Details for/ });
   await detailButton.waitFor();
@@ -403,6 +418,7 @@ test('splits timeline token mix from reasoning levels and puts breakdowns before
   const firstBucket = chart.getByRole('button').first();
   await expect(firstBucket).toHaveAccessibleName(/Uncached input 140, cached input 60, cache writes 100, output 30$/);
   const coverage = page.getByRole('region', { name: 'Reasoning coverage', exact: true });
+  await expect(coverage.getByText('by requests', { exact: true })).toBeVisible();
   await expect(coverage.getByText('25% reported')).toBeVisible();
   await expect(coverage.getByText('high 25%', { exact: true })).toBeVisible();
   await expect(coverage.getByText('N/R 75%', { exact: true })).toBeVisible();
@@ -422,7 +438,10 @@ test('splits timeline token mix from reasoning levels and puts breakdowns before
   await hideUnreported.press('Enter');
   await expect(hideUnreported).toHaveAttribute('aria-pressed', 'true');
   await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toHaveCount(0);
-  await hideUnreported.press('Space');
+  await page.reload();
+  await expect(reasoningSection.getByRole('button', { name: 'Hide unreported' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toHaveCount(0);
+  await reasoningSection.getByRole('button', { name: 'Hide unreported' }).press('Space');
   await expect(reasoningSection.getByRole('button', { name: 'Filter by reasoning Not reported' })).toBeVisible();
 
   const highBar = reasoningSection.getByRole('button', { name: 'Filter by reasoning high' });
@@ -450,7 +469,7 @@ test('splits timeline token mix from reasoning levels and puts breakdowns before
   await expect(breakdown.getByRole('button', { name: 'Show all 6' })).toBeFocused();
   const mixed = breakdown.getByRole('row', { name: /OpenCode/ });
   await expect(mixed.getByText('$0.00', { exact: true })).toBeVisible();
-  await expect(mixed.getByText('1 of 3 priced', { exact: true })).toBeVisible();
+  await expect(mixed.getByText('1/3 priced', { exact: true })).toBeVisible();
 
   const requests = page.getByRole('region', { name: 'Requests', exact: true });
   expect(await requests.evaluate((node) => {
@@ -458,26 +477,17 @@ test('splits timeline token mix from reasoning levels and puts breakdowns before
     return Boolean(period && period.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING);
   })).toBe(true);
   const rows = requests.locator('tbody tr');
-  const more = requests.getByRole('button', { name: 'Show 1 more request' });
-  await expect(rows).toHaveCount(3);
-  await expect(requests.getByText('Showing 3 of 4 requests on this page')).toBeVisible();
+  await expect(rows).toHaveCount(4);
+  await expect(requests.getByText('4 requests on this page')).toBeVisible();
   await expect(rows.first().locator('.reasoning-cell').getByText('high', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'View requests' }).press('Enter');
   await expect(requests.getByRole('heading', { name: 'Requests' })).toBeFocused();
-  await more.press('Enter');
-  await expect(rows).toHaveCount(4);
-  await expect(rows.nth(3).getByRole('button', { name: /Details/ })).toBeFocused();
-  const fewer = requests.getByRole('button', { name: 'Show fewer requests' });
-  await page.keyboard.press('Tab');
-  await expect(fewer).toBeFocused();
-  await fewer.press('Space');
-  await expect(rows).toHaveCount(3);
-  await expect(more).toBeFocused();
 
   await requests.getByRole('button', { name: /Details for gpt-api/ }).press('Enter');
   const detail = page.getByRole('dialog', { name: 'Request details' });
   await expect(detail.getByText('Reasoning', { exact: true })).toBeVisible();
   await expect(detail.getByText('high', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Total tokens', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 
   await requests.getByRole('button', { name: /Details for gpt-codex/ }).press('Enter');
@@ -512,16 +522,25 @@ test('aligns breakdown amounts and keeps model filters keyboard-operable', async
   await expect(luna).toHaveAttribute('aria-pressed', 'false');
   await expect(model).toBeFocused();
   await expect.poll(() => usageQueries.at(-1)?.get('model')).toBeNull();
+
+  // Clicking anywhere on the row (not just the model name button) toggles the filter
+  const lunaRow = breakdown.getByRole('row', { name: /gpt-6-luna/ });
+  await lunaRow.locator('td').last().click();
+  await expect(luna).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => usageQueries.at(-1)?.get('model')).toBe('gpt-6-luna');
+  await lunaRow.locator('td').first().click();
+  await expect(luna).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => usageQueries.at(-1)?.get('model')).toBeNull();
 });
 
-test('hides previous results when loading the selected source fails', async ({ page }) => {
+test('hides previous results when loading the selected provider fails', async ({ page }) => {
   await mockAPI(page);
   let failFilteredQuery = true;
   let finishLoading!: () => void;
   const pending = new Promise<void>((resolve) => { finishLoading = resolve; });
   await page.route('**/api/usage?**', async (route) => {
-    const source = new URL(route.request().url()).searchParams.get('source');
-    if (source === 'codex' && failFilteredQuery) {
+    const provider = new URL(route.request().url()).searchParams.get('provider');
+    if (provider === 'codex' && failFilteredQuery) {
       await pending;
       return route.fulfill({ status: 503 });
     }
@@ -530,7 +549,7 @@ test('hides previous results when loading the selected source fails', async ({ p
   await unlock(page);
   const apiRequest = page.getByRole('button', { name: /Details for gpt-api/ });
   await expect(apiRequest).toBeVisible();
-  await page.getByRole('combobox', { name: 'Source' }).click();
+  await page.getByRole('combobox', { name: 'Provider' }).click();
   await page.getByRole('option', { name: 'Codex subscription' }).click();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('status').filter({ hasText: 'Loading usage…' })).toBeVisible();
@@ -615,7 +634,6 @@ test('retries failed request pages in place and links client diagnostics to the 
   const requests = page.getByRole('region', { name: 'Requests' });
   const amount = page.getByRole('region', { name: 'Usage value', exact: true });
   await expect(amount.getByText('$0.02')).toBeVisible();
-  await requests.getByRole('button', { name: /Show .* more requests/ }).click();
   const websocketRow = requests.getByRole('button', { name: /Details for gpt-websocket/ });
   await expect(websocketRow).toBeVisible();
   await requests.getByRole('combobox', { name: 'Request outcome' }).press('Enter');
@@ -868,90 +886,77 @@ test('keeps client actions in view and restores focus after keyboard navigation'
 
 test('combines multiple usage filters and restores their selections from the URL', async ({ page }) => {
   const client = { id: 'work+shop', name: 'Workshop', createdAt: initialStart, keys: [] };
+  const extraModelReqs: UsageRequest[] = Array.from({ length: 5 }, (_, i) => ({
+    ...response.requests[1],
+    id: 20 + i,
+    model: `gpt-extra-${i + 1}`,
+    clientId: client.id,
+    client: client.name
+  }));
   const { usageQueries } = await mockAPI(page, {
     initialClients: [client],
-    extraRequests: [{ ...response.requests[1], id: 5, clientId: client.id, client: client.name }]
+    extraRequests: [{ ...response.requests[1], id: 5, clientId: client.id, client: client.name }, ...extraModelReqs]
   });
   await unlock(page);
 
-  const sourceFilter = page.getByRole('combobox', { name: 'Source' });
-  const sourceSearch = page.getByRole('combobox', { name: 'Search sources' });
-  await sourceFilter.press('Enter');
-  await expect(sourceSearch).toBeFocused();
-  await sourceSearch.pressSequentially('API');
-  await sourceSearch.press('Space');
-  await expect(sourceSearch).toHaveValue('API ');
-  await expect(page.getByRole('option', { name: 'API providers' })).toBeVisible();
-  await expect(page.getByRole('option', { name: 'Codex subscription' })).toHaveCount(0);
-  await page.evaluate(async () => {
-    const toggleOption = () => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter', code: 'Enter', bubbles: true, cancelable: true
-    }));
-    toggleOption();
-    await Promise.resolve();
-    toggleOption();
-  });
+  // Short lists (<= 6 options like Provider and Client) open cleanly without a Search box
+  const providerFilter = page.getByRole('combobox', { name: 'Provider', exact: true });
+  await providerFilter.press('Enter');
+  await expect(page.getByRole('listbox')).toHaveAttribute('aria-multiselectable', 'true');
+  await expect(page.getByRole('combobox', { name: 'Search providers' })).toHaveCount(0);
+  await page.getByRole('option', { name: 'OpenCode Go', exact: true }).click();
+  await page.getByRole('option', { name: 'Codex subscription', exact: true }).click();
   await page.keyboard.press('Escape');
-  await expect(sourceFilter).toBeFocused();
-  await expect(page).toHaveURL('/usage');
-  await expect(sourceFilter).toHaveText('All sources');
+  await expect(providerFilter).toBeFocused();
 
-  for (const { label, searchLabel, first, last } of [
-    { label: 'Source', searchLabel: 'Search sources', first: 'API providers', last: 'Codex subscription' },
-    { label: 'Client', searchLabel: 'Search clients', first: 'OpenCode', last: 'Workshop' },
-    { label: 'Model', searchLabel: 'Search models', first: 'gpt-api', last: 'gpt-codex' }
-  ]) {
-    const filter = page.getByRole('combobox', { name: label, exact: true });
-    const control = page.locator('.filter-controls').filter({ has: filter });
-    const search = page.getByRole('combobox', { name: searchLabel });
-    const list = page.getByRole('listbox');
-    await filter.press('Enter');
-    await expect(search).toBeFocused();
-    await expect(search).toHaveValue('');
-    await expect(list).toHaveAttribute('aria-multiselectable', 'true');
-    if (label === 'Model') {
-      await search.fill('no-such-model');
-      await expect(page.getByText('No matches found.')).toBeVisible();
-      await expect(list.getByRole('option')).toHaveCount(0);
-    }
-    const firstOption = page.getByRole('option', { name: first, exact: true });
-    const lastOption = page.getByRole('option', { name: last, exact: true });
-    await search.fill(first);
-    await expect(firstOption).toBeVisible();
-    await expect(lastOption).toHaveCount(0);
-    await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', repeat: true });
-    await expect(firstOption).toHaveAttribute('aria-selected', 'false');
-    await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
-    await expect(firstOption).toHaveAttribute('aria-selected', 'false');
-    await search.press('Enter');
-    await expect(firstOption).toHaveAttribute('aria-selected', 'true');
-    await expect(search).toBeFocused();
-    await expect(search).toHaveValue(first);
-    await search.fill(last);
-    await expect(lastOption).toBeVisible();
-    await expect(firstOption).toHaveCount(0);
-    await search.press('ArrowDown');
-    await search.press('Enter');
-    await expect(lastOption).toHaveAttribute('aria-selected', 'true');
-    await expect(search).toBeFocused();
-    await page.keyboard.press('Escape');
-    await expect(search).toBeHidden();
-    await expect(filter).toBeFocused();
-    for (const selection of [first, last]) {
-      await expect(control.getByText(selection, { exact: true })).toBeVisible();
-      await expect(control.getByRole('button', { name: `Remove ${selection}`, exact: true })).toBeVisible();
-    }
-    await expect(control.getByRole('button', { name: `Clear ${label.toLowerCase()} filter` })).toBeVisible();
+  const clientFilterInit = page.getByRole('combobox', { name: 'Client', exact: true });
+  await clientFilterInit.press('Enter');
+  await expect(page.getByRole('combobox', { name: 'Search clients' })).toHaveCount(0);
+  await page.getByRole('option', { name: 'OpenCode', exact: true }).click();
+  await page.getByRole('option', { name: 'Workshop', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(clientFilterInit).toBeFocused();
 
-    await filter.press('Enter');
-    await expect(search).toHaveValue('');
-    await expect(firstOption).toHaveAttribute('aria-selected', 'true');
-    await expect(lastOption).toHaveAttribute('aria-selected', 'true');
-    await page.keyboard.press('Escape');
+  // Longer lists (> 6 options like Model) expose Search with keyboard filtering and IME/repeat guards
+  const modelFilterInit = page.getByRole('combobox', { name: 'Model', exact: true });
+  const modelControlInit = page.locator('.filter-controls').filter({ has: modelFilterInit });
+  const search = page.getByRole('combobox', { name: 'Search models' });
+  const list = page.getByRole('listbox');
+  await modelFilterInit.press('Enter');
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('');
+  await expect(list).toHaveAttribute('aria-multiselectable', 'true');
+  await search.fill('no-such-model');
+  await expect(page.getByText('No matches found.')).toBeVisible();
+  await expect(list.getByRole('option')).toHaveCount(0);
+  const firstOption = page.getByRole('option', { name: 'gpt-api', exact: true });
+  const lastOption = page.getByRole('option', { name: 'gpt-codex', exact: true });
+  await search.fill('gpt-api');
+  await expect(firstOption).toBeVisible();
+  await expect(lastOption).toHaveCount(0);
+  await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', repeat: true });
+  await expect(firstOption).toHaveAttribute('aria-selected', 'false');
+  await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
+  await expect(firstOption).toHaveAttribute('aria-selected', 'false');
+  await search.press('Enter');
+  await expect(firstOption).toHaveAttribute('aria-selected', 'true');
+  await expect(search).toBeFocused();
+  await search.fill('gpt-codex');
+  await expect(lastOption).toBeVisible();
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  await expect(lastOption).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Escape');
+  await expect(search).toBeHidden();
+  await expect(modelFilterInit).toBeFocused();
+  for (const selection of ['gpt-api', 'gpt-codex']) {
+    await expect(modelControlInit.getByText(selection, { exact: true })).toBeVisible();
+    await expect(modelControlInit.getByRole('button', { name: `Remove ${selection}`, exact: true })).toBeVisible();
   }
+  await expect(modelControlInit.getByRole('button', { name: 'Clear model filter' })).toBeVisible();
 
   const scope = (params: URLSearchParams) => ({
-    sources: params.getAll('source').sort(),
+    providers: params.getAll('provider').sort(),
     clients: params.getAll('client').sort(),
     models: params.getAll('model').sort()
   });
@@ -960,7 +965,7 @@ test('combines multiple usage filters and restores their selections from the URL
     const latest = usageQueries.at(-1);
     return latest && scope(latest);
   };
-  const selected = { sources: ['api', 'codex'], clients: ['open-code', 'work+shop'], models: ['gpt-api', 'gpt-codex'] };
+  const selected = { providers: ['codex', 'opencode-go'], clients: ['open-code', 'work+shop'], models: ['gpt-api', 'gpt-codex'] };
   const requests = page.getByRole('region', { name: 'Requests' });
   await expect.poll(currentScope).toEqual(selected);
   await expect.poll(apiScope).toEqual(selected);
@@ -974,9 +979,9 @@ test('combines multiple usage filters and restores their selections from the URL
   const modelChips = modelControl.getByRole('button', { name: /^Remove / });
   const clientFilter = page.getByRole('combobox', { name: 'Client', exact: true });
   const clientControl = page.locator('.filter-controls').filter({ has: clientFilter });
-  const source = page.getByRole('combobox', { name: 'Source', exact: true });
-  const sourceControl = page.locator('.filter-controls').filter({ has: source });
-  await expect(sourceControl.getByRole('button', { name: /^Remove / })).toHaveCount(2);
+  const provider = page.getByRole('combobox', { name: 'Provider', exact: true });
+  const providerControl = page.locator('.filter-controls').filter({ has: provider });
+  await expect(providerControl.getByRole('button', { name: /^Remove / })).toHaveCount(2);
   await expect(clientControl.getByRole('button', { name: /^Remove / })).toHaveCount(2);
   await expect(modelChips).toHaveCount(2);
   const clear = modelControl.getByRole('button', { name: 'Clear model filter' });
@@ -1004,14 +1009,11 @@ test('combines multiple usage filters and restores their selections from the URL
 
   const removeOpenCode = clientControl.getByRole('button', { name: 'Remove OpenCode', exact: true });
   const removeWorkshop = clientControl.getByRole('button', { name: 'Remove Workshop', exact: true });
-  await source.focus();
+  await provider.focus();
   for (const next of [removeOpenCode, removeWorkshop, clientControl.getByRole('button', { name: 'Clear client filter' }), clientFilter]) {
     await page.keyboard.press('Tab');
     await expect(next).toBeFocused();
   }
-  await clientFilter.press('Enter');
-  await page.getByRole('combobox', { name: 'Search clients' }).press('Tab');
-  await expect(modelChips.first()).toBeFocused();
   await expect(removeOpenCode).toHaveAttribute('aria-keyshortcuts', 'Enter Space');
   await removeOpenCode.click();
   await expect(removeOpenCode).toHaveCount(0);
@@ -1035,22 +1037,22 @@ test('restores filter scope and pagination after undo and supports keyboard navi
   const { usageQueries } = await mockAPI(page);
   await unlock(page);
   await page.getByRole('radio', { name: '7 days' }).click();
-  await page.getByRole('combobox', { name: 'Source' }).click();
-  await page.getByRole('option', { name: 'API providers' }).click();
+  await page.getByRole('combobox', { name: 'Provider' }).click();
+  await page.getByRole('option', { name: 'OpenCode Go' }).click();
   await page.keyboard.press('Escape');
-  await expect(page).toHaveURL('/usage?range=7d&source=api');
+  await expect(page).toHaveURL('/usage?range=7d&provider=opencode-go');
   await expect(page.getByRole('row').filter({ has: page.getByText('OpenCode Go', { exact: true }) })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
-  await expect(page.getByRole('button', { name: 'Remove API providers' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Remove OpenCode Go' })).toBeVisible();
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Skip to main content' }).press('Enter');
   await expect(page.getByRole('main')).toBeFocused();
   await expect(page).toHaveURL('/clients');
   await page.getByRole('link', { name: 'Usage', exact: true }).click();
-  await expect(page).toHaveURL('/usage?range=7d&source=api');
+  await expect(page).toHaveURL('/usage?range=7d&provider=opencode-go');
   const next = page.getByRole('button', { name: 'Next requests' });
   await expect(next).toBeEnabled();
   await next.press('Enter');
@@ -1062,14 +1064,14 @@ test('restores filter scope and pagination after undo and supports keyboard navi
   const undo = page.getByRole('button', { name: 'Undo reset' });
   await expect(undo).toBeFocused();
   await undo.press('Enter');
-  await expect(page).toHaveURL('/usage?range=7d&source=api');
+  await expect(page).toHaveURL('/usage?range=7d&provider=opencode-go');
   await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
   await expect.poll(() => usageQueries.at(-1)?.get('cursor')).toBe('test-cursor');
   await page.goBack();
   await expect(page.getByRole('radio', { name: 'Last 24h' })).toBeChecked();
   await page.goForward();
   await expect(page.getByRole('radio', { name: '7 days' })).toBeChecked();
-  await expect(page.getByRole('button', { name: 'Remove API providers' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Remove OpenCode Go' })).toBeVisible();
 });
 
 test('updates old bookmark URLs while preserving usage filters and the selected client', async ({ page }) => {
@@ -1209,13 +1211,13 @@ test.describe('coarse touch input', () => {
     await dateRange.tap();
     const chart = page.getByRole('region', { name: 'Tokens over time' });
     const window = chart.getByRole('button').nth(10);
-    const source = page.getByRole('combobox', { name: 'Source' });
+    const provider = page.getByRole('combobox', { name: 'Provider' });
 
     for (const target of [
       page.getByRole('combobox', { name: 'Theme', exact: true }),
       page.getByRole('button', { name: 'Lock dashboard' }),
       page.getByRole('button', { name: 'Refresh usage' }),
-      source,
+      provider,
       page.getByRole('combobox', { name: 'Client' }),
       page.getByRole('combobox', { name: 'Model' }),
       dateRange,
@@ -1230,10 +1232,10 @@ test.describe('coarse touch input', () => {
     await window.tap();
     await expect(window).toHaveAttribute('aria-pressed', 'true');
     await expect(page).toHaveURL(/bucket=2026-11-30/);
-    await source.tap();
-    await page.getByRole('option', { name: 'API providers' }).tap();
+    await provider.tap();
+    await page.getByRole('option', { name: 'OpenCode Go' }).tap();
     await page.keyboard.press('Escape');
-    for (const target of [source, page.getByRole('button', { name: 'Remove API providers' }), page.getByRole('button', { name: 'Clear source filter' })]) {
+    for (const target of [provider, page.getByRole('button', { name: 'Remove OpenCode Go' }), page.getByRole('button', { name: 'Clear provider filter' })]) {
       await expect(target).toBeVisible();
       const box = (await target.boundingBox())!;
       expect(box.width).toBeGreaterThanOrEqual(44);
@@ -1561,4 +1563,422 @@ test('holds client writes while a pending lock could close the dashboard', async
   await newKey.press('k');
   await expect(page.getByRole('dialog', { name: 'New proxy key' })).toBeVisible();
   expect(keyWrites).toBe(1);
+});
+
+test('keeps chart tooltips clear of controls, scales reported reasoning bars, and enriches breakdown and request scannability', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  const richUsage: Usage = {
+    summary: {
+      estimatedCost: 14.82,
+      cacheSavings: 6.45,
+      inputTokens: 48_200_000,
+      cachedInputTokens: 39_500_000,
+      cacheWriteTokens: 1_200_000,
+      outputTokens: 1_800_000,
+      requestCount: 4261,
+      pricedRequestCount: 4091
+    },
+    buckets: Array.from({ length: 12 }, (_, i) => ({
+      start: new Date(Date.UTC(2026, 10, 26, i)).toISOString(),
+      estimatedCost: i === 5 ? 4.2 : 0.9,
+      inputTokens: i === 5 ? 12_000_000 : 3_000_000,
+      cachedInputTokens: i === 5 ? 9_800_000 : 2_200_000,
+      cacheWriteTokens: 100_000,
+      outputTokens: i === 5 ? 450_000 : 120_000,
+      requestCount: 300,
+      pricedRequestCount: 295
+    })),
+    groups: {
+      models: [
+        {
+          id: 'gemini-3.5-flash-preview-09-2026',
+          name: 'gemini-3.5-flash-preview-09-2026',
+          estimatedCost: 0.006834,
+          tokens: 18_300_000,
+          requestCount: 1961,
+          pricedRequestCount: 1957,
+          reasoningMix: [
+            { level: 'unreported', share: 0.87 },
+            { level: 'minimal', share: 0.12 },
+            { level: 'low', share: 0.01 }
+          ]
+        },
+        {
+          id: 'claude-opus-4-6-20260901',
+          name: 'claude-opus-4-6-20260901',
+          estimatedCost: 12.4,
+          tokens: 22_000_000,
+          requestCount: 1400,
+          pricedRequestCount: 1400,
+          reasoningMix: [{ level: 'high', share: 0.7 }, { level: 'medium', share: 0.3 }]
+        },
+        {
+          id: 'gpt-5.4-nano',
+          name: 'gpt-5.4-nano',
+          estimatedCost: 0.02,
+          tokens: 18_600,
+          requestCount: 50,
+          pricedRequestCount: 50
+        }
+      ],
+      clients: [
+        { id: 'antigravity', name: 'Antigravity', estimatedCost: 14.82, tokens: 50_000_000, requestCount: 4261, pricedRequestCount: 4091, transport: 'Proxy · OTLP' }
+      ],
+      providers: [
+        { id: 'google', name: 'Google', estimatedCost: 2.42, tokens: 28_000_000, requestCount: 2861, pricedRequestCount: 2691, transport: 'Proxy' },
+        { id: 'anthropic', name: 'Anthropic', estimatedCost: 12.4, tokens: 22_000_000, requestCount: 1400, pricedRequestCount: 1400, transport: 'OTLP' }
+      ],
+      reasoning: [
+        { id: 'high', name: 'high', estimatedCost: 9.5, tokens: 6_050_000, requestCount: 210, pricedRequestCount: 210 },
+        { id: 'medium', name: 'medium', estimatedCost: 1.2, tokens: 400_000, requestCount: 128, pricedRequestCount: 128 },
+        { id: 'low', name: 'low', estimatedCost: 0.4, tokens: 350_000, requestCount: 43, pricedRequestCount: 43 },
+        { id: 'minimal', name: 'minimal', estimatedCost: 0.05, tokens: 200_000, requestCount: 200, pricedRequestCount: 200 },
+        { id: 'unreported', name: 'Not reported', estimatedCost: 3.67, tokens: 43_000_000, requestCount: 3680, pricedRequestCount: 3510 }
+      ]
+    },
+    requests: [
+      {
+        id: 101,
+        at: '2026-11-26T16:23:41Z',
+        source: 'api',
+        provider: 'google',
+        clientId: 'antigravity',
+        client: 'Antigravity',
+        model: 'gemini-3.5-flash-preview-09-2026',
+        reasoningLevel: 'minimal',
+        endpoint: '/v1/responses',
+        method: 'POST',
+        status: 200,
+        usageAvailable: true,
+        inputTokens: 120_000,
+        cachedInputTokens: 96_000,
+        outputTokens: 4_200,
+        cost: 0.006834,
+        rates
+      },
+      {
+        id: 102,
+        at: '2026-11-26T16:23:45Z',
+        source: 'api',
+        provider: 'anthropic',
+        clientId: 'antigravity',
+        client: 'Antigravity',
+        model: 'claude-opus-4-6-20260901',
+        reasoningLevel: 'high',
+        endpoint: '/claude-code/api-request',
+        method: 'POST',
+        status: 200,
+        usageAvailable: true,
+        inputTokens: 40_000,
+        cachedInputTokens: 32_000,
+        outputTokens: 2_500,
+        cost: 0.06,
+        rates: null,
+        priceSource: 'provider-reported'
+      },
+      ...Array.from({ length: 12 }, (_, idx): UsageRequest => ({
+        id: 103 + idx,
+        at: `2026-11-26T16:22:${String(10 + idx).padStart(2, '0')}Z`,
+        source: 'api',
+        provider: 'google',
+        clientId: 'antigravity',
+        client: 'Antigravity',
+        model: 'gemini-3.5-flash-preview-09-2026',
+        reasoningLevel: 'low',
+        endpoint: '/v1/responses',
+        method: 'POST',
+        status: 200,
+        usageAvailable: true,
+        inputTokens: 10_000,
+        cachedInputTokens: 5_000,
+        outputTokens: 500,
+        cost: 0.015,
+        rates
+      }))
+    ],
+    allowance: [],
+    filters: {
+      models: ['gemini-3.5-flash-preview-09-2026', 'claude-opus-4-6-20260901', 'gpt-5.4-nano'],
+      clients: [{ id: 'antigravity', name: 'Antigravity' }],
+      reasoning: ['high', 'medium', 'low', 'minimal', 'unreported']
+    },
+    nextCursor: null
+  };
+
+  await page.route('**/api/usage?**', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('range') === '1h') {
+      return route.fulfill({ json: { ...richUsage, buckets: richUsage.buckets.slice(0, 12) } });
+    }
+    return route.fulfill({ json: richUsage });
+  });
+
+  await unlock(page);
+
+  // 1. Prompt cache savings in KPI #1 & basis label in KPI #3
+  const valueKpi = page.getByRole('region', { name: 'Usage value', exact: true });
+  await expect(valueKpi.getByText('Saved $6.45 via prompt cache')).toBeVisible();
+  const coverageKpi = page.getByRole('region', { name: 'Reasoning coverage', exact: true });
+  await expect(coverageKpi.getByText('by requests', { exact: true })).toBeVisible();
+  await expect(coverageKpi.getByText(/low /)).toBeVisible();
+
+  // 2. Chart tooltip stays clear of controls and legend on both left and right buckets
+  const chart = page.getByRole('region', { name: 'Tokens over time' });
+  const controlsBox = (await page.locator('.chart-controls').boundingBox())!;
+  const legendBox = (await chart.locator('.legend').boundingBox())!;
+  for (const idx of [1, 10]) {
+    await chart.getByRole('button').nth(idx).focus();
+    const tooltip = chart.locator('.chart-tooltip');
+    await expect(tooltip).toBeVisible();
+    const tipBox = (await tooltip.boundingBox())!;
+    expect(tipBox.y).toBeGreaterThanOrEqual(controlsBox.y + controlsBox.height - 1);
+    expect(tipBox.y).toBeGreaterThanOrEqual(legendBox.y + legendBox.height - 1);
+    await page.keyboard.press('Escape');
+  }
+
+  // 3. Distinct colors for low vs minimal in Reasoning levels + reported bar scaling
+  const reasoningPanel = page.getByRole('region', { name: 'Reasoning levels' });
+  const lowColor = await reasoningPanel.locator('.reasoning-pill[data-level="low"]').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const minimalColor = await reasoningPanel.locator('.reasoning-pill[data-level="minimal"]').evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(lowColor).not.toBe(minimalColor);
+  const highFillWidth = await reasoningPanel.getByRole('button', { name: /Filter by reasoning high/ }).locator('.hbar-fill').evaluate((el) => (el as HTMLElement).style.width);
+  expect(highFillWidth).toBe('100%');
+
+  // 4. By model: N/R label, compact priced count, micro-value <$0.01 with exact title, sort toggle, and By provider
+  const byModel = page.getByRole('region', { name: 'By model', exact: true });
+  const flashRow = byModel.getByRole('row', { name: /gemini-3\.5-flash-preview-09-2026/ });
+  await expect(flashRow.getByText(/N\/R 87%/)).toBeVisible();
+  await expect(flashRow.getByText('1,957/1,961 priced', { exact: true })).toBeVisible();
+  const microCell = flashRow.getByText('<$0.01', { exact: true });
+  await expect(microCell).toBeVisible();
+  await expect(microCell).toHaveAttribute('title', '$0.006834');
+  // Sorted by tokens (default): flash (18.3M) is #2 ahead of nano (18.6K)
+  const modelOrderTokens = await byModel.locator('tbody th .breakdown-filter').allTextContents();
+  expect(modelOrderTokens.map((s) => s.trim())).toEqual(['claude-opus-4-6-20260901', 'gemini-3.5-flash-preview-09-2026', 'gpt-5.4-nano']);
+  // Switch breakdown sort to Usage value: nano ($0.02) moves ahead of flash ($0.006834)
+  await page.getByRole('radiogroup', { name: 'Breakdown sort' }).getByRole('radio', { name: 'Usage value' }).click();
+  const modelOrderCost = await byModel.locator('tbody th .breakdown-filter').allTextContents();
+  expect(modelOrderCost.map((s) => s.trim())).toEqual(['claude-opus-4-6-20260901', 'gpt-5.4-nano', 'gemini-3.5-flash-preview-09-2026']);
+  // Right column shows clickable By provider
+  const byProvider = page.getByRole('region', { name: 'By provider', exact: true });
+  const googleProvider = byProvider.getByRole('button', { name: 'Filter by provider Google' });
+  await expect(googleProvider).toBeVisible();
+  await expect(byProvider.getByRole('button', { name: 'Filter by provider Anthropic' })).toBeVisible();
+  await googleProvider.click();
+  await expect(page).toHaveURL(/provider=google/);
+  await expect(googleProvider).toHaveAttribute('aria-pressed', 'true');
+  await googleProvider.click();
+  await expect(page).not.toHaveURL(/provider=google/);
+
+  // 5. Request time window moved into Requests header + 12-row default batch + seconds + token summary + ~estimated prefix
+  const requests = page.getByRole('region', { name: 'Requests', exact: true });
+  await expect(requests.getByRole('combobox', { name: 'Request time window' })).toBeVisible();
+  await expect(requests.locator('tbody tr')).toHaveCount(12);
+  await expect(requests.getByText('Showing 12 of 14 requests on this page')).toBeVisible();
+  const showMore = requests.getByRole('button', { name: 'Show 2 more requests' });
+  await showMore.press('Enter');
+  await expect(requests.locator('tbody tr')).toHaveCount(14);
+  await requests.getByRole('button', { name: 'Show fewer requests' }).press('Space');
+  await expect(requests.locator('tbody tr')).toHaveCount(12);
+  await expect(requests.getByText(/:\d{2}:\d{2}/).first()).toBeVisible();
+  await expect(requests.getByText(/120K in · 4\.2K out · 80% cache/)).toBeVisible();
+  await expect(requests.getByText('~<$0.01', { exact: true })).toBeVisible();
+  await expect(requests.getByText('Estimated cost', { exact: true })).toHaveCount(0);
+  await expect(requests.getByText('Reported cost', { exact: true })).toBeVisible();
+
+  // 6. Last 1h preset works
+  const range1h = page.getByRole('radiogroup', { name: 'Date range' }).getByRole('radio', { name: 'Last 1h' });
+  await range1h.click();
+  await expect(page).toHaveURL(/range=1h/);
+});
+
+test('supports global custom datetime filter and consecutive chart range selection via drag, Shift+Click, and keyboard', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { usageQueries } = await mockAPI(page);
+  await unlock(page);
+
+  const chart = page.getByRole('region', { name: 'Tokens over time' });
+  const cols = chart.getByRole('button');
+  await expect(cols).toHaveCount(3);
+
+  // 1. Mouse drag across consecutive columns (bucket 0 -> bucket 1) updates global from/to filter
+  const firstBox = (await cols.nth(0).boundingBox())!;
+  const secondBox = (await cols.nth(1).boundingBox())!;
+  await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2, { steps: 4 });
+  await expect(chart.locator('.brush-pill')).toContainText('2 windows');
+  await page.mouse.up();
+
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBe('2026-11-20T12:00:00.000Z');
+  await expect.poll(() => usageQueries.at(-1)?.get('to')).toBe('2026-11-20T14:00:00.000Z');
+  await expect(page).toHaveURL(/from=2026-11-20T12%3A00%3A00\.000Z&to=2026-11-20T14%3A00%3A00\.000Z/);
+  await expect(page.getByRole('button', { name: 'Clear custom time range' })).toBeVisible();
+
+  // Clear custom range via the inline clear button
+  await page.getByRole('button', { name: 'Clear custom time range' }).click();
+  await expect(page).toHaveURL('/usage');
+  await expect(page.getByRole('button', { name: 'Clear custom time range' })).toHaveCount(0);
+
+  // 2. Real Shift+Click from first bar to third bar updates global from/to (not single ?bucket=)
+  await cols.nth(0).click();
+  await expect(page).toHaveURL(/bucket=2026-11-20T12%3A00%3A00Z/);
+  await cols.nth(2).click({ modifiers: ['Shift'] });
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBe('2026-11-20T12:00:00.000Z');
+  await expect.poll(() => usageQueries.at(-1)?.get('to')).toBe('2026-11-20T15:00:00.000Z');
+  await expect(page).not.toHaveURL(/bucket=/);
+
+  await page.getByRole('button', { name: 'Clear custom time range' }).click();
+  await expect(page).toHaveURL('/usage');
+
+  // 3. Keyboard Shift+ArrowRight survives a refresh with identical buckets, ignores repeated Enter, and commits on non-repeat Enter
+  await cols.nth(1).focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(chart.locator('.brush-pill')).toContainText('2 windows');
+
+  // Trigger a manual refresh with the same buckets — keyboard range preview must stay intact
+  await page.getByRole('button', { name: 'Refresh usage' }).click();
+  await expect(chart.locator('.brush-pill')).toContainText('2 windows');
+
+  // Repeated Enter must NOT commit the keyboard range
+  const queriesBeforeRepeat = usageQueries.length;
+  await cols.nth(2).dispatchEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true });
+  await expect(chart.locator('.brush-pill')).toContainText('2 windows');
+  expect(usageQueries.length).toBe(queriesBeforeRepeat);
+
+  // Non-repeat Enter commits the global time range
+  await cols.nth(2).focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBe('2026-11-20T13:00:00.000Z');
+  await expect.poll(() => usageQueries.at(-1)?.get('to')).toBe('2026-11-20T15:00:00.000Z');
+
+  // Clicking a preset clears custom range
+  await page.getByRole('radiogroup', { name: 'Date range' }).getByRole('radio', { name: '7 days' }).click();
+  await expect(page).toHaveURL(/range=7d/);
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBeNull();
+
+  // 4. Global datetime popover validation, shortcut metadata, and Enter submission from a datetime field
+  await page.getByRole('button', { name: /Custom time range/ }).click();
+  const popover = page.getByRole('dialog', { name: 'Custom time range' });
+  await expect(popover).toBeVisible();
+  const applyButton = popover.getByRole('button', { name: /Apply range/ });
+  await expect(applyButton).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  const fromInput = popover.getByLabel('From');
+  const toInput = popover.getByLabel('To');
+  await fromInput.fill('2026-11-26T15:00');
+  await toInput.fill('2026-11-26T12:00');
+  await applyButton.click();
+  await expect(popover.getByRole('alert')).toContainText('End time must be at least 1 minute after start time.');
+
+  await fromInput.fill('2026-11-26T10:00');
+  await toInput.fill('2026-11-26T13:30');
+  await toInput.press('Enter');
+  await expect(popover).toBeHidden();
+  await expect(page).toHaveURL(/from=.*&to=/);
+  await expect.poll(() => Boolean(usageQueries.at(-1)?.get('from') && usageQueries.at(-1)?.get('to'))).toBe(true);
+});
+
+test('clamps brushed edge buckets, renders 365-day dense timelines, supports touch hold-drag, and surfaces legacy source bookmarks', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const { usageQueries } = await mockAPI(page);
+
+  // 1. Clamping edge buckets when brushing inside a partial-hour custom range (12:10 -> 14:20)
+  await unlock(page);
+  await page.goto('/usage?from=2026-11-20T12:10:00.000Z&to=2026-11-20T14:20:00.000Z');
+  const chart = page.getByRole('region', { name: 'Tokens over time' });
+  const cols = chart.getByRole('button');
+  await expect(cols).toHaveCount(3);
+  const b0 = (await cols.nth(0).boundingBox())!;
+  const b1 = (await cols.nth(1).boundingBox())!;
+  await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b1.x + b1.width / 2, b1.y + b1.height / 2, { steps: 4 });
+  await expect(chart.locator('.brush-pill')).toContainText('2 windows');
+  await page.mouse.up();
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBe('2026-11-20T12:10:00.000Z');
+  await expect.poll(() => usageQueries.at(-1)?.get('to')).toBe('2026-11-20T14:00:00.000Z');
+
+  // 2. Touch long-press + drag selects a range (quick swipe does not)
+  await page.goto('/usage');
+  await expect(cols).toHaveCount(3);
+  const t0 = (await cols.nth(0).boundingBox())!;
+  const t2 = (await cols.nth(2).boundingBox())!;
+  // Quick touch swipe (< 320ms) should NOT trigger range selection
+  await cols.nth(0).dispatchEvent('pointerdown', { pointerId: 11, pointerType: 'touch', button: 0, clientX: t0.x + t0.width / 2, clientY: t0.y + t0.height / 2, bubbles: true });
+  await page.evaluate(({ x, y }) => window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 11, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })), { x: t2.x + t2.width / 2, y: t2.y + t2.height / 2 });
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 11, pointerType: 'touch', bubbles: true })));
+  await expect(page).toHaveURL('/usage');
+
+  // Long-press (360ms hold) + drag commits global range
+  await cols.nth(0).dispatchEvent('pointerdown', { pointerId: 12, pointerType: 'touch', button: 0, clientX: t0.x + t0.width / 2, clientY: t0.y + t0.height / 2, bubbles: true });
+  await page.waitForTimeout(360);
+  await page.evaluate(({ x, y }) => window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 12, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })), { x: t2.x + t2.width / 2, y: t2.y + t2.height / 2 });
+  await expect(chart.locator('.brush-pill')).toContainText('3 windows');
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 12, pointerType: 'touch', bubbles: true })));
+  await expect.poll(() => usageQueries.at(-1)?.get('from')).toBe('2026-11-20T12:00:00.000Z');
+  await expect.poll(() => usageQueries.at(-1)?.get('to')).toBe('2026-11-20T15:00:00.000Z');
+
+  // 3. Legacy ?source=codex bookmark surfaces a removable chip independent of Provider
+  await page.goto('/usage?source=codex');
+  const sourceChip = page.getByRole('button', { name: 'Remove source filter Codex subscription' });
+  await expect(sourceChip).toBeVisible();
+  await sourceChip.click();
+  await expect(page).toHaveURL('/usage');
+  await expect(sourceChip).toHaveCount(0);
+
+  // 4. 365-day dense custom timeline keeps nonzero bars visible (> 0px wide) with horizontal scroll
+  await page.route('**/api/usage?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('from') === '2025-11-27T00:00:00.000Z') {
+      const startMs = Date.parse('2025-11-27T00:00:00Z');
+      const denseBuckets = Array.from({ length: 365 }, (_, i) => ({
+        start: new Date(startMs + i * 86_400_000).toISOString(),
+        estimatedCost: i === 0 ? 1 : 0,
+        inputTokens: i === 0 ? 1000 : 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: i === 0 ? 200 : 0,
+        requestCount: i === 0 ? 1 : 0,
+        pricedRequestCount: i === 0 ? 1 : 0
+      }));
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          summary: { estimatedCost: 1, inputTokens: 1000, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 200, requestCount: 1, pricedRequestCount: 1 },
+          bucketSeconds: 86400,
+          buckets: denseBuckets,
+          groups: { models: [], clients: [], reasoning: [], providers: [] },
+          groupedBuckets: { models: [], clients: [] },
+          requests: [],
+          nextCursor: null,
+          allowance: [],
+          filters: { models: [], clients: [], providers: [], reasoning: [] }
+        })
+      });
+    }
+    return route.fallback();
+  });
+  await page.goto('/usage?from=2025-11-27T00:00:00.000Z&to=2026-11-27T00:00:00.000Z');
+  const firstNonzeroBar = chart.locator('.chart-column:first-child .bar.nonzero').first();
+  await expect(firstNonzeroBar).toBeVisible();
+  const barBox = (await firstNonzeroBar.boundingBox())!;
+  expect(barBox.width).toBeGreaterThanOrEqual(4);
+
+  // Brush preview pill stays visible inside the chart viewport at both horizontal scroll extremes
+  const chartContent = chart.locator('.chart-content');
+  const viewportBox = (await chartContent.boundingBox())!;
+  await chart.getByRole('button').first().focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  const pill = chart.locator('.brush-pill');
+  await expect(pill).toBeVisible();
+  const startPillBox = (await pill.boundingBox())!;
+  expect(startPillBox.x).toBeGreaterThanOrEqual(viewportBox.x);
+  expect(startPillBox.x + startPillBox.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width + 1);
+
+  await chartContent.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  const endPillBox = (await pill.boundingBox())!;
+  expect(endPillBox.x).toBeGreaterThanOrEqual(viewportBox.x);
+  expect(endPillBox.x + endPillBox.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width + 1);
 });
