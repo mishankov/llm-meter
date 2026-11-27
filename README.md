@@ -1,160 +1,116 @@
-<img src="web/src/lib/assets/llm-meter.png" alt="" width="56" height="56">
+<img src="web/src/lib/assets/llm-meter.png" alt="LLM Meter logo" width="56" height="56">
 
 # LLM Meter
 
-LLM Meter is a self-hosted dashboard for tracking model usage and estimated spend. Collect usage from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode through OpenTelemetry. Proxy metering is available for generic OpenAI-compatible clients and Antigravity.
+LLM Meter is a self-hosted dashboard for tracking LLM token usage, reasoning levels, and estimated spend across your AI tools. Collect usage from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode via OpenTelemetry, or meter generic OpenAI-compatible clients and signed-in Antigravity through the HTTP proxy.
 
-See the [Configuration Guide](docs/configuration.md) for deployment options, client examples, durable queue behavior, upgrades, and troubleshooting.
+[Website](https://mishankov.github.io/llm-meter/) · [Configuration Guide](docs/configuration.md) · [macOS Menu Bar Relay](desktop/README.md) · [Releases](https://github.com/mishankov/llm-meter/releases)
 
-## Run with Docker
+> **Alpha release:** LLM Meter is in early public alpha. Back up your SQLite database (`llm-meter.db`) before upgrading; configuration options and API details may still evolve.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/dashboard-light.png">
+  <img src="docs/assets/dashboard-dark.png" alt="LLM Meter usage dashboard showing estimated spend, token breakdown, reasoning levels, and model and client breakdowns">
+</picture>
+
+## Features
+
+- **Usage & spend analytics:** Track token mix (uncached input, cached input, cache writes, output), prompt cache savings, estimated USD spend, and reasoning-level coverage over preset or custom time ranges, with breakdowns by model, client, and provider plus per-request drill-down.
+- **Privacy-first metering:** OpenTelemetry and `usage-only` relay modes keep prompts, responses, and provider credentials on your machine. The OpenTelemetry receiver strips content fields, and the proxy validates and removes `X-LLM-Meter-Key` before forwarding upstream.
+- **Automatic pricing catalogs:** Preserves provider-reported amounts (including `$0`) and syncs Models.dev and OpenCode Go catalogs daily in SQLite, backed by built-in OpenAI rates and custom per-model overrides via `PRICING_FILE`.
+- **Lightweight self-hosting:** One Go binary serves the embedded dashboard, proxy endpoints, and usage ingestion API backed by SQLite—no external database required. Includes multi-arch Docker images (`linux/amd64`, `linux/arm64`) and a native [macOS menu bar relay app](desktop/README.md).
+- **Accessible UI:** Light, dark, and system themes, collapsible sidebar, and full keyboard navigation.
+
+## Quickstart
+
+### 1. Start the server
 
 ```sh
 export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
-docker build -t llm-meter .
+echo "Dashboard token: $DASHBOARD_TOKEN"
+
 docker run --rm -p 127.0.0.1:8080:8080 \
   -e DASHBOARD_TOKEN -e COOKIE_SECURE=false \
-  -v llm-meter-data:/data llm-meter
+  -v llm-meter-data:/data \
+  ghcr.io/mishankov/llm-meter:latest
 ```
 
-Open `http://localhost:8080` and enter the value of `DASHBOARD_TOKEN`. Go serves the bundled dashboard and proxy from the same container. The volume holds the SQLite database and survives container replacement. Keep the dashboard token stable across restarts. For remote access on a VPS or Pi, serve the container through an HTTPS ingress and leave `COOKIE_SECURE` at its default `true`.
+Open `http://localhost:8080`, unlock with `DASHBOARD_TOKEN`, then open **Clients** to create a client and copy its key (`llmm_...`).
 
-CI publishes a multi-platform image for Linux `amd64` and `arm64` at `ghcr.io/mishankov/llm-meter`. Use `:latest` for the default branch, `:branch-<branch-name>` for a branch build (slashes become hyphens), `:sha-<full-commit-sha>` to pin a commit, or a release tag such as `:v1.2.3`. To use a published build, pull the desired tag and substitute the full image name for `llm-meter` in the `docker run` command.
+For production behind HTTPS, leave `COOKIE_SECURE=true` (the default) and see [Docker Compose behind HTTPS](docs/configuration.md#docker-compose-behind-https).
 
-## Connect a client
+### 2. Connect your tools
 
-### OpenTelemetry
+- **Direct to server (no relay needed):**
+  - **Coding CLIs (OpenTelemetry):** Point the CLI's OTLP exporter at `http://localhost:8080/otlp` (or `https://proxy.example.com/otlp`) and send your client key in `X-LLM-Meter-Key`.
+  - **OpenAI-compatible clients:** Set the base URL to `http://localhost:8080/v1` (or `https://proxy.example.com/v1`) and pass `X-LLM-Meter-Key` alongside your usual `Authorization` header.
+- **Via local relay (optional):** Run the [macOS menu bar app](desktop/README.md) or the Docker / Go relay ([relay setup](docs/configuration.md#4-run-the-local-relay)) for a single place to manage your client key across all tools, local telemetry filtering, offline SQLite queueing, and clients that cannot set custom headers (such as Antigravity ACP). The relay connects to your server over HTTPS (`--target https://...`).
 
-Enable the local relay's OpenTelemetry listener to meter Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode. That listener can run alongside the model proxy. Point the harness's OpenTelemetry exporter at the listener. Model requests and sign-in stay with the harness's provider. The dashboard shows model usage, token counts, cache counts where available, and estimated costs. [OpenTelemetry setup for each harness](docs/configuration.md#53-opentelemetry)
+## Supported clients
 
-If you used the retired Codex or OpenCode Go proxy routes, restore the harness's provider settings and migrate to OpenTelemetry. [Migration guide](docs/configuration.md#migrating-from-the-codex-and-opencode-go-proxy-routes)
+| Client | Metering method | Direct server URL (`X-LLM-Meter-Key`) | Via local relay | Setup guide |
+| --- | --- | --- | --- | --- |
+| **Claude Code** | OpenTelemetry (logs) | `<server>/otlp/v1/logs` | `http://127.0.0.1:4318/otlp/v1/logs` | [Claude Code setup](docs/configuration.md#claude-code) |
+| **Codex** | OpenTelemetry (logs) | `<server>/otlp/v1/logs` | `http://127.0.0.1:4318/otlp/v1/logs` | [Codex setup](docs/configuration.md#codex) |
+| **Gemini CLI** | OpenTelemetry (logs) | `<server>/otlp` | `http://127.0.0.1:4318/otlp` | [Gemini CLI setup](docs/configuration.md#gemini-cli) |
+| **GitHub Copilot CLI** | OpenTelemetry (traces) | `https://<server>/otlp` | `https://127.0.0.1:4318/otlp` | [Copilot CLI setup](docs/configuration.md#github-copilot-cli) |
+| **OpenCode** | OpenTelemetry (traces) | `<server>/otlp` | `http://127.0.0.1:4318/otlp` | [OpenCode setup](docs/configuration.md#opencode) |
+| **OpenAI-compatible SDKs / CLIs** | HTTP proxy | `<server>/v1` | `http://127.0.0.1:8765/v1` | [OpenAI-compatible setup](docs/configuration.md#51-generic-openai-compatible-clients) |
+| **Signed-in Antigravity** | HTTP proxy | `<server>/antigravity` | `http://127.0.0.1:8765/antigravity` | [Antigravity setup](docs/configuration.md#52-signed-in-antigravity) |
 
-### Generic OpenAI-compatible clients
+## How it works
 
-1. Open **Clients**, create a client, and copy its proxy key when shown.
-2. Set the client's OpenAI base URL to `https://proxy.example.com/v1` (or `http://localhost:8080/v1` for local use).
-3. Send the proxy key in `X-LLM-Meter-Key` alongside the client's usual upstream `Authorization` header. The proxy validates its own key and strips it before forwarding the request.
+You can connect tools **directly to the LLM Meter server** or through an optional **local relay**:
 
-### Signed-in Antigravity
+- **Direct to server:** Coding CLIs export OTLP straight to `/otlp/v1/{logs,traces,metrics}` using `X-LLM-Meter-Key` while keeping model traffic direct to their providers—handy for local deployments or single-CLI setups. OpenAI-compatible and Antigravity clients that support custom headers can also proxy directly through `/v1` or `/antigravity`.
+- **Via local relay (CLI or macOS menu bar app):** Gives you a single point of authentication for all local tools (store and rotate one key in Keychain or `proxy.key`), strips prompts and non-usage telemetry fields on your machine before anything leaves localhost, queues usage in SQLite across network outages, and supports endpoint-only proxy clients in `usage-only` (direct to provider) or `remote-proxy` (via server) mode.
 
-Create an Antigravity client in the dashboard and use `https://proxy.example.com/antigravity` as the Cloud Code Assist base URL. The proxy appends the native request path, such as `/v1internal:loadCodeAssist` or `/v1internal:streamGenerateContent`, to `ANTIGRAVITY_UPSTREAM` (default `https://daily-cloudcode-pa.googleapis.com`).
+```mermaid
+flowchart LR
+  subgraph local["Your machine"]
+    harnesses["Claude Code · Codex · Gemini CLI\nCopilot CLI · OpenCode"]
+    clients["OpenAI-compatible clients\nSigned-in Antigravity"]
+    relay["Local relay / macOS app\n(OTLP :4318 · Proxy :8765)"]
+    harnesses -. "Local OTLP\n(optional)" .-> relay
+    clients -. "Local proxy\n(optional)" .-> relay
+  end
 
-Keep Antigravity signed in to Google. Requests must include Google's original `Authorization` header and `X-LLM-Meter-Key` from your local secret store. Use HTTPS for the proxy and keep both credentials out of URLs, command arguments, and logs.
+  subgraph server["Self-hosted server"]
+    meter["LLM Meter\n(Dashboard · OTLP · Proxy · SQLite)"]
+  end
 
-If your Antigravity client accepts only an endpoint override, [run the relay](#run-the-relay) on the same machine as the ACP process.
+  providers["Model Providers"]
 
-For T3 Code, set **Settings → Providers → Antigravity → Binary path** to an executable launcher named `antigravity` or `agy` on the environment that runs Antigravity. The launcher adds the endpoint flag to ACP invocations and passes through T3's profile arguments and other commands:
-
-```sh
-#!/bin/sh
-if [ "$1" = acp ]; then
-  shift
-  set -- acp --cloud_code_endpoint http://127.0.0.1:8765 "$@"
-fi
-exec "/absolute/path/to/antigravity" "$@"
+  harnesses -- "Model traffic\n(direct)" --> providers
+  harnesses -- "Direct OTLP\n(/otlp/v1/* + X-LLM-Meter-Key)" --> meter
+  relay -- "Filtered usage events\n(POST /api/usage/events)" --> meter
+  relay -. "usage-only\n(direct traffic)" .-> providers
+  relay -. "remote-proxy\n(proxied traffic)" .-> meter
+  clients -. "Direct proxy\n(/v1 · /antigravity)" .-> meter
+  meter --> providers
 ```
 
-Set the last line to your installed Antigravity executable, make the launcher executable with `chmod +x`, and start a fresh Antigravity session in T3 using your existing Google sign-in. You can confirm flag support on your runtime with `antigravity acp --help`.
+| Path | Best for | Model traffic | Server sees |
+| --- | --- | --- | --- |
+| **Direct OpenTelemetry (`/otlp`)** | Local deployments or simple setups with no extra relay process | Client → Provider directly | Full exported telemetry (only extracted usage metadata is stored) |
+| **OpenTelemetry via relay** | Single key across multiple CLIs, local content stripping, offline queueing | Client → Provider directly | Filtered usage metadata only (`POST /api/usage/events`) |
+| **Local relay (`usage-only`)** | OpenAI-compatible clients & Antigravity that cannot send custom headers | Client → Relay → Provider directly | Usage metadata only; queued locally in SQLite with retries |
+| **Local relay (`remote-proxy`)** | Routing endpoint-only clients through the central server | Client → Relay → LLM Meter → Provider | Full proxied requests & upstream auth headers |
+| **Direct proxy (`/v1`, `/antigravity`)** | OpenAI-compatible SDKs/CLIs or Antigravity supporting custom headers | Client → LLM Meter → Provider | Full proxied requests & upstream auth headers |
 
-The dashboard shows **Google** as the provider for requests through Antigravity. Generation responses contribute token counts when Google reports them. Eligible requests use Google's Gemini API rates to estimate usage value.
+For deployment topologies, security hardening, durable queue semantics, upgrades, key rotation, and troubleshooting, see the [Configuration Guide](docs/configuration.md).
 
-## Run the relay
+## Pricing and configuration
 
-The relay serves the OpenAI-compatible and Antigravity proxy routes on the same port in `remote-proxy` and `usage-only` modes. Set `--target` to the LLM Meter server's HTTPS origin, such as `https://proxy.example.com`, and supply one proxy key file. Usage is attributed to the dashboard client that owns the key.
+LLM Meter resolves cost in USD in this order:
 
-| Mode | Model traffic | Usage |
-| --- | --- | --- |
-| `usage-only` | Relay connects to the provider directly | Relay uploads usage metadata to the server |
-| `remote-proxy` (default) | Relay connects to LLM Meter, which forwards to the provider | Server meters the proxied request |
+1. **Provider-reported amounts** (including `$0`).
+2. **`PRICING_FILE` overrides** (`provider/model`, then `model`), in USD per million tokens.
+3. **Downloaded catalogs** from Models.dev and OpenCode Go, refreshed at startup and every 24 hours and cached in SQLite so outages do not lose rates.
+4. **Built-in OpenAI rates** (including long-context, service-tier, and background completion adjustments).
 
-Add `--telemetry-listen=127.0.0.1:4318` to receive OpenTelemetry on a separate loopback address alongside either proxy mode. Add `--proxy=false` for an OpenTelemetry-only relay. [Container setup](docs/configuration.md#42-default-single-service-docker-compose-setup)
-
-Usage-only mode sends the model, token counts, outcome, and any reported costs. Prompts, responses, and provider credentials travel between the client, relay, and provider. The server authenticates usage reports with the dashboard client key and trusts that client to report its usage. Pending reports survive restarts, and the server deduplicates retries. The relay logs dropped reports when the queue fills or the server rejects an invalid report. Keep background request creation and polling on the same dashboard client and mode so the server can correlate them. The request API identifies how each request was metered in `measurementSource` (`relay` or `proxy`).
-
-| Provider | Client base URL | HTTPS server path in `remote-proxy` mode |
-| --- | --- | --- |
-| `antigravity` | `http://127.0.0.1:8765` | `/antigravity` |
-| `openai` (OpenAI-compatible) | `http://127.0.0.1:8765/v1` | `/v1` |
-
-Point each client at its local base URL and use its usual provider authentication. The relay picks the provider from the request path and uses the provider's standard upstream in `usage-only` mode.
-
-To limit an instance to one route, set `--provider` to `antigravity` or `openai`. In `usage-only` mode, pair `--upstream` with `--provider` to set a trusted HTTPS base URL for that provider.
-
-### Relay on macOS
-
-The [menu bar app](desktop/README.md) runs the relay locally, shows pending usage uploads, and provides setup for OpenTelemetry exporters, OpenAI-compatible clients, and Antigravity.
-
-### Relay with Docker
-
-The relay image is `ghcr.io/mishankov/llm-meter-relay`, with the same Linux platforms and tag scheme as the server. Authenticate to GHCR if the package is private. You can also build it from the checkout with `docker build -f Dockerfile.relay -t llm-meter-relay .` and substitute that image name below.
-
-```sh
-relay_dir="$HOME/.config/llm-meter/relay"
-(umask 077; mkdir -p "$relay_dir/data"; touch "$relay_dir/proxy.key")
-chmod 600 "$relay_dir/proxy.key"
-```
-
-Save the dashboard client key as the only line in `proxy.key`. Save this as `compose.yaml` and replace `https://proxy.example.com` with your server's HTTPS origin.
-
-```yaml
-services:
-  relay:
-    image: ghcr.io/mishankov/llm-meter-relay:latest
-    user: "${RELAY_UID}:${RELAY_GID}"
-    stop_grace_period: 15s
-    ports:
-      - "127.0.0.1:8765:8765"
-    volumes:
-      - type: bind
-        source: ${HOME}/.config/llm-meter/relay/proxy.key
-        target: /run/secrets/proxy-key
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${HOME}/.config/llm-meter/relay/data
-        target: /data
-        bind:
-          create_host_path: false
-    command:
-      - --target=https://proxy.example.com
-      - --key-file=/run/secrets/proxy-key
-      - --bind=0.0.0.0:8765
-      - --data-dir=/data
-    networks:
-      - relay
-
-networks:
-  relay: {}
-```
-
-```sh
-export RELAY_UID="$(id -u)" RELAY_GID="$(id -g)"
-docker compose up -d relay
-```
-
-Add `--mode=usage-only` under `command` to send only usage reports to the server. Keep the state directory mounted so pending reports survive container replacement. Drain pending reports before moving to a different usage server or key, then use a fresh state directory.
-
-Attach only trusted clients to the relay's Docker network because containers on that network can reach the relay directly. Use Docker Engine 28 or newer and keep the published port bound to `127.0.0.1`. [Docker bridge networking](https://docs.docker.com/engine/network/drivers/bridge/) · [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/#publishing-ports)
-
-### Relay as a Go binary
-
-Build with `go build -o llm-meter-relay ./cmd/llm-meter-relay`. The binary listens on `127.0.0.1:8765` by default.
-
-```sh
-./llm-meter-relay --target https://proxy.example.com --key-file "$HOME/.config/llm-meter/relay/proxy.key"
-```
-
-For usage-only mode, add `--mode usage-only --data-dir "$HOME/.config/llm-meter/relay/data"`.
-
-## Usage and rates
-
-The ledger saves provider-reported amounts, including zero, and uses local rates when the provider omits the amount. Historical records keep any saved Codex quota observations and OpenCode Go charges, list values, and allowance use.
-
-The server refreshes the public OpenCode Go and Models.dev price catalogs at startup and every 24 hours. It stores the last usable catalogs in SQLite, so a failed refresh or temporary outage leaves rates available. Each priced request retains the amount and rates recorded at the time of use. Rows display **Unpriced** when a required price is unknown or Models.dev lists separate audio rates that cannot be applied to the total token counts.
-
-The ledger applies the published 2-hour and 8-hour discounts to eligible OpenAI background estimates when a completed response is retrieved.
-
-Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million tokens. Overrides take precedence over downloaded and built-in rates when estimating a cost. Include a rate for each token category used by the model. Use `0` for a category that is free. For example:
+Requests without complete rate data are shown as **Unpriced**. Example `PRICING_FILE`:
 
 ```json
 {
@@ -162,20 +118,55 @@ Set `PRICING_FILE` to a JSON object of per-model overrides, in USD per million t
 }
 ```
 
-Other server settings are `DATA_DIR` (default `./data`, or `/data` in Docker), `LISTEN_ADDR` (default `:8080`), and the optional `OPENAI_UPSTREAM` and `ANTIGRAVITY_UPSTREAM` base URLs.
+### Server environment variables
 
-## Develop
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `DASHBOARD_TOKEN` | _(required)_ | 24–512 characters; unlocks the dashboard and signs session cookies. |
+| `COOKIE_SECURE` | `true` | Keep `true` behind HTTPS; set `false` only for local HTTP. |
+| `LISTEN_ADDR` | `:8080` | Server TCP listen address. |
+| `DATA_DIR` | `./data` (`/data` in Docker) | Directory for `llm-meter.db`. |
+| `PRICING_FILE` | _(unset)_ | Optional JSON file of per-model rate overrides (USD / 1M tokens). |
+| `OPENAI_UPSTREAM` | `https://api.openai.com/v1` | Optional base URL override for `/v1` proxy traffic. |
+| `ANTIGRAVITY_UPSTREAM` | `https://daily-cloudcode-pa.googleapis.com` | Optional base URL override for `/antigravity` proxy traffic. |
+| `DASHBOARD_DIR` | `web/build` | Static UI path when built without `-tags embedui`. |
 
-Use Go 1.25+ and Node.js 24. The static frontend goes into `web/build`. The container build embeds it in the binary.
+See the [Configuration Guide](docs/configuration.md#server-environment-variables) for upstream provider detection, relay flags, Docker Compose templates, and troubleshooting.
+
+## Development
+
+### Server and web dashboard
+
+Requires **Go 1.25+** and **Node.js 24**. The static SvelteKit frontend builds into `web/build` and is embedded into the release/Docker binary with `-tags embedui`.
 
 ```sh
 npm ci --prefix web
 npm run check --prefix web
 npm run build --prefix web
 go test -race ./...
+go vet ./...
 
 export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
 COOKIE_SECURE=false LISTEN_ADDR=127.0.0.1:8080 go run .
 ```
 
-Run the dashboard keyboard and interaction tests with `npm exec --prefix web -- playwright install chromium` and `npm test --prefix web`.
+Build a self-contained binary with embedded UI:
+
+```sh
+CGO_ENABLED=0 go build -tags embedui -o llm-meter .
+```
+
+Run the Playwright keyboard and interaction tests:
+
+```sh
+npm exec --prefix web -- playwright install chromium
+npm test --prefix web
+```
+
+### macOS menu bar relay
+
+Requires macOS, Xcode Command Line Tools, **Go 1.26+**, **Node.js 24**, and Wails v3. See [desktop/README.md](desktop/README.md) for build, packaging, and test instructions.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

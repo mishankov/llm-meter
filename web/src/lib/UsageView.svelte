@@ -906,7 +906,7 @@
             {@const active = reasoning.includes(UNREPORTED_REASONING)}
             {@const val = metricValue(unreportedReasoning)}
             <div class="hbar-divider">
-              <span>Unreported (OpenTelemetry / legacy) · {share(val, reasoningOverallTotal)} of total</span>
+              <span>Unreported · {share(val, reasoningOverallTotal)} of total</span>
             </div>
             <Button
               class="hbar-row"

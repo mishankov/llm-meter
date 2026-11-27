@@ -20,10 +20,9 @@
 
   const guide = "https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md";
   const telemetryGuide = guide + "#53-opentelemetry";
-  const migrationGuide = guide + "#migrating-from-the-codex-and-opencode-go-proxy-routes";
   const clients = [
     { value: "openai", label: "OpenAI-compatible SDK / CLI" },
-    { value: "antigravity", label: "Antigravity / T3 Code" },
+    { value: "antigravity", label: "Antigravity" },
   ];
 
   const proxy = $derived(snapshot.config.proxyEnabled);
@@ -117,7 +116,7 @@
       launcherDest = written;
       installResult = {
         ok: true,
-        text: `Installed executable launcher at ${written}. Set T3 Code → Settings → Providers → Antigravity → Binary path to this file.`,
+        text: `Installed executable launcher at ${written}. Point your client's Antigravity binary path to this file.`,
       };
     } catch (err) {
       installResult = { ok: false, text: errorMessage(err) };
@@ -260,7 +259,7 @@
     </section>
   {:else if proxy}
     <section class="card setup-card">
-      <p class="hint muted">This relay profile uses a retired proxy route. <a class="guide-link" href={migrationGuide} onclick={(event) => openGuide(event, migrationGuide)}>Migrate to OpenTelemetry</a> or choose a supported proxy route in Settings.</p>
+      <p class="hint muted">This relay profile uses an unsupported proxy route. Use the <a class="guide-link" href={telemetryGuide} onclick={(event) => openGuide(event, telemetryGuide)}>OpenTelemetry setup guide</a> or choose a supported proxy route in Settings.</p>
     </section>
   {:else if !telemetry}
     <section class="card setup-card">
