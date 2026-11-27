@@ -146,62 +146,7 @@
     });
   });
 
-  // 3. Architecture interactive topology selector
-  var topoData = {
-    direct: {
-      heading: "Direct to server — zero extra process",
-      copyHtml: "Export OpenTelemetry directly to <code>&lt;server&gt;/otlp</code> or proxy OpenAI-compatible and Antigravity traffic through <code>/v1</code> and <code>/antigravity</code> with <code>X-LLM-Meter-Key</code>.",
-      traffic: "OTLP clients hit providers directly; direct proxy routes forward through LLM Meter.",
-      visibilityHtml: "Usage metadata for OTLP (content discarded); proxied requests for <code>/v1</code> and <code>/antigravity</code>.",
-      best: "Local deployments or single-CLI setups where you want no background relay process."
-    },
-    relay: {
-      heading: "Local relay — usage-only & local OTLP",
-      copyHtml: "Run one local relay (Go binary, Docker, or macOS menu bar app) to authenticate every tool from one key, strip prompts on <code>127.0.0.1</code>, and queue usage in SQLite across outages.",
-      traffic: "Both coding CLIs and usage-only proxy clients send model requests directly to providers.",
-      visibilityHtml: "Filtered usage metadata only via <code>POST /api/usage/events</code>—prompts and provider keys stay local.",
-      best: "Workstations running multiple AI CLIs, strict prompt privacy, or unreliable network links."
-    },
-    remote: {
-      heading: "Local relay — remote-proxy mode",
-      copyHtml: "Keep endpoint-only clients (such as Antigravity ACP) on localhost while the relay injects <code>X-LLM-Meter-Key</code> and routes model traffic through your central LLM Meter server.",
-      traffic: "Client → Local Relay → LLM Meter server → Model Provider over HTTPS.",
-      visibilityHtml: "Full proxied requests and upstream auth headers, with <code>X-LLM-Meter-Key</code> stripped upstream.",
-      best: "Centralized routing for endpoint-only proxy clients without configuring headers per tool."
-    }
-  };
-
-  var topoWorkbench = document.getElementById("topo-panel");
-  var topoHeading = document.getElementById("topo-heading");
-  var topoCopy = document.getElementById("topo-copy");
-  var topoTraffic = document.getElementById("topo-traffic");
-  var topoVisibility = document.getElementById("topo-visibility");
-  var topoBest = document.getElementById("topo-best");
-  var topoTabs = document.querySelectorAll("[data-topo]");
-
-  topoTabs.forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      var mode = tab.getAttribute("data-topo");
-      var info = topoData[mode];
-      if (!info) return;
-
-      topoTabs.forEach(function (t) {
-        t.setAttribute("aria-selected", t === tab ? "true" : "false");
-      });
-
-      if (topoWorkbench) {
-        topoWorkbench.setAttribute("data-active-topo", mode);
-        if (tab.id) topoWorkbench.setAttribute("aria-labelledby", tab.id);
-      }
-      if (topoHeading) topoHeading.textContent = info.heading;
-      if (topoCopy) topoCopy.innerHTML = info.copyHtml;
-      if (topoTraffic) topoTraffic.textContent = info.traffic;
-      if (topoVisibility) topoVisibility.innerHTML = info.visibilityHtml;
-      if (topoBest) topoBest.textContent = info.best;
-    });
-  });
-
-  // 4. Quickstart snippet tabs
+  // 3. Quickstart snippet tabs
   document.querySelectorAll("[data-snippet-group]").forEach(function (tab) {
     tab.addEventListener("click", function () {
       var group = tab.getAttribute("data-snippet-group");
