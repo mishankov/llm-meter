@@ -3,7 +3,6 @@ package telemetry
 import (
 	"crypto/sha256"
 	"encoding/base32"
-	"encoding/json"
 	"strconv"
 
 	"github.com/mishankov/llm-meter/internal/usagereport"
@@ -52,7 +51,7 @@ func optionalTokenCount(value *commonpb.AnyValue) (int64, bool) {
 }
 
 type usageBatch struct {
-	payloads [][]byte
+	events   []usagereport.Event
 	rejected int64
 	records  int
 }
@@ -65,10 +64,5 @@ func (b *usageBatch) add(event usagereport.Event, matched bool, err error) {
 		b.rejected++
 		return
 	}
-	payload, err := json.Marshal(event)
-	if err != nil || len(payload) > usagereport.MaxBodyBytes {
-		b.rejected++
-		return
-	}
-	b.payloads = append(b.payloads, payload)
+	b.events = append(b.events, event)
 }

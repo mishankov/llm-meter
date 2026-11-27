@@ -380,3 +380,72 @@ func TestServiceRequestsSkippedWhilePreservingRateLimits(t *testing.T) {
 		t.Fatalf("allowance from service event was not saved: %+v", dashboard.Allowance)
 	}
 }
+
+func TestRecordRelayBatchAtomicityAndDeduplication(t *testing.T) {
+	store, err := Open(":memory:", pricing.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := t.Context()
+	at := time.Now().UTC()
+	client, _, err := store.CreateClient(ctx, "Batch", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty batch succeeds without error; missing client or event ID fails cleanly.
+	if err := store.RecordRelayBatch(ctx, client.ID, nil); err != nil {
+		t.Fatalf("empty batch failed: %v", err)
+	}
+	first := proxy.Usage{
+		At: at, Source: "api", Provider: "anthropic", Model: "claude-sonnet-4-6",
+		Endpoint: "/claude-code/api-request", Method: http.MethodPost, Status: http.StatusOK,
+		HasUsage: true, InputTokens: 10, OutputTokens: 5,
+	}
+	second := first
+	second.InputTokens, second.OutputTokens = 20, 7
+	if err := store.RecordRelayBatch(ctx, "", []RelayEvent{{EventID: "evt-1", Usage: first}}); err == nil {
+		t.Fatal("expected error for empty clientID")
+	}
+	if err := store.RecordRelayBatch(ctx, client.ID, []RelayEvent{
+		{EventID: "evt-1", Usage: first},
+		{EventID: "", Usage: second},
+	}); err == nil {
+		t.Fatal("expected error for missing eventID")
+	}
+
+	// Mid-batch failure rolls back the entire transaction so retry commits both events cleanly.
+	if _, err := store.db.Exec(`CREATE TRIGGER fail_second BEFORE INSERT ON requests WHEN NEW.input_tokens = 20 BEGIN SELECT RAISE(ABORT, 'mid-batch'); END`); err != nil {
+		t.Fatal(err)
+	}
+	batch := []RelayEvent{
+		{EventID: "evt-1", Usage: first},
+		{EventID: "evt-2", Usage: second},
+	}
+	if err := store.RecordRelayBatch(ctx, client.ID, batch); err == nil {
+		t.Fatal("expected mid-batch trigger failure")
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM relay_events`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("relay_events count after rollback = %d (err=%v), want 0", count, err)
+	}
+	if _, err := store.db.Exec(`DROP TRIGGER fail_second`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retry with duplicate event inside the batch and re-submit the batch: each event records once.
+	withDup := append(batch, RelayEvent{EventID: "evt-1", Usage: first})
+	for range 2 {
+		if err := store.RecordRelayBatch(ctx, client.ID, withDup); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dashboard, err := store.Dashboard(ctx, Filter{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Interval: time.Minute, Clients: []string{client.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Summary.RequestCount != 2 || dashboard.Summary.InputTokens != 30 || dashboard.Summary.OutputTokens != 12 {
+		t.Fatalf("unexpected batch summary: %+v", dashboard.Summary)
+	}
+}

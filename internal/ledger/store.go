@@ -301,12 +301,57 @@ func (s *Store) Record(ctx context.Context, usage proxy.Usage) error {
 	return s.record(ctx, usage, "")
 }
 
+// RelayEvent pairs a client-scoped idempotency ID with a usage record.
+type RelayEvent struct {
+	EventID string
+	Usage   proxy.Usage
+}
+
 // RecordRelay records a usage event once per authenticated client. The event ID
 // and its ledger changes commit together so retries can safely reuse that ID.
 func (s *Store) RecordRelay(ctx context.Context, clientID, eventID string, usage proxy.Usage) error {
-	if eventID == "" {
-		return errors.New("relay event ID is required")
+	return s.RecordRelayBatch(ctx, clientID, []RelayEvent{{EventID: eventID, Usage: usage}})
+}
+
+// RecordRelayBatch records a batch of usage events atomically once per
+// authenticated client. Each event ID and its ledger changes commit together
+// in one transaction so retries can safely reuse those IDs.
+func (s *Store) RecordRelayBatch(ctx context.Context, clientID string, events []RelayEvent) error {
+	if len(events) == 0 {
+		return nil
 	}
+	if clientID == "" {
+		return errors.New("client ID is required")
+	}
+	pending := make([]RelayEvent, 0, len(events))
+	for _, event := range events {
+		if event.EventID == "" {
+			return errors.New("relay event ID is required")
+		}
+		usage := prepareRelayUsage(clientID, event.Usage)
+		// Quota readings sometimes arrive independently of a response completion.
+		if usage.Status == 0 && len(usage.RateLimits) == 0 {
+			continue
+		}
+		pending = append(pending, RelayEvent{EventID: event.EventID, Usage: usage})
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, event := range pending {
+		if err := s.recordTx(ctx, tx, event.Usage, event.EventID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func prepareRelayUsage(clientID string, usage proxy.Usage) proxy.Usage {
 	if proxy.IsServiceRequest(usage) {
 		usage.Status = 0
 	}
@@ -321,7 +366,7 @@ func (s *Store) RecordRelay(ctx context.Context, clientID, eventID string, usage
 		}
 		usage.ResponseID = "relay:" + clientID + ":" + namespace + ":" + usage.ResponseID
 	}
-	return s.record(ctx, usage, eventID)
+	return usage
 }
 
 func (s *Store) record(ctx context.Context, usage proxy.Usage, eventID string) error {
@@ -334,6 +379,13 @@ func (s *Store) record(ctx context.Context, usage proxy.Usage, eventID string) e
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.recordTx(ctx, tx, usage, eventID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) recordTx(ctx context.Context, tx *sql.Tx, usage proxy.Usage, eventID string) error {
 	measurementSource := "proxy"
 	if eventID != "" {
 		result, err := tx.ExecContext(ctx, `INSERT INTO relay_events (client_id, event_id) VALUES (?, ?)
@@ -360,7 +412,7 @@ func (s *Store) record(ctx context.Context, usage proxy.Usage, eventID string) e
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) recordRequest(ctx context.Context, tx *sql.Tx, usage proxy.Usage, at time.Time, measurementSource string) error {

@@ -121,3 +121,60 @@ func TestTelemetryBackpressureReturnsRetryableStatus(t *testing.T) {
 		t.Fatalf("unexpected response on backpressure: %d %q", response.Code, response.Body.String())
 	}
 }
+
+func TestEventHandlerDirectPrefixAndBackpressure(t *testing.T) {
+	var delivered []usagereport.Event
+	var fail bool
+	handler := EventHandler("/otlp", func(_ context.Context, events []usagereport.Event) error {
+		if fail {
+			return fmt.Errorf("secret-db-path")
+		}
+		delivered = append(delivered, events...)
+		return nil
+	})
+	fixture := fmt.Sprintf(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{
+	  "eventName":"claude_code.api_request","timeUnixNano":"%d","attributes":[
+	    {"key":"model","value":{"stringValue":"claude-fixture"}},
+	    {"key":"request_id","value":{"stringValue":"direct-req-1"}},
+	    {"key":"input_tokens","value":{"intValue":"12"}},
+	    {"key":"output_tokens","value":{"intValue":"4"}}
+	  ]
+	}]}]}]}`, time.Now().UnixNano())
+
+	// Wrong prefix returns 404.
+	miss := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader(fixture))
+	miss.Header.Set("Content-Type", mediaJSON)
+	missRec := httptest.NewRecorder()
+	handler.ServeHTTP(missRec, miss)
+	if missRec.Code != http.StatusNotFound {
+		t.Fatalf("POST /v1/logs status = %d, want 404", missRec.Code)
+	}
+
+	// Exact prefixed route delivers events directly.
+	hit := httptest.NewRequest(http.MethodPost, "/otlp/v1/logs", strings.NewReader(fixture))
+	hit.Header.Set("Content-Type", mediaJSON)
+	hitRec := httptest.NewRecorder()
+	handler.ServeHTTP(hitRec, hit)
+	if hitRec.Code != http.StatusOK || len(delivered) != 1 || delivered[0].InputTokens != 12 || delivered[0].OutputTokens != 4 {
+		t.Fatalf("POST /otlp/v1/logs status=%d delivered=%+v", hitRec.Code, delivered)
+	}
+
+	// Metrics acknowledged without calling record.
+	metrics := httptest.NewRequest(http.MethodPost, "/otlp/v1/metrics", strings.NewReader(`{"resourceMetrics":[]}`))
+	metrics.Header.Set("Content-Type", mediaJSON)
+	metricsRec := httptest.NewRecorder()
+	handler.ServeHTTP(metricsRec, metrics)
+	if metricsRec.Code != http.StatusOK || len(delivered) != 1 {
+		t.Fatalf("POST /otlp/v1/metrics status=%d delivered=%d", metricsRec.Code, len(delivered))
+	}
+
+	// Backpressure returns 503 without leaking internal error details.
+	fail = true
+	errReq := httptest.NewRequest(http.MethodPost, "/otlp/v1/logs", strings.NewReader(fixture))
+	errReq.Header.Set("Content-Type", mediaJSON)
+	errRec := httptest.NewRecorder()
+	handler.ServeHTTP(errRec, errReq)
+	if errRec.Code != http.StatusServiceUnavailable || strings.Contains(errRec.Body.String(), "secret-db-path") {
+		t.Fatalf("backpressure status=%d body=%q", errRec.Code, errRec.Body.String())
+	}
+}
