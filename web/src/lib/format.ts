@@ -7,10 +7,14 @@ const preciseDollars = new Intl.NumberFormat(undefined, {
   style: 'currency', currency: 'USD', maximumFractionDigits: 6
 });
 const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const timeWithSeconds = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 const calendar = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 const utcCalendar = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const dateAndTime = new Intl.DateTimeFormat(undefined, {
   month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+});
+const dateAndTimeWithSeconds = new Intl.DateTimeFormat(undefined, {
+  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit'
 });
 
 export const count = (n: number) => integer.format(n);
@@ -18,6 +22,10 @@ export const compactCount = (n: number) => compact.format(n);
 export function money(n: number) {
   if (n > 0 && n < 0.000001) return '<' + preciseDollars.format(0.000001);
   return n > 0 && n < 0.01 ? preciseDollars.format(n) : dollars.format(n);
+}
+export function compactMoney(n: number) {
+  if (n > 0 && n < 0.01) return '<' + dollars.format(0.01);
+  return dollars.format(n);
 }
 
 export function axisMoneyFormatter(step: number) {
@@ -28,9 +36,11 @@ export function axisMoneyFormatter(step: number) {
   }).format;
 }
 export const formatTime = (value: string) => time.format(new Date(value));
+export const formatTimeSeconds = (value: string) => timeWithSeconds.format(new Date(value));
 export const formatDay = (value: string) => calendar.format(new Date(value));
 export const formatUTCDay = (value: string) => utcCalendar.format(new Date(value));
 export const formatDateTime = (value: string) => dateAndTime.format(new Date(value));
+export const formatDateTimeSeconds = (value: string) => dateAndTimeWithSeconds.format(new Date(value));
 
 export function requestStatusLabel(status: number) {
   if (status === 0) return 'Interrupted';
@@ -60,6 +70,23 @@ export function formatTimeWindow(value: string, hours: number) {
   return dateAndTime.formatRange(start, new Date(start.getTime() + hours * 3_600_000));
 }
 
+export function formatDateTimeRange(from: string, to: string) {
+  return dateAndTime.formatRange(new Date(from), new Date(to));
+}
+
+export function toDateTimeLocalValue(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function fromDateTimeLocalValue(local: string) {
+  if (!local) return '';
+  const parsed = new Date(local);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+}
+
 export const uncachedInput = (value: TokenCounts) =>
   Math.max(0, value.inputTokens - value.cachedInputTokens - (value.cacheWriteTokens ?? 0));
 export const tokens = (value: TokenCounts) => value.inputTokens + value.outputTokens;
@@ -68,6 +95,12 @@ export const unpricedBucket = (value: UsageBucket) => (value.requestCount ?? 0) 
 export function partialPricing({ requestCount, pricedRequestCount }: { requestCount?: number; pricedRequestCount?: number }) {
   return pricedRequestCount && requestCount && pricedRequestCount < requestCount
     ? `${count(pricedRequestCount)} of ${count(requestCount)} priced`
+    : '';
+}
+
+export function compactPartialPricing({ requestCount, pricedRequestCount }: { requestCount?: number; pricedRequestCount?: number }) {
+  return pricedRequestCount && requestCount && pricedRequestCount < requestCount
+    ? `${count(pricedRequestCount)}/${count(requestCount)} priced`
     : '';
 }
 

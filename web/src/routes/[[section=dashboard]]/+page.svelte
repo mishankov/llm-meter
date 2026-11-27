@@ -81,7 +81,8 @@
     online = navigator.onLine;
     void checkSession();
     const timer = window.setInterval(() => {
-      if (canRefreshUsage() && cursors.length === 1) {
+      const historical = Boolean(filters.to && Date.parse(filters.to) < Date.now() - 60_000);
+      if (canRefreshUsage() && cursors.length === 1 && !historical) {
         refreshUsage();
       }
     }, 12_000);
@@ -134,15 +135,31 @@
   }
 
   function viewUsage(id: string, outcome: RequestOutcome = '') {
-    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, client: id ? [id] : [], source: [], model: [], reasoning: [], bucket: '', outcome }, outcome !== '');
+    void navigateUsage({ ...filters, range: outcome ? '30d' : filters.range, from: outcome ? '' : filters.from, to: outcome ? '' : filters.to, client: id ? [id] : [], source: [], provider: [], model: [], reasoning: [], bucket: '', outcome }, outcome !== '');
   }
 
   function filtersChanged<Name extends keyof UsageFilters>(name: Name, value: UsageFilters[Name]) {
     const active = pendingUsage ?? filters;
-    if (active[name] === value) return;
+    if (active[name] === value && !(name === 'range' && (active.from || active.to))) return;
     const next = { ...active, [name]: value };
+    if (name === 'range') {
+      next.from = '';
+      next.to = '';
+    }
     if (name !== 'bucket' && name !== 'outcome') next.bucket = '';
     void navigateUsage(next);
+  }
+
+  function setDateTimeRange(from: string, to: string) {
+    const active = pendingUsage ?? filters;
+    if (active.from === from && active.to === to && !active.bucket) return;
+    void navigateUsage({ ...active, from, to, bucket: '' });
+  }
+
+  function clearDateTimeRange() {
+    const active = pendingUsage ?? filters;
+    if (!active.from && !active.to) return;
+    void navigateUsage({ ...active, from: '', to: '', bucket: '' });
   }
 
   async function navigateUsage(values: UsageFilters, focusRequests = false, cursorHistory = ['']) {
@@ -411,6 +428,8 @@
             canPrevious={cursors.length > 1}
             pageNumber={cursors.length}
             update={filtersChanged}
+            {setDateTimeRange}
+            {clearDateTimeRange}
             clearFilters={resetFilters}
             canUndoReset={resetSnapshot !== null}
             {undoFilters}

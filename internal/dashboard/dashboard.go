@@ -251,21 +251,51 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	values := r.URL.Query()
 	f := ledger.Filter{
 		End: now, Interval: time.Hour,
-		Sources: selectedValues(values["source"]), Clients: selectedValues(values["client"]), Models: selectedValues(values["model"]),
+		Sources: selectedValues(values["source"]), Providers: selectedValues(values["provider"]),
+		Clients: selectedValues(values["client"]), Models: selectedValues(values["model"]),
 		Reasonings: selectedValues(values["reasoning"]),
 		Outcome:    values.Get("outcome"),
 	}
-	switch values.Get("range") {
-	case "", "24h":
-		f.Start = now.Add(-24 * time.Hour)
-	case "7d":
-		f.Start = now.AddDate(0, 0, -7)
-		f.Interval = 24 * time.Hour
-	case "30d":
-		f.Start = now.AddDate(0, 0, -30)
-		f.Interval = 24 * time.Hour
-	default:
-		return f, errors.New("Use a 24-hour, 7-day or 30-day range")
+	fromParam, toParam := values.Get("from"), values.Get("to")
+	if fromParam != "" || toParam != "" {
+		if fromParam == "" || toParam == "" {
+			return f, errors.New("Provide both from and to timestamps")
+		}
+		fromTime, err := time.Parse(time.RFC3339, fromParam)
+		if err != nil {
+			return f, errors.New("Invalid from timestamp")
+		}
+		toTime, err := time.Parse(time.RFC3339, toParam)
+		if err != nil {
+			return f, errors.New("Invalid to timestamp")
+		}
+		span := toTime.Sub(fromTime)
+		if span < time.Minute {
+			return f, errors.New("End time must be at least 1 minute after start time")
+		}
+		if span > 366*24*time.Hour {
+			return f, errors.New("Custom time range cannot exceed 366 days")
+		}
+		f.Start = fromTime.UTC()
+		f.End = toTime.UTC()
+		f.EndExclusive = true
+		f.Interval = customInterval(span)
+	} else {
+		switch values.Get("range") {
+		case "1h":
+			f.Start = now.Add(-time.Hour)
+			f.Interval = 5 * time.Minute
+		case "", "24h":
+			f.Start = now.Add(-24 * time.Hour)
+		case "7d":
+			f.Start = now.AddDate(0, 0, -7)
+			f.Interval = 24 * time.Hour
+		case "30d":
+			f.Start = now.AddDate(0, 0, -30)
+			f.Interval = 24 * time.Hour
+		default:
+			return f, errors.New("Use a 1-hour, 24-hour, 7-day or 30-day range")
+		}
 	}
 	if slices.ContainsFunc(f.Sources, func(source string) bool { return source != "api" && source != "codex" }) {
 		return f, errors.New("Invalid usage source")
@@ -275,10 +305,11 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	default:
 		return f, errors.New("Invalid request outcome")
 	}
-	if slices.ContainsFunc(f.Clients, func(client string) bool { return len(client) > 100 }) ||
+	if slices.ContainsFunc(f.Providers, func(provider string) bool { return len(provider) > 100 }) ||
+		slices.ContainsFunc(f.Clients, func(client string) bool { return len(client) > 100 }) ||
 		slices.ContainsFunc(f.Models, func(model string) bool { return len(model) > 500 }) ||
 		slices.ContainsFunc(f.Reasonings, func(level string) bool { return len(level) > 64 }) {
-		return f, errors.New("Invalid client, model, or reasoning filter")
+		return f, errors.New("Invalid provider, client, model, or reasoning filter")
 	}
 	if value := values.Get("bucket"); value != "" {
 		start, err := time.Parse(time.RFC3339, value)
@@ -290,6 +321,23 @@ func usageFilter(r *http.Request, now time.Time) (ledger.Filter, error) {
 	cursor, err := ledger.ParseCursor(values.Get("cursor"))
 	f.Cursor = cursor
 	return f, err
+}
+
+func customInterval(span time.Duration) time.Duration {
+	switch {
+	case span <= 30*time.Minute:
+		return time.Minute
+	case span <= 2*time.Hour:
+		return 5 * time.Minute
+	case span <= 6*time.Hour:
+		return 15 * time.Minute
+	case span <= 48*time.Hour:
+		return time.Hour
+	case span <= 7*24*time.Hour:
+		return 6 * time.Hour
+	default:
+		return 24 * time.Hour
+	}
 }
 
 func selectedValues(values []string) []string {

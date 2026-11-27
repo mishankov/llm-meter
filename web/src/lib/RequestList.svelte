@@ -9,13 +9,17 @@
   import { Dialog, DialogBackdrop, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@ui-sdk/svelte/dialog';
   import type { DashboardProblem, RequestOutcome, UsageRequest } from './api';
   import Filter from './Filter.svelte';
-  import { count, formatDateTime, formatDay, formatTime, guardEnter, money, requestStatusGuidance, requestStatusLabel, tokens, uncachedInput } from './format';
+  import { compactCount, compactMoney, count, formatDateTimeSeconds, formatDay, formatTimeSeconds, guardEnter, money, requestStatusGuidance, requestStatusLabel, tokens, uncachedInput } from './format';
   import RecoveryNotice from './RecoveryNotice.svelte';
 
   interface Props {
     requests?: UsageRequest[];
     loading: boolean;
+    bucket: string;
     bucketLabel: string;
+    windowOptions: { value: string; label: string }[];
+    onBucketChange: (bucket: string) => void;
+    onClearBucket: () => void;
     outcome: RequestOutcome;
     onOutcomeChange: (outcome: RequestOutcome) => void;
     pageNumber: number;
@@ -27,11 +31,16 @@
     onNext: () => void;
   }
 
-  let { requests, loading, bucketLabel, outcome, onOutcomeChange, pageNumber, error, retry, canPrevious, canNext, onPrevious, onNext }: Props = $props();
+  let {
+    requests, loading, bucket, bucketLabel, windowOptions, onBucketChange, onClearBucket,
+    outcome, onOutcomeChange, pageNumber, error, retry, canPrevious, canNext, onPrevious, onNext
+  }: Props = $props();
   let selected = $state<UsageRequest | null>(null);
   let open = $state(false);
   let expanded = $state(false);
-  const previewSize = 3;
+  let previousPage = 1;
+  const previewSize = 12;
+  const wholePercent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
   let remaining = $derived(Math.max(0, (requests?.length ?? 0) - previewSize));
   let shownRequests = $derived(expanded ? requests : requests?.slice(0, previewSize));
   let previewCommand = $derived(expanded ? 'Show fewer requests' : 'Show ' + count(remaining) + ' more ' + (remaining === 1 ? 'request' : 'requests'));
@@ -39,6 +48,13 @@
   let requestTable = $state<HTMLDivElement>();
   let outcomeFilter: HTMLDivElement;
   let detailTrigger: HTMLButtonElement | null = null;
+
+  $effect(() => {
+    if (pageNumber !== previousPage) {
+      previousPage = pageNumber;
+      expanded = false;
+    }
+  });
 
   const outcomeOptions = [
     { value: '', label: 'All outcomes' },
@@ -80,10 +96,28 @@
     }
   }
 
+  function isEstimatedCost(request: UsageRequest) {
+    return request.cost !== null &&
+      request.priceSource !== 'provider-reported' &&
+      request.priceSource !== 'provider-list' &&
+      request.priceSource !== 'provider-estimate';
+  }
+
   function amount(request: UsageRequest) {
     if (request.cost !== null) return money(request.cost);
     if (!request.usageAvailable) return 'Usage unavailable';
     return 'Unpriced';
+  }
+
+  function tableAmount(request: UsageRequest) {
+    if (request.cost === null) return amount(request);
+    const formatted = compactMoney(request.cost);
+    return isEstimatedCost(request) ? '~' + formatted : formatted;
+  }
+
+  function tableAmountTitle(request: UsageRequest) {
+    if (request.cost === null) return undefined;
+    return `${costLabel(request)}: ${money(request.cost)}`;
   }
 
   function costLabel(request: UsageRequest) {
@@ -92,6 +126,18 @@
     if (request.priceSource === 'provider-list') return 'Provider list value';
     if (request.priceSource === 'provider-estimate') return 'Provider estimate';
     return 'Estimated cost';
+  }
+
+  function tokenSummary(request: UsageRequest) {
+    if (!request.usageAvailable || tokens(request) <= 0) return '';
+    const parts = [
+      `${compactCount(request.inputTokens)} in`,
+      `${compactCount(request.outputTokens)} out`
+    ];
+    if (request.inputTokens > 0 && request.cachedInputTokens > 0) {
+      parts.push(`${wholePercent.format(request.cachedInputTokens / request.inputTokens)} cache`);
+    }
+    return parts.join(' · ');
   }
 
   const providerLabels: Record<string, string> = {
@@ -145,19 +191,35 @@
 
 <section class="requests-section" id="requests" aria-labelledby="requests-title" aria-busy={loading}>
   <header class="section-head request-heading">
-    <div>
+    <div class="request-title-group">
       <h2 id="requests-title" bind:this={heading} tabindex="-1">Requests</h2>
       {#if bucketLabel || requests?.length}
-        <p class="request-summary muted">
-          {#if bucketLabel}<span>{bucketLabel}</span>{/if}
-          {#if bucketLabel && requests?.length}<span aria-hidden="true">·</span>{/if}
+        <div class="request-summary muted">
+          {#if bucketLabel}
+            <span class="window-chip" aria-live="polite">
+              <span>{bucketLabel}</span>
+              <Button
+                class="icon-button window-chip-clear"
+                title="Clear chart time filter (Enter)"
+                aria-label="Clear chart time filter"
+                aria-keyshortcuts="Enter"
+                onclick={onClearBucket}
+                onkeydown={guardEnter}
+              >
+                <XIcon size={13} aria-hidden="true" />
+              </Button>
+            </span>
+          {/if}
           {#if requests?.length}
             <span>{remaining && !expanded ? 'Showing ' + previewSize + ' of ' : ''}{count(requests.length)} {requests.length === 1 ? 'request' : 'requests'} on this page</span>
           {/if}
-        </p>
+        </div>
       {/if}
     </div>
     <div class="request-controls">
+      <div class="window-filter" id="request-window-filter">
+        <Filter label="Request time window" value={bucket} items={windowOptions} onChange={onBucketChange} />
+      </div>
       <div class="outcome-filter" bind:this={outcomeFilter}>
         <Filter label="Request outcome" value={outcome} items={outcomeOptions} onChange={changeOutcome} />
       </div>
@@ -193,22 +255,24 @@
         <tbody>
           {#each shownRequests ?? [] as request (request.id)}
             {@const basis = costLabel(request)}
+            {@const estimated = isEstimatedCost(request)}
+            {@const tokSummary = tokenSummary(request)}
             <tr>
               <td class="muted numeric">
                 <time datetime={request.at}>
-                  <span class="wide-only">{formatDateTime(request.at)}</span>
-                  <span class="compact-only compact-time">{formatDay(request.at)}<br />{formatTime(request.at)}</span>
+                  <span class="wide-only">{formatDateTimeSeconds(request.at)}</span>
+                  <span class="compact-only compact-time">{formatDay(request.at)}<br />{formatTimeSeconds(request.at)}</span>
                 </time>
                 <span class="compact-only compact-status">{@render requestStatus(request)}</span>
               </td>
               <td class="model-cell">
                 <div class="model-line">
-                  <span class="clip" title={request.model}>{request.model || '—'}</span>
+                  <span class="clip model-name" title={request.model}>{request.model || '—'}</span>
                   <span class="compact-only compact-reasoning">
                     {#if request.reasoningLevel}
                       <span class="reasoning-pill" data-level={request.reasoningLevel}>{request.reasoningLevel}</span>
                     {:else}
-                      <span class="reasoning-pill" data-level="unreported">—</span>
+                      <span class="reasoning-pill" data-level="unreported" aria-hidden="true">—</span><span class="sr-only">Not reported</span>
                     {/if}
                   </span>
                 </div>
@@ -218,22 +282,28 @@
                 {#if request.reasoningLevel}
                   <span class="reasoning-pill" data-level={request.reasoningLevel}>{request.reasoningLevel}</span>
                 {:else}
-                  <span class="muted">—</span>
-                  <span class="reasoning-missing-note">Not reported</span>
+                  <span class="reasoning-pill" data-level="unreported">Not reported</span>
                 {/if}
               </td>
               <td class="wide-only client-cell">{@render attribution(request)}</td>
               <td class="wide-only">{@render requestStatus(request)}</td>
-              <td class="numeric wide-only">{request.usageAvailable ? count(tokens(request)) : '—'}</td>
+              <td class="numeric wide-only tokens-cell">
+                {#if request.usageAvailable}
+                  <span>{count(tokens(request))}</span>
+                  {#if tokSummary}<span class="token-sub muted">{tokSummary}</span>{/if}
+                {:else}
+                  <span class="muted">—</span>
+                {/if}
+              </td>
               <td class="numeric amount-cell" class:muted={request.cost === null}>
-                {amount(request)}
-                {#if request.cost !== null}
-                  <span class="amount-method muted">{basis}</span>
+                <span title={tableAmountTitle(request)} aria-label={estimated && request.cost !== null ? `Estimated ${money(request.cost)}` : undefined}>{tableAmount(request)}</span>
+                {#if request.cost !== null && !estimated}
+                  <span class="amount-badge">{basis}</span>
                 {/if}
               </td>
               <td>
                 <Button class="secondary-button row-details" title="Request details (Enter)"
-                  aria-label={'Details for ' + (request.model || request.endpoint) + ' at ' + formatDateTime(request.at)}
+                  aria-label={'Details for ' + (request.model || request.endpoint) + ' at ' + formatDateTimeSeconds(request.at)}
                   aria-keyshortcuts="Enter" onkeydown={guardEnter} onclick={(event) => showDetail(request, event)}>
                   Details <ChevronRightIcon size={14} aria-hidden="true" />
                 </Button>
@@ -257,9 +327,17 @@
         <p role="status">Loading requests…</p>
       {:else}
         <p>{requests ? emptyMessage : 'Request results unavailable.'}</p>
-        {#if requests && outcome}
-          <Button class="secondary-button" title="Show all outcomes (Enter)" aria-keyshortcuts="Enter"
-            onclick={showAllOutcomes} onkeydown={guardEnter}>Show all outcomes</Button>
+        {#if requests && (outcome || bucket)}
+          <div class="empty-actions">
+            {#if outcome}
+              <Button class="secondary-button" title="Show all outcomes (Enter)" aria-keyshortcuts="Enter"
+                onclick={showAllOutcomes} onkeydown={guardEnter}>Show all outcomes</Button>
+            {/if}
+            {#if bucket}
+              <Button class="secondary-button" title="Show all time windows (Enter)" aria-keyshortcuts="Enter"
+                onclick={onClearBucket} onkeydown={guardEnter}>Show all time windows</Button>
+            {/if}
+          </div>
         {/if}
       {/if}
     </div>
@@ -276,10 +354,10 @@
       <DialogTitle class="dialog-title">Request details</DialogTitle>
       <DialogDescription class="muted">{selected.method} {selected.endpoint}</DialogDescription>
       <dl class="detail-list">
-        <div><dt>Time</dt><dd>{formatDateTime(selected.at)}</dd></div>
+        <div><dt>Time</dt><dd>{formatDateTimeSeconds(selected.at)}</dd></div>
         <div><dt>Source</dt><dd>{sourceLabel(selected)}</dd></div>
         <div><dt>Client</dt><dd>{selected.client || '—'}</dd></div>
-        <div><dt>Model</dt><dd>{selected.model || '—'}</dd></div>
+        <div><dt>Model</dt><dd class="detail-model">{selected.model || '—'}</dd></div>
         <div>
           <dt>Reasoning</dt>
           <dd>
@@ -307,18 +385,51 @@
       </dl>
       {#if selected.usageAvailable}
         <h3 class="details-heading">{selected.rates ? 'Usage and rates' : 'Token usage'}</h3>
-        <div class="detail-rates" class:with-rates={selected.rates}>
-          <span></span><span>Tokens</span>{#if selected.rates}<span>USD / 1M</span>{/if}
-          <span>Uncached input</span><b>{count(uncachedInput(selected))}</b>{#if selected.rates}<b>{rate(selected.rates.input)}</b>{/if}
-          <span>Cached input</span><b>{count(selected.cachedInputTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.cachedInput)}</b>{/if}
-          {#if (selected.cacheWriteTokens ?? 0) > (selected.cacheWrite12hTokens ?? 0)}
-            <span>30-minute cache writes</span><b>{count((selected.cacheWriteTokens ?? 0) - (selected.cacheWrite12hTokens ?? 0))}</b>{#if selected.rates}<b>{rate(selected.rates.cacheWrite)}</b>{/if}
-          {/if}
-          {#if selected.cacheWrite12hTokens}
-            <span>12-hour cache writes</span><b>{count(selected.cacheWrite12hTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.cacheWrite12h)}</b>{/if}
-          {/if}
-          <span>Output</span><b>{count(selected.outputTokens)}</b>{#if selected.rates}<b>{rate(selected.rates.output)}</b>{/if}
-        </div>
+        <table class="detail-rates-table">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr-only">Category</span></th>
+              <th scope="col" class="numeric">Tokens</th>
+              {#if selected.rates}<th scope="col" class="numeric">USD / 1M</th>{/if}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Uncached input</th>
+              <td class="numeric">{count(uncachedInput(selected))}</td>
+              {#if selected.rates}<td class="numeric">{rate(selected.rates.input)}</td>{/if}
+            </tr>
+            <tr>
+              <th scope="row">Cached input</th>
+              <td class="numeric">{count(selected.cachedInputTokens)}</td>
+              {#if selected.rates}<td class="numeric">{rate(selected.rates.cachedInput)}</td>{/if}
+            </tr>
+            {#if (selected.cacheWriteTokens ?? 0) > (selected.cacheWrite12hTokens ?? 0)}
+              <tr>
+                <th scope="row">30-minute cache writes</th>
+                <td class="numeric">{count((selected.cacheWriteTokens ?? 0) - (selected.cacheWrite12hTokens ?? 0))}</td>
+                {#if selected.rates}<td class="numeric">{rate(selected.rates.cacheWrite)}</td>{/if}
+              </tr>
+            {/if}
+            {#if selected.cacheWrite12hTokens}
+              <tr>
+                <th scope="row">12-hour cache writes</th>
+                <td class="numeric">{count(selected.cacheWrite12hTokens)}</td>
+                {#if selected.rates}<td class="numeric">{rate(selected.rates.cacheWrite12h)}</td>{/if}
+              </tr>
+            {/if}
+            <tr>
+              <th scope="row">Output</th>
+              <td class="numeric">{count(selected.outputTokens)}</td>
+              {#if selected.rates}<td class="numeric">{rate(selected.rates.output)}</td>{/if}
+            </tr>
+            <tr class="detail-rates-total">
+              <th scope="row">Total tokens</th>
+              <td class="numeric">{count(tokens(selected))}</td>
+              {#if selected.rates}<td class="numeric muted">—</td>{/if}
+            </tr>
+          </tbody>
+        </table>
       {/if}
     {/if}
   </DialogContent>
@@ -329,20 +440,29 @@
   .requests-section { border-block-start: 1px solid var(--line); padding-block-start: var(--section-space); }
   #requests-title { scroll-margin-block-start: 8px; }
   .request-heading, .request-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  .request-controls { justify-content: space-between; }
-  .request-summary { display: flex; flex-wrap: wrap; gap: 0 6px; margin: 4px 0 0; }
+  .request-title-group { min-inline-size: 0; }
+  .request-controls { justify-content: flex-end; gap: 8px; }
+  .window-filter :global(.filter-trigger) { min-inline-size: 145px; }
+  .request-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 5px 0 0; font-size: 12px; }
+  .window-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 2px 1px 8px; border-radius: 5px; border: 1px solid var(--selected-border); background: var(--nav-current); color: var(--nav-current-text); font-size: 11px; font-weight: 550; }
+  .window-chip :global(.window-chip-clear) { inline-size: 24px; block-size: 24px; border-color: transparent; background: transparent; color: inherit; border-radius: 4px; }
+  .window-chip :global(.window-chip-clear:hover) { background: var(--option-highlighted); }
   .pagination { display: flex; align-items: center; gap: 5px; }
   .page-number { min-inline-size: 5ch; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .request-error { margin-block-end: var(--gap); }
+  .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-block-start: 4px; }
   th, td { white-space: nowrap; }
   td { vertical-align: top; }
-  .clip, .client-cell { max-inline-size: 168px; overflow: hidden; text-overflow: ellipsis; }
+  .clip { max-inline-size: 240px; overflow: hidden; text-overflow: ellipsis; }
+  .client-cell { max-inline-size: 184px; overflow: hidden; text-overflow: ellipsis; }
   .clip, .request-client { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .model-name, .detail-model { font-family: var(--mono); font-size: 11.5px; }
   .model-line { display: flex; align-items: center; gap: 6px; min-inline-size: 0; }
-  .reasoning-missing-note { display: block; margin-block-start: 2px; font-size: 11px; color: var(--muted); }
-  .request-source, .amount-method { display: block; margin-block-start: 3px; font-size: 12px; }
-  .request-source { color: var(--api-light); }
+  .request-source { display: block; margin-block-start: 3px; font-size: 12px; color: var(--api-light); }
   .request-source.codex { color: var(--codex-light); }
+  .token-sub { display: block; margin-block-start: 2px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .amount-badge { display: inline-block; margin-block-start: 3px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface-raised); font-size: 10.5px; color: var(--muted); font-weight: 520; }
+  .amount-cell > span:first-child { display: block; }
   .status-code { color: var(--success); font-size: 12px; }
   .status-code.bad { color: var(--danger); }
   .status-number { font-family: var(--mono); }
@@ -350,16 +470,22 @@
   td:last-child { vertical-align: middle; }
   :global(.dialog-content.request-detail) { margin: 0 0 0 auto; max-block-size: 100dvh; block-size: 100dvh; max-inline-size: min(100%, 430px); border-radius: 0; }
   .detail-list { margin-block: 22px; }
-  .detail-list div { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 10px; grid-template-columns: 130px minmax(0, 1fr); }
+  .detail-list div { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 10px; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); }
   .detail-list dt { color: var(--muted); }
   .detail-list dd { margin: 0; overflow-wrap: anywhere; }
-  .details-heading { font-size: 14px; margin: 22px 0 12px; }
-  .detail-rates { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; color: var(--muted); }
-  .detail-rates.with-rates { grid-template-columns: 1fr auto auto; }
-  .detail-rates b { font-weight: 500; color: var(--text); text-align: end; font-variant-numeric: tabular-nums; }
+  .details-heading { font-size: 14px; margin: 22px 0 10px; }
+  .detail-rates-table { inline-size: 100%; border-collapse: collapse; font-size: 12px; }
+  .detail-rates-table :is(th, td) { padding: 7px 0 7px 12px; border-block-start: 1px solid var(--line); }
+  .detail-rates-table thead th { border-block-start: 0; padding-block-start: 0; padding-block-end: 6px; font-size: 11px; color: var(--muted); font-weight: 550; }
+  .detail-rates-table tbody th { padding-inline-start: 0; font-weight: 450; color: var(--muted); text-align: start; font-size: 12px; }
+  .detail-rates-table tbody td { font-weight: 500; color: var(--text); text-align: end; font-variant-numeric: tabular-nums; }
+  .detail-rates-table tr.detail-rates-total :is(th, td) { border-block-start-color: var(--strong-line); font-weight: 600; color: var(--text); }
+  .detail-rates-table tbody tr:last-child :is(th, td) { border-block-end: 0; }
+  .detail-rates-table tr:hover td { background: transparent; }
   .compact-only { display: none; }
   @media (max-width: 750px) {
-    .request-controls { inline-size: 100%; }
+    .request-controls { inline-size: 100%; justify-content: flex-start; }
+    .window-filter :global(.filter-trigger) { min-inline-size: 0; min-block-size: 44px; }
     .request-controls :global(.icon-button) { inline-size: 44px; block-size: 44px; }
     .outcome-filter :global(.filter-trigger) { min-block-size: 44px; }
     table { table-layout: fixed; }
@@ -376,8 +502,12 @@
     :global(.row-details) { min-block-size: 44px; min-inline-size: 54px; padding-inline: 6px; }
     :global(.row-details > svg) { display: none; }
   }
+  @media (pointer: coarse) {
+    .window-chip :global(.window-chip-clear) { inline-size: var(--touch-target); block-size: var(--touch-target); }
+  }
   @media (max-width: 360px) {
     th:first-child { inline-size: 22%; }
-    th:nth-last-child(2) { inline-size: 33%; }
+    th:nth-last-child(2) { inline-size: 28%; }
+    .detail-list div { grid-template-columns: 1fr; gap: 3px; }
   }
 </style>

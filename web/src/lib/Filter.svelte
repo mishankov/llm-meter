@@ -19,6 +19,8 @@
   let props: Props = $props();
   let control = $state<HTMLDivElement>();
   const selection = createSelectController<string, true>();
+  const searchThreshold = 6;
+  const showSearch = $derived(Boolean(props.multiple && props.items.length > searchThreshold));
   const filterName = $derived(props.label.toLowerCase());
   const clearLabel = $derived('Clear ' + filterName + ' filter');
   const selected = $derived.by(() => {
@@ -88,9 +90,9 @@
       <ChevronDownIcon size={14} aria-hidden="true" />
     </SelectTrigger>
   </div>
-  <SelectContent class={props.multiple ? 'select-content filter-search-popup' : 'select-content'}
+  <SelectContent class={showSearch ? 'select-content filter-search-popup' : 'select-content'}
     anchor={props.multiple ? control : undefined} onkeydowncapture={guardOptionKey}>
-    {#if props.multiple}
+    {#if showSearch}
       <div class="filter-search">
         <span aria-hidden="true"><SearchIcon size={14} /></span>
         <SelectInput class="text-input" aria-label={'Search ' + filterName + 's'} placeholder="Search…" />

@@ -61,6 +61,7 @@ export interface UsageRequest extends TokenCounts {
 export interface UsageBucket extends TokenCounts {
   start: string;
   estimatedCost: number;
+  cacheSavings?: number;
   requestCount?: number;
   pricedRequestCount?: number;
 }
@@ -102,11 +103,12 @@ export interface RequestPage {
 
 export interface Usage extends RequestPage {
   summary: Omit<UsageBucket, 'start'> & { requestCount: number; pricedRequestCount: number };
+  bucketSeconds?: number;
   buckets: UsageBucket[];
   groupedBuckets?: { models: GroupedUsageBucket[]; clients: GroupedUsageBucket[] };
-  groups: { models: UsageGroup[]; clients: UsageGroup[]; reasoning?: UsageGroup[] };
+  groups: { models: UsageGroup[]; clients: UsageGroup[]; reasoning?: UsageGroup[]; providers?: UsageGroup[] };
   allowance: Allowance[];
-  filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[]; reasoning?: string[] };
+  filters: { models: string[]; clients: Pick<Client, 'id' | 'name'>[]; providers?: Pick<Client, 'id' | 'name'>[]; reasoning?: string[] };
 }
 
 export class APIError extends Error {
