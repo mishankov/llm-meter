@@ -1,0 +1,264 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag label for dry-run build (does not publish a GitHub Release)'
+        required: true
+        default: 'v0.0.0-dryrun'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-binaries:
+    name: Build release binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9][A-Za-z0-9.+-]*$ ]]; then
+            printf 'Invalid release tag: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+      - name: Build embedded web UI
+        run: |
+          npm ci --prefix web
+          npm run check --prefix web
+          npm run build --prefix web
+      - name: Verify Go packages
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Cross-compile and package binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          targets=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/arm64"
+            "darwin/amd64"
+          )
+
+          for target in "${targets[@]}"; do
+            goos=${target%/*}
+            goarch=${target#*/}
+
+            for pkg in "llm-meter:.:embedui" "llm-meter-relay:./cmd/llm-meter-relay:"; do
+              IFS=':' read -r bin import_path build_tags <<< "$pkg"
+              stage=$(mktemp -d)
+              build_args=(-trimpath "-ldflags=-s -w")
+              if [[ -n "$build_tags" ]]; then
+                build_args+=(-tags "$build_tags")
+              fi
+              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+                go build "${build_args[@]}" -o "$stage/$bin" "$import_path"
+
+              files=("$bin")
+              for doc in README.md LICENSE; do
+                if [[ -f "$doc" ]]; then
+                  cp "$doc" "$stage/$doc"
+                  files+=("$doc")
+                fi
+              done
+
+              archive="dist/${bin}_${RELEASE_TAG}_${goos}_${goarch}.tar.gz"
+              tar -czf "$archive" -C "$stage" "${files[@]}"
+              rm -rf "$stage"
+            done
+          done
+
+          ls -lh dist/
+      - name: Upload binary archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-binaries
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos-dmg:
+    name: Build macOS relay DMG
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9][A-Za-z0-9.+-]*$ ]]; then
+            printf 'Invalid release tag: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+      - name: Install Wails v3
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+      - name: Package macOS DMG
+        run: wails3 task package:dmg
+      - name: Verify desktop app
+        run: |
+          go test -race ./...
+          go vet ./...
+          npm run check --prefix frontend
+      - name: Stage versioned DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch=$(go env GOARCH)
+          mkdir -p ../dist
+          dmg_src="bin/LLM Meter Relay.dmg"
+          dmg_dst="../dist/LLM-Meter-Relay_${RELEASE_TAG}_darwin_${arch}.dmg"
+          test -s "$dmg_src"
+          cp "$dmg_src" "$dmg_dst"
+          ls -lh "$dmg_dst"
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs:
+      - build-binaries
+      - build-macos-dmg
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          assets=(*.tar.gz *.dmg)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release assets found" >&2
+            exit 1
+          fi
+          LC_ALL=C sha256sum "${assets[@]}" | sort -k2 > checksums.txt
+          cat checksums.txt
+      - name: Upload dry-run release bundle
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dryrun
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          dmgs=(dist/*.dmg)
+          if (( ${#dmgs[@]} == 0 )); then
+            echo "No macOS DMG found" >&2
+            exit 1
+          fi
+          dmg_file=$(basename "${dmgs[0]}")
+
+          cat <<EOF > release-notes.md
+          ### Container images
+
+          \`\`\`sh
+          docker pull ghcr.io/${owner}/llm-meter:${RELEASE_TAG}
+          docker pull ghcr.io/${owner}/llm-meter-relay:${RELEASE_TAG}
+          \`\`\`
+
+          ### Prebuilt binaries & checksums
+
+          Prebuilt archives for Linux and macOS (\`amd64\` and \`arm64\`) are attached for both \`llm-meter\` (with the embedded dashboard UI) and \`llm-meter-relay\`. Verify downloads against \`checksums.txt\`:
+
+          \`\`\`sh
+          # Linux
+          sha256sum -c --ignore-missing checksums.txt
+
+          # macOS
+          shasum -a 256 --ignore-missing -c checksums.txt
+          \`\`\`
+
+          ### macOS menu bar app (\`.dmg\`)
+
+          \`${dmg_file}\` is **ad-hoc signed** (not notarized with an Apple Developer ID). If macOS Gatekeeper blocks the first launch:
+
+          - Open **System Settings → Privacy & Security** and click **Open Anyway**, or
+          - After dragging **LLM Meter Relay.app** into \`/Applications\`, run:
+            \`\`\`sh
+            xattr -dr com.apple.quarantine "/Applications/LLM Meter Relay.app"
+            \`\`\`
+
+          ---
+          EOF
+
+          flags=(
+            --repo "$GITHUB_REPOSITORY"
+            --verify-tag
+            --title "$RELEASE_TAG"
+            --generate-notes
+            --notes-file release-notes.md
+          )
+          if [[ "${RELEASE_TAG%%+*}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+
+          gh release create "$RELEASE_TAG" "${flags[@]}" dist/*.tar.gz dist/*.dmg dist/checksums.txt

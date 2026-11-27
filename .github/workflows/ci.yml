@@ -3,21 +3,25 @@ name: CI
 on:
   pull_request:
   push:
-    branches: ['**']
+    branches: ['main']
     tags: ['v[0-9]*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -35,16 +39,19 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - run: CGO_ENABLED=0 go build -tags embedui -o /tmp/llm-meter .
+      - run: CGO_ENABLED=0 go build -o /tmp/llm-meter-relay ./cmd/llm-meter-relay
 
   verify-image:
     name: Verify Docker image
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: check
+    permissions:
+      contents: read
     uses: ./.github/workflows/docker-image.yml
 
   publish-image:
     name: Publish Docker image
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: check
     permissions:
       contents: read

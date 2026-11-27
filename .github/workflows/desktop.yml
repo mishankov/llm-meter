@@ -8,18 +8,29 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/desktop.yml'
+  push:
+    branches: ['main']
+    tags: ['v[0-9]*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   desktop:
     runs-on: macos-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: desktop/go.mod
