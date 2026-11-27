@@ -467,7 +467,7 @@ pre code {
 
 .hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: clamp(24px, 4vw, 48px);
   align-items: end;
   margin-bottom: clamp(28px, 3.6vw, 40px);
@@ -495,7 +495,7 @@ pre code {
   gap: 14px;
   justify-self: end;
   width: 100%;
-  max-width: 480px;
+  max-width: 540px;
 }
 
 .hero-actions {
@@ -505,24 +505,25 @@ pre code {
 }
 
 .hero-command {
+  position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px 9px 14px;
+  gap: 12px;
+  padding: 12px 12px 12px 14px;
   background: var(--code-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
   min-width: 0;
 }
 
-.hero-command code {
+.hero-command pre {
   font-size: 0.78125rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-x: auto;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 /* Dashboard Showcase Frame */
@@ -1444,6 +1445,20 @@ h3 {
 
   .stage-caption {
     display: none;
+  }
+
+  .hero-command {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-command pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hero-command .copy-btn-inline {
+    align-self: flex-end;
   }
 }
 

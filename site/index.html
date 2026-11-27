@@ -102,11 +102,16 @@
             </div>
 
             <div class="hero-command">
-              <code>docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/mishankov/llm-meter:latest</code>
+              <pre><code id="code-hero-docker">export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+echo "Dashboard token: $DASHBOARD_TOKEN"
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e DASHBOARD_TOKEN -e COOKIE_SECURE=false \
+  -v llm-meter-data:/data \
+  ghcr.io/mishankov/llm-meter:latest</code></pre>
               <button
                 type="button"
                 class="copy-btn copy-btn-inline"
-                data-copy="export DASHBOARD_TOKEN=&quot;$(openssl rand -hex 32)&quot;&#10;echo &quot;Dashboard token: $DASHBOARD_TOKEN&quot;&#10;&#10;docker run --rm -p 127.0.0.1:8080:8080 \&#10;  -e DASHBOARD_TOKEN -e COOKIE_SECURE=false \&#10;  -v llm-meter-data:/data \&#10;  ghcr.io/mishankov/llm-meter:latest"
+                data-copy-target="code-hero-docker"
                 aria-label="Copy Docker quickstart command"
               >
                 <span class="copy-label">Copy</span>
