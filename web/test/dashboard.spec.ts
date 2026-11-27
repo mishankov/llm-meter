@@ -670,7 +670,18 @@ test('retries failed request pages in place and links client diagnostics to the 
   const clientType = page.getByRole('combobox', { name: 'Connection type' });
   const guide = page.getByRole('link', { name: 'OpenTelemetry setup guide' });
   await expect(guide).toHaveAttribute('href', /#53-opentelemetry$/);
+  const otlpURL = new URL('/otlp', page.url()).href;
+  await expect(page.getByRole('textbox', { name: 'OTLP endpoint' })).toHaveValue(otlpURL);
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveCount(0);
+  await expect(page.getByText(/Send your proxy key in X-LLM-Meter-Key/)).toBeVisible();
+  await expect(page.getByText(/Copilot CLI requires HTTPS/)).toBeVisible();
+  await expect(page.getByText(/Use the local relay for local filtering/)).toBeVisible();
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
+  await expect(copyURL).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await copyURL.press('Enter');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(otlpURL);
+  await expect(page.getByText('URL copied.', { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('client-setup.png') });
   await clientType.press('Enter');
   await expect(page.getByRole('option')).toHaveText(['OpenTelemetry', 'OpenAI-compatible proxy']);
@@ -678,9 +689,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await page.keyboard.press('Enter');
   const baseURL = new URL('/v1', page.url()).href;
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveValue(baseURL);
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-  const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
-  await expect(copyURL).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await expect(page.getByText('URL copied.', { exact: true })).toHaveCount(0);
   await copyURL.press('Enter');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(baseURL);
   await page.getByRole('button', { name: 'Provider setup instructions' }).press('Enter');
@@ -704,10 +713,12 @@ test('keeps key shortcuts and repeated Enter from interrupting connection select
   await page.getByRole('link', { name: 'Clients', exact: true }).click();
   await page.getByRole('button', { name: 'Manage client OpenCode' }).click();
   const connection = page.getByRole('combobox', { name: 'Connection type' });
+  const otlpEndpoint = page.getByRole('textbox', { name: 'OTLP endpoint' });
   const baseURL = page.getByRole('textbox', { name: 'Base URL' });
   const options = page.getByRole('listbox');
   const newKey = page.getByRole('button', { name: 'New key', exact: true });
 
+  await expect(otlpEndpoint).toHaveValue(/\/otlp$/);
   await connection.press('k');
   await connection.dispatchEvent('keydown', { key: 'л', code: 'KeyK' });
   await connection.focus();

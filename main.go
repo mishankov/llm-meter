@@ -23,8 +23,13 @@ import (
 	"github.com/mishankov/llm-meter/internal/ledger"
 	"github.com/mishankov/llm-meter/internal/pricing"
 	"github.com/mishankov/llm-meter/internal/proxy"
+	"github.com/mishankov/llm-meter/internal/telemetry"
 	"github.com/mishankov/llm-meter/internal/usagereport"
 )
+
+const otlpPrefix = "/otlp"
+
+type otlpClientKey struct{}
 
 func main() {
 	if err := run(); err != nil {
@@ -129,11 +134,36 @@ func routes(store *ledger.Store, ui fs.FS, api, antigravity *url.URL, dashboardT
 		mux.Handle(proxy.AntigravityPrefix, antigravityAccess)
 		mux.Handle(proxy.AntigravityPrefix+"/", antigravityAccess)
 	}
+	otlpEvents := telemetry.EventHandler(otlpPrefix, func(ctx context.Context, events []usagereport.Event) error {
+		clientID, _ := ctx.Value(otlpClientKey{}).(string)
+		batch := make([]ledger.RelayEvent, len(events))
+		for i, event := range events {
+			batch[i] = ledger.RelayEvent{EventID: event.ID, Usage: event.Usage()}
+		}
+		if err := store.RecordRelayBatch(ctx, clientID, batch); err != nil {
+			log.Error("record otlp usage", "error", err)
+			return err
+		}
+		return nil
+	})
+	otlp := withClientKey(store, func(w http.ResponseWriter, r *http.Request, clientID string) {
+		otlpEvents.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), otlpClientKey{}, clientID)))
+	}, log)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("/", serveDashboard(ui))
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isOTLPPath(r.URL) {
+			otlp.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func isOTLPPath(u *url.URL) bool {
+	return u.Path == otlpPrefix || strings.HasPrefix(u.Path, otlpPrefix+"/")
 }
 
 func withProxyKey(store *ledger.Store, next http.Handler, log *slog.Logger) http.Handler {

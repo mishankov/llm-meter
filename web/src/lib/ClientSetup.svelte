@@ -13,7 +13,8 @@
     { value: 'openai', label: 'OpenAI-compatible proxy' }
   ];
   let profile = $state(profiles[0]);
-  const baseURL = $derived(origin + '/v1');
+  const endpointURL = $derived(origin + (profile.value === 'telemetry' ? '/otlp' : '/v1'));
+  const endpointLabel = $derived(profile.value === 'telemetry' ? 'OTLP endpoint' : 'Base URL');
   let urlInput = $state<HTMLTextAreaElement>();
   let copying = $state(false);
   let copyMessage = $state('');
@@ -27,7 +28,7 @@
 
   async function copyURL() {
     if (disabled || copying || !origin || !urlInput) return;
-    const url = baseURL;
+    const url = endpointURL;
     const copiedProfile = profile.value;
     const field = urlInput;
     copyMessage = '';
@@ -53,21 +54,21 @@
     <Filter label="Connection type" value={profile.value} items={profiles} onChange={changeProfile} />
   </div>
 
+  <div class="setup-field">
+    <label class="setup-label" for="setup-base-url">{endpointLabel}</label>
+    <div class="url-row">
+      <textarea id="setup-base-url" class="text-input" dir="ltr" value={endpointURL} rows="2" readonly spellcheck="false" bind:this={urlInput}></textarea>
+      <Button class="secondary-button" title="Copy URL (Enter)" aria-keyshortcuts="Enter" disabled={disabled || copying || !origin} focusableWhenDisabled onclick={copyURL} onkeydown={guardEnter}>
+        <CopyIcon size={14} aria-hidden="true" /> Copy URL
+      </Button>
+    </div>
+    <p class="copy-feedback muted" role="status">{copyMessage}</p>
+  </div>
+
   {#if profile.value === 'telemetry'}
-    <p class="credentials muted">Use the local telemetry relay for Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode. Supply this client’s key to the relay and point your harness’s exporter at it.</p>
+    <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code> for direct OTLP/HTTP export from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode (Copilot CLI requires HTTPS). Use the local relay for local filtering, durable buffering, or clients without custom header support.</p>
     <a class="guide-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#53-opentelemetry" target="_blank" rel="noreferrer">OpenTelemetry setup guide</a>
   {:else}
-    <div class="setup-field">
-      <label class="setup-label" for="setup-base-url">Base URL</label>
-      <div class="url-row">
-        <textarea id="setup-base-url" class="text-input" dir="ltr" value={baseURL} rows="2" readonly spellcheck="false" bind:this={urlInput}></textarea>
-        <Button class="secondary-button" title="Copy URL (Enter)" aria-keyshortcuts="Enter" disabled={disabled || copying || !origin} focusableWhenDisabled onclick={copyURL} onkeydown={guardEnter}>
-          <CopyIcon size={14} aria-hidden="true" /> Copy URL
-        </Button>
-      </div>
-      <p class="copy-feedback muted" role="status">{copyMessage}</p>
-    </div>
-
     <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code>. Keep your provider API key in <code>Authorization</code>.</p>
 
     <Collapsible class="setup-help">
