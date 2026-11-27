@@ -36,7 +36,6 @@
 
       <nav class="site-nav" aria-label="Primary">
         <a href="#overview">Overview</a>
-        <a href="#clients">Clients</a>
         <a href="#quickstart">Quickstart</a>
       </nav>
 
@@ -163,112 +162,7 @@ docker run --rm -p 127.0.0.1:8080:8080 \
       </div>
     </section>
 
-    <section id="clients" class="band-section">
-      <div class="container">
-        <div class="section-header-split">
-          <div>
-            <h2>Seven clients. Three identical HTTP paths.</h2>
-            <p class="section-lead">
-              The server and local relay expose the exact same endpoints—<code>/otlp</code>, <code>/v1</code>, and <code>/antigravity</code>—so moving between direct export and a local relay only changes the origin.
-            </p>
-          </div>
-
-          <div class="segmented" role="tablist" aria-label="Connection path for client endpoints">
-            <button
-              type="button"
-              role="tab"
-              id="tab-path-direct"
-              aria-selected="true"
-              aria-controls="clients-table-panel"
-              data-client-mode="direct"
-            >
-              Direct to server
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-path-relay"
-              aria-selected="false"
-              aria-controls="clients-table-panel"
-              data-client-mode="relay"
-            >
-              Via local relay
-            </button>
-          </div>
-        </div>
-
-        <div id="clients-table-panel" role="tabpanel" aria-labelledby="tab-path-direct" class="matrix-wrap">
-          <table class="spec-table">
-            <thead>
-              <tr>
-                <th scope="col">Client</th>
-                <th scope="col">Metering method</th>
-                <th scope="col" id="endpoint-col-heading">Direct server endpoint</th>
-                <th scope="col" id="auth-col-heading">Client authentication</th>
-                <th scope="col" class="col-action">Guide</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <th scope="row" class="client-name">Claude Code</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">logs</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp/v1/logs" data-relay="http://127.0.0.1:4318/otlp/v1/logs">&lt;server&gt;/otlp/v1/logs</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#claude-code" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">Codex</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">logs</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp/v1/logs" data-relay="http://127.0.0.1:4318/otlp/v1/logs">&lt;server&gt;/otlp/v1/logs</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#codex" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">OpenCode</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">traces</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp" data-relay="http://127.0.0.1:4318/otlp">&lt;server&gt;/otlp</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#opencode" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">Gemini CLI</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">logs</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp" data-relay="http://127.0.0.1:4318/otlp">&lt;server&gt;/otlp</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#gemini-cli" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">GitHub Copilot CLI</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">traces</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="https://&lt;server&gt;/otlp" data-relay="https://127.0.0.1:4318/otlp">https://&lt;server&gt;/otlp</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header (HTTPS)" data-relay="Local TLS cert; relay authenticates">X-LLM-Meter-Key header (HTTPS)</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#github-copilot-cli" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">OpenAI-compatible SDKs &amp; CLIs</th>
-                <td data-label="Method"><span class="proto-tag proto-proxy">HTTP proxy</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/v1" data-relay="http://127.0.0.1:8765/v1">&lt;server&gt;/v1</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="Provider auth + X-LLM-Meter-Key" data-relay="Provider auth only (usage-only or remote-proxy)">Provider auth + X-LLM-Meter-Key</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#51-generic-openai-compatible-clients" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">Signed-in Antigravity</th>
-                <td data-label="Method"><span class="proto-tag proto-proxy">HTTP proxy</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/antigravity" data-relay="http://127.0.0.1:8765/antigravity">&lt;server&gt;/antigravity</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="Google auth + X-LLM-Meter-Key" data-relay="Google sign-in only (endpoint override)">Google auth + X-LLM-Meter-Key</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#52-signed-in-antigravity" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p class="matrix-note">
-          Every client keeps its own upstream provider account or API key. Connect directly with <code>X-LLM-Meter-Key</code> (stripped upstream on proxy routes), or run the optional local relay (CLI, Docker, or <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/desktop/README.md" target="_blank" rel="noopener noreferrer">macOS menu bar app</a>) for single-key auth, local prompt stripping, and offline SQLite queueing.
-        </p>
-      </div>
-    </section>
-
-    <section id="quickstart" class="section">
+    <section id="quickstart" class="band-section">
       <div class="container">
         <div class="section-header">
           <h2>Self-host in two steps.</h2>

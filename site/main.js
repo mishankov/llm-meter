@@ -118,35 +118,7 @@
 
   document.querySelectorAll('[role="tablist"]').forEach(bindTablistKeyboard);
 
-  // 2. Supported clients table: Direct vs Local Relay endpoint switch
-  var clientModeButtons = document.querySelectorAll("[data-client-mode]");
-  var endpointColHeading = document.getElementById("endpoint-col-heading");
-  var clientsPanel = document.getElementById("clients-table-panel");
-
-  clientModeButtons.forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var mode = btn.getAttribute("data-client-mode");
-      clientModeButtons.forEach(function (b) {
-        b.setAttribute("aria-selected", b === btn ? "true" : "false");
-      });
-      if (clientsPanel && btn.id) {
-        clientsPanel.setAttribute("aria-labelledby", btn.id);
-      }
-      if (endpointColHeading) {
-        endpointColHeading.textContent = mode === "relay"
-          ? "Local relay endpoint"
-          : "Direct server endpoint";
-      }
-      document.querySelectorAll(".endpoint-code").forEach(function (el) {
-        el.textContent = el.getAttribute("data-" + mode) || "";
-      });
-      document.querySelectorAll(".auth-cell").forEach(function (el) {
-        el.textContent = el.getAttribute("data-" + mode) || "";
-      });
-    });
-  });
-
-  // 3. Quickstart snippet tabs
+  // 2. Quickstart snippet tabs
   document.querySelectorAll("[data-snippet-group]").forEach(function (tab) {
     tab.addEventListener("click", function () {
       var group = tab.getAttribute("data-snippet-group");
