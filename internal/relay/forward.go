@@ -133,7 +133,8 @@ func guardClient(host string, next http.Handler) http.Handler {
 
 func (provider connectionProvider) allowsPath(path string) bool {
 	if provider.prefix == proxy.AntigravityPrefix {
-		return cloudCodeRPC.MatchString(strings.TrimPrefix(path, proxy.AntigravityPrefix))
+		suffix, ok := strings.CutPrefix(path, provider.prefix)
+		return ok && cloudCodeRPC.MatchString(suffix)
 	}
 	if path != provider.prefix && !strings.HasPrefix(path, provider.prefix+"/") {
 		return false
@@ -150,10 +151,6 @@ func remoteProxy(provider connectionProvider, target *url.URL, key string, trans
 	forward := &httputil.ReverseProxy{
 		Transport: transport,
 		Rewrite: func(r *httputil.ProxyRequest) {
-			if provider.prefix == proxy.AntigravityPrefix {
-				r.Out.URL.Path = strings.TrimPrefix(r.Out.URL.Path, provider.prefix)
-				r.Out.URL.RawPath = ""
-			}
 			r.SetURL(target)
 			// The relay leaves query interpretation to the remote proxy.
 			r.Out.URL.RawQuery = r.In.URL.RawQuery
@@ -164,23 +161,12 @@ func remoteProxy(provider connectionProvider, target *url.URL, key string, trans
 			http.Error(w, "LLM Meter unavailable", http.StatusBadGateway)
 		},
 	}
-	if provider.prefix == proxy.AntigravityPrefix {
-		return forward
-	}
 	return http.StripPrefix(provider.prefix, forward)
 }
 
 func directProxy(provider connectionProvider, upstream url.URL, record func(proxy.Usage)) http.Handler {
-	if provider.prefix != proxy.AntigravityPrefix {
-		return proxy.New(&upstream, record)
+	if provider.prefix == proxy.AntigravityPrefix {
+		return proxy.NewAntigravity(upstream, record)
 	}
-	forward := proxy.NewAntigravity(upstream, record)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := r.Clone(r.Context())
-		if !strings.HasPrefix(request.URL.Path, provider.prefix+"/") {
-			request.URL.Path = provider.prefix + request.URL.Path
-		}
-		request.URL.RawPath = ""
-		forward.ServeHTTP(w, request)
-	})
+	return proxy.New(&upstream, record)
 }

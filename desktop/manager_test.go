@@ -664,7 +664,9 @@ func TestDesktopTelemetrySharesAndRetainsUsageQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snap := mgr.Snapshot(); snap.KeptQueues != 0 || snap.PendingOnDisk != 1 ||
-		len(snap.Endpoints) != 3 || snap.Endpoints[2].URL != "http://"+defaultTelemetryListen+"/otlp" {
+		len(snap.Endpoints) != 3 ||
+		snap.Endpoints[1].URL != "http://"+relay.DefaultListen+"/antigravity" ||
+		snap.Endpoints[2].URL != "http://"+defaultTelemetryListen+"/otlp" {
 		t.Fatalf("telemetry did not inherit the active usage queue: %+v", snap)
 	}
 
@@ -815,7 +817,7 @@ func TestAntigravityLauncherGenerationAndInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(script, "--cloud_code_endpoint 'http://127.0.0.1:8765'") {
+	if !strings.Contains(script, "--cloud_code_endpoint 'http://127.0.0.1:8765/antigravity'") {
 		t.Fatalf("unexpected launcher script:\n%s", script)
 	}
 
@@ -835,7 +837,7 @@ func TestAntigravityLauncherGenerationAndInstall(t *testing.T) {
 	}
 
 	out, err := exec.CommandContext(t.Context(), dest, "acp", "--argument with spaces").Output()
-	if err != nil || string(out) != "acp\n--cloud_code_endpoint\nhttp://127.0.0.1:8765\n--argument with spaces\n" {
+	if err != nil || string(out) != "acp\n--cloud_code_endpoint\nhttp://127.0.0.1:8765/antigravity\n--argument with spaces\n" {
 		t.Fatalf("launcher argument forwarding = %q, %v", out, err)
 	}
 	out, err = exec.CommandContext(t.Context(), dest, "--version").Output()

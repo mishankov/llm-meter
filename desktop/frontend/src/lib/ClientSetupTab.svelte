@@ -70,7 +70,7 @@
     return () => { current = false; };
   });
 
-  const baseUrl = $derived(selectedClient === "antigravity" ? origin : `${origin}/v1`);
+  const baseUrl = $derived(selectedClient === "antigravity" ? `${origin}/antigravity` : `${origin}/v1`);
   const snippet = $derived(selectedClient === "antigravity" ? launcherScript : `export OPENAI_BASE_URL="${baseUrl}"
 # Keep your normal OPENAI_API_KEY; do not send X-LLM-Meter-Key.`);
 

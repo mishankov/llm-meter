@@ -220,9 +220,9 @@ Open a client’s details in **Clients** to use **Rename** or **Archive**. Renam
 | Provider | Direct to LLM Meter server | Via local relay (`127.0.0.1:8765`) | Server path (`remote-proxy`) | Provider auth accepted by relay | Default upstream |
 | --- | --- | --- | --- | --- | --- |
 | **OpenAI-compatible** (`openai`) | `https://proxy.example.com/v1` | `http://127.0.0.1:8765/v1` | `/v1` | `Authorization`, `X-API-Key`, `Api-Key`, or `X-Goog-Api-Key` | `https://api.openai.com/v1` |
-| **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765/antigravity` (or root `http://127.0.0.1:8765`) | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
+| **Signed-in Antigravity** (`antigravity`) | `https://proxy.example.com/antigravity` | `http://127.0.0.1:8765/antigravity` | `/antigravity` | `Authorization` (Google sign-in only) | `https://daily-cloudcode-pa.googleapis.com` |
 
-> **Note on Antigravity's local relay URL:** The local relay accepts both `/antigravity/v1internal:<Method>` (matching the server) and root `/v1internal:<Method>` (for origin-only `--cloud_code_endpoint http://127.0.0.1:8765` callers such as Antigravity ACP). In `remote-proxy` mode it forwards to `/antigravity/v1internal:<Method>` on the server; in `usage-only` mode it sends `/v1internal:<Method>` directly to the Antigravity upstream.
+> **Note on Antigravity's local relay URL:** Both the server and the local relay serve Antigravity under `/antigravity` (matching Cloud Code RPC paths `/antigravity/v1internal:<Method>`). In `remote-proxy` mode the relay forwards to `/antigravity/v1internal:<Method>` on the server; in `usage-only` mode it sends `/v1internal:<Method>` directly to the Antigravity upstream.
 >
 > Use `127.0.0.1` in client URLs with the default listener. The relay checks the request's `Host` against `--listen`. Using `localhost:8765` with the default listener returns `403 Forbidden`.
 
@@ -392,7 +392,7 @@ Positional arguments are rejected; pass all options as flags.
 | --- | --- | --- | --- |
 | **Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode** | [Direct OpenTelemetry](#53-opentelemetry) to `https://proxy.example.com/otlp` (or `http://localhost:8080/otlp`; Copilot CLI requires HTTPS) + `X-LLM-Meter-Key` header (model traffic goes directly to the provider) | [OpenTelemetry exporter](#53-opentelemetry) points to the local relay (`http://127.0.0.1:4318/otlp`) | Existing provider credentials |
 | **Generic OpenAI-compatible SDK/CLI** | Base URL `https://proxy.example.com/v1` + `X-LLM-Meter-Key` header | Base URL `http://127.0.0.1:8765/v1` (no proxy header) | Normal API key (`Authorization` / API key header) |
-| **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Meter-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765` | Existing Google sign-in |
+| **Signed-in Antigravity** | Base URL `https://proxy.example.com/antigravity` + `X-LLM-Meter-Key` (if client supports custom headers) | T3 launcher passing `--cloud_code_endpoint http://127.0.0.1:8765/antigravity` | Existing Google sign-in |
 
 ### 5.1 Generic OpenAI-compatible clients
 
@@ -410,7 +410,7 @@ Keep Antigravity signed in to Google and keep both Google's token and your proxy
 #!/bin/sh
 if [ "$1" = acp ]; then
   shift
-  set -- acp --cloud_code_endpoint http://127.0.0.1:8765 "$@"
+  set -- acp --cloud_code_endpoint http://127.0.0.1:8765/antigravity "$@"
 fi
 exec "/absolute/path/to/antigravity" "$@"
 ```
