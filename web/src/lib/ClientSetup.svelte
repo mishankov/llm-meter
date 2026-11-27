@@ -66,7 +66,7 @@
   </div>
 
   {#if profile.value === 'telemetry'}
-    <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code> for direct OTLP/HTTP export from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode. Use the local relay for local filtering, durable buffering, or clients without custom header support.</p>
+    <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code> for direct OTLP/HTTP export from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode (Copilot CLI requires HTTPS). Use the local relay for local filtering, durable buffering, or clients without custom header support.</p>
     <a class="guide-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#53-opentelemetry" target="_blank" rel="noreferrer">OpenTelemetry setup guide</a>
   {:else}
     <p class="credentials muted">Send your proxy key in <code>X-LLM-Meter-Key</code>. Keep your provider API key in <code>Authorization</code>.</p>

@@ -674,6 +674,7 @@ test('retries failed request pages in place and links client diagnostics to the 
   await expect(page.getByRole('textbox', { name: 'OTLP endpoint' })).toHaveValue(otlpURL);
   await expect(page.getByRole('textbox', { name: 'Base URL' })).toHaveCount(0);
   await expect(page.getByText(/Send your proxy key in X-LLM-Meter-Key/)).toBeVisible();
+  await expect(page.getByText(/Copilot CLI requires HTTPS/)).toBeVisible();
   await expect(page.getByText(/Use the local relay for local filtering/)).toBeVisible();
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const copyURL = page.getByRole('button', { name: 'Copy URL', exact: true });
