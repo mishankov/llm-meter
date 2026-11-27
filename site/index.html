@@ -332,16 +332,18 @@ volumes:
 
             <div class="code-panel" data-panel-group="server" data-panel="binary" hidden>
               <div class="code-bar">
-                <span class="code-lang">sh · build self-contained binary</span>
+                <span class="code-lang">sh · install via Go</span>
                 <button type="button" class="copy-btn" data-copy-target="code-server-binary">
                   <span class="copy-label">Copy</span>
                 </button>
               </div>
-              <pre><code id="code-server-binary">npm ci --prefix web && npm run build --prefix web
-CGO_ENABLED=0 go build -tags embedui -o llm-meter .
+              <pre><code id="code-server-binary">go install github.com/mishankov/llm-meter@latest
 
 export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
-LISTEN_ADDR=127.0.0.1:8080 COOKIE_SECURE=false DATA_DIR=./data ./llm-meter</code></pre>
+echo "Dashboard token: $DASHBOARD_TOKEN"
+
+LISTEN_ADDR=127.0.0.1:8080 COOKIE_SECURE=false \
+  DATA_DIR=./data llm-meter</code></pre>
             </div>
 
             <p class="step-foot">
