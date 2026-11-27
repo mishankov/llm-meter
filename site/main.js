@@ -371,7 +371,7 @@
   }, { passive: true });
   updateScrollProgress();
 
-  // 8. Live Ambient Telemetry Canvas (Hero Background)
+  // 8. Live Ambient Telemetry Wave Field (Hero Background)
   var canvas = document.getElementById("telemetry-canvas");
   if (canvas && canvas.getContext) {
     var ctx = canvas.getContext("2d");
@@ -379,8 +379,9 @@
     var cw = 0;
     var ch = 0;
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    var lanes = [];
-    var packets = [];
+    var waves = [];
+    var pulses = [];
+    var elapsed = 0;
     var pointerX = -9999;
     var pointerY = -9999;
     var canvasVisible = true;
@@ -391,52 +392,81 @@
       var isLight = root.getAttribute("data-theme") === "light";
       if (isLight) {
         return {
-          lane: "rgba(50, 78, 176, 0.08)",
-          tick: "rgba(50, 78, 176, 0.17)",
+          waveAlpha: 0.11,
           colors: [
-            { hex: "#324eb0", rgba: "50, 78, 176" },
-            { hex: "#5a6e99", rgba: "90, 110, 153" },
-            { hex: "#324eb0", rgba: "50, 78, 176" },
-            { hex: "#7687a8", rgba: "118, 135, 168" }
+            "50, 78, 176",
+            "86, 106, 152",
+            "50, 78, 176",
+            "112, 128, 164"
           ]
         };
       }
       return {
-        lane: "rgba(164, 184, 255, 0.075)",
-        tick: "rgba(164, 184, 255, 0.17)",
+        waveAlpha: 0.11,
         colors: [
-          { hex: "#a4b8ff", rgba: "164, 184, 255" },
-          { hex: "#d6e0ff", rgba: "214, 224, 255" },
-          { hex: "#8e9eb8", rgba: "142, 158, 184" },
-          { hex: "#a4b8ff", rgba: "164, 184, 255" }
+          "164, 184, 255",
+          "214, 224, 255",
+          "140, 156, 188",
+          "164, 184, 255"
         ]
       };
     }
 
     function seedTelemetry() {
-      lanes = [];
-      packets = [];
-      var laneCount = Math.max(7, Math.min(12, Math.floor(ch / 84)));
-      var topPad = 36;
-      var usableH = Math.max(240, ch * 0.64);
-      var step = usableH / laneCount;
+      waves = [];
+      pulses = [];
+      var waveCount = 6;
+      var usableH = Math.max(300, ch * 0.56);
 
-      for (var i = 0; i < laneCount; i++) {
-        var y = Math.round(topPad + i * step) + 0.5;
-        lanes.push({ y: y, dir: i % 2 === 0 ? 1 : -1 });
+      for (var i = 0; i < waveCount; i++) {
+        var frac = i / (waveCount - 1);
+        var slopeDir = i % 2 === 0 ? -1 : 1;
+        waves.push({
+          baseY: 74 + frac * usableH,
+          slope: slopeDir * (86 + (i % 3) * 34),
+          amp1: 28 + (i % 3) * 14,
+          freq1: (Math.PI * (1.35 + (i % 3) * 0.35)) / Math.max(cw, 640),
+          phase1: i * 1.15,
+          speed1: (0.28 + (i % 4) * 0.08) * (i % 2 === 0 ? 1 : -1),
+          amp2: 12 + ((i + 1) % 3) * 7,
+          freq2: (Math.PI * (2.6 + (i % 2) * 0.9)) / Math.max(cw, 640),
+          phase2: i * 2.1,
+          speed2: 0.42 + (i % 3) * 0.1,
+          colorIdx: i % 4
+        });
 
-        var perLane = i % 2 === 0 ? 3 : 2;
-        for (var j = 0; j < perLane; j++) {
-          packets.push({
-            lane: i,
-            x: ((j + 0.18 + (i * 0.17)) % 1) * (cw + 280) - 140,
-            speed: (52 + ((i * 23 + j * 37) % 78)) * (i % 2 === 0 ? 1 : -1),
-            length: 76 + ((i * 29 + j * 43) % 136),
+        var perWave = i % 2 === 0 ? 2 : 1;
+        for (var j = 0; j < perWave; j++) {
+          var dir = (i + j) % 2 === 0 ? 1 : -1;
+          pulses.push({
+            waveIdx: i,
+            x: ((j * 0.52 + i * 0.19) % 1) * (cw + 260) - 130,
+            speed: (48 + ((i * 23 + j * 31) % 52)) * dir,
+            length: 90 + ((i * 27 + j * 39) % 90),
             colorIdx: (i + j) % 4,
-            alpha: 0.58 + ((i * 7 + j * 13) % 34) / 100
+            alpha: 0.52 + ((i * 11 + j * 17) % 28) / 100
           });
         }
       }
+    }
+
+    function sampleWaveY(w, x, t) {
+      var nx = cw > 0 ? (x / cw) - 0.5 : 0;
+      var y = w.baseY
+        + w.slope * nx
+        + Math.sin(x * w.freq1 + w.phase1 + t * w.speed1) * w.amp1
+        + Math.sin(x * w.freq2 + w.phase2 - t * w.speed2) * w.amp2;
+
+      if (pointerX > -5000) {
+        var dx = x - pointerX;
+        var dy = y - pointerY;
+        var distSq = dx * dx + dy * dy;
+        if (distSq < 48400) { // 220px radius
+          var influence = Math.exp(-distSq / 18000);
+          y += (dy >= 0 ? 1 : -1) * influence * 14;
+        }
+      }
+      return y;
     }
 
     function resizeCanvas() {
@@ -454,74 +484,89 @@
 
     function drawTelemetry(dt) {
       var pal = getCanvasPalette();
+      elapsed += dt;
       ctx.clearRect(0, 0, cw, ch);
 
-      // Subtle precision horizontal metering rails & scale ticks
-      var tickGap = 96;
-      ctx.lineWidth = 1;
-      for (var i = 0; i < lanes.length; i++) {
-        var y = lanes[i].y;
-        ctx.strokeStyle = pal.lane;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(cw, y);
-        ctx.stroke();
+      // Sweeping curved telemetry waveforms (never parallel to horizontal UI lines)
+      var stepX = Math.max(16, Math.floor(cw / 72));
+      for (var i = 0; i < waves.length; i++) {
+        var w = waves[i];
+        var rgb = pal.colors[w.colorIdx];
+        var waveGrad = ctx.createLinearGradient(0, 0, cw, 0);
+        waveGrad.addColorStop(0, "rgba(" + rgb + ", 0)");
+        waveGrad.addColorStop(0.14, "rgba(" + rgb + ", " + pal.waveAlpha + ")");
+        waveGrad.addColorStop(0.86, "rgba(" + rgb + ", " + pal.waveAlpha + ")");
+        waveGrad.addColorStop(1, "rgba(" + rgb + ", 0)");
 
-        ctx.strokeStyle = pal.tick;
+        ctx.strokeStyle = waveGrad;
+        ctx.lineWidth = 1.1;
         ctx.beginPath();
-        for (var tx = (i % 2) * 48; tx < cw; tx += tickGap) {
-          var nearPointer = Math.abs(pointerX - tx) < 120 && Math.abs(pointerY - y) < 84;
-          var tickH = nearPointer ? 5 : 2.5;
-          ctx.moveTo(tx + 0.5, y - tickH);
-          ctx.lineTo(tx + 0.5, y + tickH);
+        for (var x = 0; x <= cw + stepX; x += stepX) {
+          var cx = Math.min(x, cw);
+          var cy = sampleWaveY(w, cx, elapsed);
+          if (x === 0) ctx.moveTo(cx, cy);
+          else ctx.lineTo(cx, cy);
         }
         ctx.stroke();
       }
 
-      // Gliding token-stream telemetry pulses
-      for (var p = 0; p < packets.length; p++) {
-        var pkt = packets[p];
+      // Luminous pulses gliding smoothly along the curves
+      var trailSteps = 14;
+      for (var p = 0; p < pulses.length; p++) {
+        var pkt = pulses[p];
         if (dt > 0) {
           pkt.x += pkt.speed * dt;
-          if (pkt.speed > 0 && pkt.x - pkt.length > cw + 60) {
-            pkt.x = -60;
-          } else if (pkt.speed < 0 && pkt.x + pkt.length < -60) {
-            pkt.x = cw + 60;
+          if (pkt.speed > 0 && pkt.x - pkt.length > cw + 80) {
+            pkt.x = -80;
+          } else if (pkt.speed < 0 && pkt.x + pkt.length < -80) {
+            pkt.x = cw + 80;
           }
         }
 
-        var ly = lanes[pkt.lane].y;
+        var wave = waves[pkt.waveIdx];
+        var headX = pkt.x;
+        var headY = sampleWaveY(wave, headX, elapsed);
         var col = pal.colors[pkt.colorIdx];
-        var dist = Math.hypot(pointerX - pkt.x, pointerY - ly);
-        var boost = dist < 170 ? (1 - dist / 170) * 0.42 : 0;
-        var alpha = Math.min(0.95, pkt.alpha + boost);
+        var dist = Math.hypot(pointerX - headX, pointerY - headY);
+        var boost = dist < 190 ? (1 - dist / 190) * 0.38 : 0;
+        var alpha = Math.min(0.92, pkt.alpha + boost);
+        var dir = pkt.speed > 0 ? 1 : -1;
 
-        var tailX = pkt.speed > 0 ? pkt.x - pkt.length : pkt.x + pkt.length;
-        var grad = ctx.createLinearGradient(pkt.x, ly, tailX, ly);
-        grad.addColorStop(0, "rgba(" + col.rgba + ", " + alpha.toFixed(3) + ")");
-        grad.addColorStop(0.35, "rgba(" + col.rgba + ", " + (alpha * 0.45).toFixed(3) + ")");
-        grad.addColorStop(1, "rgba(" + col.rgba + ", 0)");
+        // Curved tapered trail following the wave path
+        var prevX = headX;
+        var prevY = headY;
+        ctx.lineCap = "round";
+        for (var s = 1; s <= trailSteps; s++) {
+          var tFrac = s / trailSteps;
+          var sx = headX - dir * pkt.length * tFrac;
+          var sy = sampleWaveY(wave, sx, elapsed);
+          var segAlpha = alpha * Math.pow(1 - tFrac, 1.65);
 
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = boost > 0.1 ? 2.4 : 1.75;
-        ctx.beginPath();
-        ctx.moveTo(tailX, ly);
-        ctx.lineTo(pkt.x, ly);
-        ctx.stroke();
+          ctx.strokeStyle = "rgba(" + col + ", " + segAlpha.toFixed(3) + ")";
+          ctx.lineWidth = (boost > 0.1 ? 2.4 : 1.8) * (1 - tFrac * 0.55);
+          ctx.beginPath();
+          ctx.moveTo(prevX, prevY);
+          ctx.lineTo(sx, sy);
+          ctx.stroke();
 
-        // Soft radial bloom around leading packet node
-        var halo = ctx.createRadialGradient(pkt.x, ly, 0, pkt.x, ly, boost > 0.1 ? 14 : 9);
-        halo.addColorStop(0, "rgba(" + col.rgba + ", " + (alpha * 0.55).toFixed(3) + ")");
-        halo.addColorStop(1, "rgba(" + col.rgba + ", 0)");
+          prevX = sx;
+          prevY = sy;
+        }
+
+        // Soft radial bloom around leading node
+        var radius = boost > 0.1 ? 15 : 10;
+        var halo = ctx.createRadialGradient(headX, headY, 0, headX, headY, radius);
+        halo.addColorStop(0, "rgba(" + col + ", " + (alpha * 0.52).toFixed(3) + ")");
+        halo.addColorStop(1, "rgba(" + col + ", 0)");
         ctx.fillStyle = halo;
         ctx.beginPath();
-        ctx.arc(pkt.x, ly, boost > 0.1 ? 14 : 9, 0, Math.PI * 2);
+        ctx.arc(headX, headY, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Crisp luminous leading packet node
-        ctx.fillStyle = "rgba(" + col.rgba + ", " + Math.min(1, alpha + 0.24).toFixed(3) + ")";
+        // Crisp luminous leading dot
+        ctx.fillStyle = "rgba(" + col + ", " + Math.min(1, alpha + 0.2).toFixed(3) + ")";
         ctx.beginPath();
-        ctx.arc(pkt.x, ly, boost > 0.1 ? 2.8 : 2.1, 0, Math.PI * 2);
+        ctx.arc(headX, headY, boost > 0.1 ? 2.7 : 2.1, 0, Math.PI * 2);
         ctx.fill();
       }
     }
