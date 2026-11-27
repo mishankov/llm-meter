@@ -16,18 +16,17 @@ Give operators one place to inspect model usage across connected clients. An ope
 
 ## Positioning
 
-LLM Meter tracks tokens and estimated spend across AI clients. Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode send usage through OpenTelemetry to the local relay. Generic OpenAI-compatible clients and Antigravity can send model traffic through the server proxy or local relay. A client key attributes usage while the client keeps its upstream credentials.
+LLM Meter tracks tokens and estimated spend across AI clients. Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode send usage through OpenTelemetry directly to the server (`/otlp`) or through the local relay. Generic OpenAI-compatible clients and Antigravity can send model traffic through the server proxy or local relay. A client key attributes usage while the client keeps its upstream credentials.
 
 ## Operating Context
 
-- Run the server locally or on a self-hosted host. The Go service serves the dashboard, proxy routes, and usage ingestion API and stores usage in SQLite.
+- Run the server locally or on a self-hosted host. The Go service serves the dashboard, OTLP ingestion endpoints, proxy routes, and usage upload API and stores usage in SQLite.
 - Unlock the dashboard with the dashboard token. Create a client in **Clients** and copy its proxy key. Send the key in `X-LLM-Meter-Key` for direct connections or supply it to the relay in a private key file.
 - Use **Usage** to inspect estimates and token counts over time, compare clients and models, and drill into recent requests. Use **Clients** to issue and revoke keys.
 
 ## Capabilities and Constraints
 
 - Dashboard estimates are shown in USD. The ledger preserves provider-reported amounts, including zero, and uses recorded rates for estimates where applicable. Requests with insufficient pricing data appear as **Unpriced**.
-- Historical OpenCode Go records preserve reported charges, list values, and allowance use. Historical Codex quota observations remain available.
 - The full proxy key is shown only at issuance. The proxy validates the key and removes its header before forwarding the request upstream.
 
 ## Product Principles

@@ -1,6 +1,6 @@
 # LLM Meter Relay for macOS
 
-Run one local relay from the menu bar. In **Settings**, enter your LLM Meter HTTPS origin and a dashboard client key. Under **Local listeners**, enable **Model proxy**, **OpenTelemetry**, or both. Save with ⌘S and start the relay if it is stopped.
+Run a local LLM Meter relay from the macOS menu bar to share one Keychain-stored client key across all local tools, strip non-usage telemetry locally, queue uploads offline in SQLite, and support endpoint-only proxy clients. In **Settings**, enter your LLM Meter HTTPS origin and a dashboard client key. Under **Local listeners**, enable **Model proxy**, **OpenTelemetry**, or both. Save with ⌘S and start the relay if it is stopped.
 
 - **Model proxy** serves generic OpenAI-compatible clients and Antigravity on port `8765` by default. Choose **Usage-only** to proxy requests directly to providers or **Remote proxy** to route requests through your server.
 - **OpenTelemetry** receives usage from Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, and OpenCode on port `4318` by default. For GitHub Copilot CLI, set the certificate and private key paths under **Local HTTPS**. [OpenTelemetry setup](../docs/configuration.md#53-opentelemetry)

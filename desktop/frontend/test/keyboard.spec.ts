@@ -66,7 +66,7 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   await page.screenshot({ path: testInfo.outputPath("client-setup.png") });
   const client = page.getByRole("combobox", { name: "Client", exact: true });
   await client.press("Enter");
-  await expect(page.getByRole("option")).toHaveText(["OpenAI-compatible SDK / CLI", "Antigravity / T3 Code"]);
+  await expect(page.getByRole("option")).toHaveText(["OpenAI-compatible SDK / CLI", "Antigravity"]);
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
   await expect(page.locator("pre")).toContainText("#!/bin/sh");
@@ -110,7 +110,7 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
 
   await page.getByRole("tab", { name: "Client Setup" }).click();
   await page.getByRole("combobox", { name: "Client", exact: true }).click();
-  await page.getByRole("option", { name: "Antigravity / T3 Code" }).click();
+  await page.getByRole("option", { name: "Antigravity" }).click();
   await page.getByLabel("Launcher destination").fill("/tmp/test/antigravity");
   await page.keyboard.press("Meta+,");
   await page.getByRole("tab", { name: "Client Setup" }).click();
@@ -125,7 +125,7 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
   await page.reload();
   await expect(page.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "Client Setup" }).press("Enter");
-  await expect(page.getByRole("link", { name: "Migrate to OpenTelemetry" })).toHaveAttribute("href", /#migrating-from-the-codex-and-opencode-go-proxy-routes$/);
+  await expect(page.getByRole("link", { name: "OpenTelemetry setup guide" })).toHaveAttribute("href", /#53-opentelemetry$/);
   await expect(page.getByRole("combobox", { name: "Client", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Copy (URL|Snippet)/ })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("retired-proxy-setup.png") });
