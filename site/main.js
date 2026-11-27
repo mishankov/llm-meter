@@ -391,24 +391,24 @@
       var isLight = root.getAttribute("data-theme") === "light";
       if (isLight) {
         return {
-          lane: "rgba(50, 78, 176, 0.11)",
-          tick: "rgba(50, 78, 176, 0.22)",
+          lane: "rgba(50, 78, 176, 0.08)",
+          tick: "rgba(50, 78, 176, 0.17)",
           colors: [
             { hex: "#324eb0", rgba: "50, 78, 176" },
-            { hex: "#5a52d5", rgba: "90, 82, 213" },
-            { hex: "#b8680a", rgba: "184, 104, 10" },
-            { hex: "#166846", rgba: "22, 104, 70" }
+            { hex: "#5a6e99", rgba: "90, 110, 153" },
+            { hex: "#324eb0", rgba: "50, 78, 176" },
+            { hex: "#7687a8", rgba: "118, 135, 168" }
           ]
         };
       }
       return {
-        lane: "rgba(164, 184, 255, 0.095)",
-        tick: "rgba(164, 184, 255, 0.22)",
+        lane: "rgba(164, 184, 255, 0.075)",
+        tick: "rgba(164, 184, 255, 0.17)",
         colors: [
           { hex: "#a4b8ff", rgba: "164, 184, 255" },
-          { hex: "#8f84ff", rgba: "143, 132, 255" },
-          { hex: "#f0b35a", rgba: "240, 179, 90" },
-          { hex: "#7ad8b4", rgba: "122, 216, 180" }
+          { hex: "#d6e0ff", rgba: "214, 224, 255" },
+          { hex: "#8e9eb8", rgba: "142, 158, 184" },
+          { hex: "#a4b8ff", rgba: "164, 184, 255" }
         ]
       };
     }
