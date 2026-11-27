@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Configuration Guide
+    url: https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md
+    about: Deployment options, client setup, relay flags, upgrades, and troubleshooting.
+  - name: Security Policy
+    url: https://github.com/mishankov/llm-meter/blob/main/SECURITY.md
+    about: Report a security vulnerability privately instead of opening a public issue.
