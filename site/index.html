@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Meter — Self-hosted token, cache, and spend metering for AI tools</title>
+  <meta name="description" content="Self-hosted dashboard for tracking LLM token usage, prompt cache savings, reasoning levels, and estimated USD spend across Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode, OpenAI-compatible SDKs, and Antigravity.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" type="image/png" href="./assets/llm-meter.png">
+  <link rel="preload" href="./assets/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/public-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <script>
+    (function () {
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var urlTheme = params.get("theme");
+        var stored = localStorage.getItem("llm-meter-site-theme");
+        var prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+        var theme = (urlTheme === "light" || urlTheme === "dark")
+          ? urlTheme
+          : (stored === "light" || stored === "dark" ? stored : (prefersLight ? "light" : "dark"));
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header" id="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="#overview" aria-label="LLM Meter home">
+        <span class="brand-mark-wrap">
+          <img src="./assets/llm-meter.png" alt="" width="28" height="28" class="brand-mark">
+        </span>
+        <span class="brand-name">LLM Meter</span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary">
+        <a href="#overview">Overview</a>
+        <a href="#quickstart">Quickstart</a>
+      </nav>
+
+      <div class="header-actions">
+        <div class="theme-switch sliding-group" role="group" aria-label="Color theme">
+          <span class="sliding-pill" aria-hidden="true"></span>
+          <button type="button" class="theme-btn" data-set-theme="dark" aria-pressed="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+            </svg>
+            <span>Dark</span>
+          </button>
+          <button type="button" class="theme-btn" data-set-theme="light" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2"></path>
+              <path d="M12 20v2"></path>
+              <path d="m4.93 4.93 1.41 1.41"></path>
+              <path d="m17.66 17.66 1.41 1.41"></path>
+              <path d="M2 12h2"></path>
+              <path d="M20 12h2"></path>
+              <path d="m6.34 17.66-1.41 1.41"></path>
+              <path d="m19.07 4.93-1.41 1.41"></path>
+            </svg>
+            <span>Light</span>
+          </button>
+        </div>
+
+        <a class="github-link" href="https://github.com/mishankov/llm-meter" target="_blank" rel="noopener noreferrer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1-.02-1.96-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.06 11.06 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.42.36.79 1.07.79 2.15 0 1.55-.01 2.8-.01 3.18 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"></path>
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+    <div class="scroll-meter" aria-hidden="true">
+      <div class="scroll-meter-fill" id="scroll-meter-fill"></div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="overview" class="hero">
+      <div class="hero-atmosphere" aria-hidden="true">
+        <div class="atmosphere-orb atmosphere-orb-primary"></div>
+      </div>
+
+      <div class="container hero-container">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <h1>One meter for every model you run.</h1>
+            <p class="hero-lead">
+              Self-hosted token, prompt cache, reasoning-level, and USD spend tracking across Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode, OpenAI-compatible SDKs, and signed-in Antigravity.
+            </p>
+          </div>
+
+          <div class="hero-controls">
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#quickstart">
+                <span>Deploy in 60 seconds</span>
+                <svg class="btn-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M5 12h14"></path>
+                  <path d="m12 5 7 7-7 7"></path>
+                </svg>
+              </a>
+              <a class="btn btn-secondary" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md" target="_blank" rel="noopener noreferrer">
+                Configuration Guide
+              </a>
+            </div>
+
+            <div class="hero-command glow-panel">
+              <div class="hero-command-bar">
+                <span class="terminal-status">
+                  <svg class="terminal-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                  </svg>
+                  <span>docker · ghcr.io/mishankov/llm-meter</span>
+                </span>
+                <button
+                  type="button"
+                  class="copy-btn copy-btn-inline"
+                  data-copy-target="code-hero-docker"
+                  aria-label="Copy Docker quickstart command"
+                  aria-keyshortcuts="c"
+                  title="Copy command (C)"
+                >
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-hero-docker"><span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
+<span class="tok-cmd">echo</span> <span class="tok-str">"Dashboard token: $DASHBOARD_TOKEN"</span>
+<span class="tok-cmd">docker</span> run <span class="tok-flag">--rm</span> <span class="tok-flag">-p</span> <span class="tok-val">127.0.0.1:8080:8080</span> \
+  <span class="tok-flag">-e</span> <span class="tok-var">DASHBOARD_TOKEN</span> <span class="tok-flag">-e</span> <span class="tok-var">COOKIE_SECURE</span>=<span class="tok-val">false</span> \
+  <span class="tok-flag">-v</span> <span class="tok-val">llm-meter-data:/data</span> \
+  <span class="tok-img">ghcr.io/mishankov/llm-meter:latest</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="dashboard-showcase" id="dashboard-showcase">
+          <div class="stage-halo" aria-hidden="true"></div>
+          <figure class="dashboard-stage" id="dashboard-stage" data-view-mode="dark">
+            <div class="stage-sheen" aria-hidden="true"></div>
+
+            <div class="stage-bar">
+              <div class="stage-legend" aria-label="Dashboard token mix and reasoning indicators">
+                <div class="token-mix-meter" aria-hidden="true">
+                  <span class="mix-seg mix-seg-cache" data-mix="cache" style="--w: 64%"></span>
+                  <span class="mix-seg mix-seg-input" data-mix="input" style="--w: 17%"></span>
+                  <span class="mix-seg mix-seg-cache-write" data-mix="cache-write" style="--w: 10%"></span>
+                  <span class="mix-seg mix-seg-output" data-mix="output" style="--w: 9%"></span>
+                </div>
+                <span class="legend-group">
+                  <span class="legend-item" data-mix-hover="input"><span class="swatch swatch-input" aria-hidden="true"></span><span>Uncached</span></span>
+                  <span class="legend-item" data-mix-hover="cache"><span class="swatch swatch-cache" aria-hidden="true"></span><span>Cached</span></span>
+                  <span class="legend-item" data-mix-hover="cache-write"><span class="swatch swatch-cache-write" aria-hidden="true"></span><span>Cache writes</span></span>
+                  <span class="legend-item" data-mix-hover="output"><span class="swatch swatch-output" aria-hidden="true"></span><span>Output</span></span>
+                </span>
+                <span class="stage-divider" aria-hidden="true"></span>
+                <span class="legend-pills" aria-hidden="true">
+                  <span class="reasoning-pill" data-level="high">high</span>
+                  <span class="reasoning-pill" data-level="medium">medium</span>
+                  <span class="reasoning-pill" data-level="low">low</span>
+                  <span class="reasoning-pill" data-level="minimal">minimal</span>
+                </span>
+              </div>
+
+              <div class="stage-controls">
+                <div class="segmented segmented-small stage-mode-switch sliding-group" role="tablist" aria-label="Dashboard theme preview">
+                  <span class="sliding-pill" aria-hidden="true"></span>
+                  <button type="button" role="tab" aria-selected="true" data-stage-mode="dark">Dark</button>
+                  <button type="button" role="tab" aria-selected="false" data-stage-mode="split">
+                    <svg class="tab-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                      <line x1="12" y1="3" x2="12" y2="21"></line>
+                    </svg>
+                    <span>Split</span>
+                  </button>
+                  <button type="button" role="tab" aria-selected="false" data-stage-mode="light">Light</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="dashboard-frame" id="dashboard-frame">
+              <img
+                id="dashboard-screenshot-dark"
+                class="dashboard-img dashboard-img-base"
+                src="./assets/dashboard-dark.png"
+                width="2640"
+                height="2562"
+                alt="LLM Meter usage dashboard displaying USD estimated spend, prompt cache savings, 17.6M total tokens across uncached input, cached input, cache writes, and output, reasoning-level coverage, and breakdowns by model, client, and provider."
+                fetchpriority="high"
+                draggable="false"
+              >
+              <img
+                id="dashboard-screenshot-light"
+                class="dashboard-img dashboard-img-overlay"
+                src="./assets/dashboard-light.png"
+                width="2640"
+                height="2562"
+                alt=""
+                aria-hidden="true"
+                draggable="false"
+              >
+
+              <div class="split-badges" aria-hidden="true">
+                <span class="split-badge split-badge-dark">Dark theme</span>
+                <span class="split-badge split-badge-light">Light theme</span>
+              </div>
+
+              <div
+                class="split-divider"
+                id="split-divider"
+                role="slider"
+                tabindex="0"
+                aria-label="Compare dark and light dashboard themes"
+                aria-valuemin="8"
+                aria-valuemax="92"
+                aria-valuenow="50"
+                aria-valuetext="50% dark, 50% light"
+                hidden
+              >
+                <span class="split-beam" aria-hidden="true"></span>
+                <span class="split-handle" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m8 7-5 5 5 5"></path>
+                    <path d="m16 7 5 5-5 5"></path>
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <figcaption class="sr-only">
+              Real LLM Meter dashboard rendered in dark and light themes with interactive split comparison.
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="quickstart" class="band-section">
+      <div class="container">
+        <div class="section-header">
+          <h2>Self-host in two steps.</h2>
+          <p class="section-lead">
+            Start the server with a single container or Go binary, create a client key in <strong>Clients</strong>, and point your tools at it.
+          </p>
+        </div>
+
+        <div class="quickstart-steps">
+          <div class="step-block">
+            <div class="step-head">
+              <div class="step-title-row">
+                <span class="step-num" aria-hidden="true">1</span>
+                <h3>Start the server</h3>
+              </div>
+              <div class="segmented segmented-small sliding-group" role="tablist" aria-label="Server installation method">
+                <span class="sliding-pill" aria-hidden="true"></span>
+                <button type="button" role="tab" aria-selected="true" data-snippet-group="server" data-snippet="docker">Docker</button>
+                <button type="button" role="tab" aria-selected="false" data-snippet-group="server" data-snippet="compose">Compose (HTTPS)</button>
+                <button type="button" role="tab" aria-selected="false" data-snippet-group="server" data-snippet="binary">Go binary</button>
+              </div>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="server" data-panel="docker">
+              <div class="code-bar">
+                <span class="code-lang">sh · local Docker</span>
+                <button type="button" class="copy-btn" data-copy-target="code-server-docker" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-server-docker"><span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
+<span class="tok-cmd">echo</span> <span class="tok-str">"Dashboard token: $DASHBOARD_TOKEN"</span>
+
+<span class="tok-cmd">docker</span> run <span class="tok-flag">--rm</span> <span class="tok-flag">-p</span> <span class="tok-val">127.0.0.1:8080:8080</span> \
+  <span class="tok-flag">-e</span> <span class="tok-var">DASHBOARD_TOKEN</span> <span class="tok-flag">-e</span> <span class="tok-var">COOKIE_SECURE</span>=<span class="tok-val">false</span> \
+  <span class="tok-flag">-v</span> <span class="tok-val">llm-meter-data:/data</span> \
+  <span class="tok-img">ghcr.io/mishankov/llm-meter:latest</span></code></pre>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="server" data-panel="compose" hidden>
+              <div class="code-bar">
+                <span class="code-lang">yaml · compose.yaml behind HTTPS</span>
+                <button type="button" class="copy-btn" data-copy-target="code-server-compose" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-server-compose"><span class="tok-key">services:</span>
+  <span class="tok-key">llm-meter:</span>
+    <span class="tok-key">image:</span> <span class="tok-img">ghcr.io/mishankov/llm-meter:latest</span>
+    <span class="tok-key">restart:</span> <span class="tok-val">unless-stopped</span>
+    <span class="tok-key">ports:</span>
+      - <span class="tok-str">"127.0.0.1:8080:8080"</span>
+    <span class="tok-key">environment:</span>
+      <span class="tok-var">DASHBOARD_TOKEN:</span> <span class="tok-val">${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}</span>
+      <span class="tok-var">COOKIE_SECURE:</span> <span class="tok-str">"true"</span>
+    <span class="tok-key">volumes:</span>
+      - <span class="tok-val">llm-meter-data:/data</span>
+
+<span class="tok-key">volumes:</span>
+  <span class="tok-key">llm-meter-data:</span></code></pre>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="server" data-panel="binary" hidden>
+              <div class="code-bar">
+                <span class="code-lang">sh · build &amp; install via Go (with embedded UI)</span>
+                <button type="button" class="copy-btn" data-copy-target="code-server-binary" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-server-binary"><span class="tok-cmd">git</span> clone <span class="tok-img">https://github.com/mishankov/llm-meter.git</span> &amp;&amp; <span class="tok-cmd">cd</span> llm-meter
+<span class="tok-cmd">npm</span> ci <span class="tok-flag">--prefix</span> web &amp;&amp; <span class="tok-cmd">npm</span> run build <span class="tok-flag">--prefix</span> web
+<span class="tok-var">CGO_ENABLED</span>=<span class="tok-val">0</span> <span class="tok-cmd">go</span> install <span class="tok-flag">-tags</span> <span class="tok-val">embedui</span> .
+
+<span class="tok-kw">export</span> <span class="tok-var">DASHBOARD_TOKEN</span>=<span class="tok-str">"$(openssl rand -hex 32)"</span>
+<span class="tok-cmd">echo</span> <span class="tok-str">"Dashboard token: $DASHBOARD_TOKEN"</span>
+
+<span class="tok-var">LISTEN_ADDR</span>=<span class="tok-val">127.0.0.1:8080</span> <span class="tok-var">COOKIE_SECURE</span>=<span class="tok-val">false</span> \
+  <span class="tok-var">DATA_DIR</span>=<span class="tok-val">./data</span> <span class="tok-cmd">llm-meter</span></code></pre>
+            </div>
+
+            <p class="step-foot" data-foot-group="server" data-foot-panels="docker binary">
+              Open <code>http://localhost:8080</code>, unlock with <code>DASHBOARD_TOKEN</code>, then open <strong>Clients</strong> to issue a client key (<code>llmm_...</code>).
+            </p>
+            <p class="step-foot" data-foot-group="server" data-foot-panels="compose" hidden>
+              Set a persistent <code>DASHBOARD_TOKEN</code> in a <code>0600</code> <code>.env</code> file beside <code>compose.yaml</code>, start with <code>docker compose up -d llm-meter</code>, then open your HTTPS ingress URL, unlock with <code>DASHBOARD_TOKEN</code>, and issue a client key (<code>llmm_...</code>) in <strong>Clients</strong>.
+            </p>
+          </div>
+
+          <div class="step-block">
+            <div class="step-head">
+              <div class="step-title-row">
+                <span class="step-num" aria-hidden="true">2</span>
+                <h3>Connect your tools</h3>
+              </div>
+              <div class="segmented segmented-small sliding-group" role="tablist" aria-label="Client setup snippet">
+                <span class="sliding-pill" aria-hidden="true"></span>
+                <button type="button" role="tab" aria-selected="true" data-snippet-group="client" data-snippet="claude">Claude Code</button>
+                <button type="button" role="tab" aria-selected="false" data-snippet-group="client" data-snippet="codex">Codex</button>
+                <button type="button" role="tab" aria-selected="false" data-snippet-group="client" data-snippet="opencode">OpenCode</button>
+                <button type="button" role="tab" aria-selected="false" data-snippet-group="client" data-snippet="antigravity">Antigravity</button>
+              </div>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="client" data-panel="claude">
+              <div class="code-bar">
+                <span class="code-lang">sh · Claude Code (direct OTLP, prompt capture off)</span>
+                <button type="button" class="copy-btn" data-copy-target="code-client-claude" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-client-claude">(
+  <span class="tok-kw">unset</span> <span class="tok-var">OTEL_LOG_RAW_API_BODIES</span> <span class="tok-var">OTEL_EXPORTER_OTLP_HEADERS</span>
+  <span class="tok-kw">export</span> <span class="tok-var">CLAUDE_CODE_ENABLE_TELEMETRY</span>=<span class="tok-val">1</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_LOGS_EXPORTER</span>=<span class="tok-val">otlp</span> <span class="tok-var">OTEL_METRICS_EXPORTER</span>=<span class="tok-val">none</span> <span class="tok-var">OTEL_TRACES_EXPORTER</span>=<span class="tok-val">none</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_PROTOCOL</span>=<span class="tok-val">http/protobuf</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</span>=<span class="tok-img">http://localhost:8080/otlp/v1/logs</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_EXPORTER_OTLP_LOGS_HEADERS</span>=<span class="tok-str">"X-LLM-Meter-Key=&lt;your-key&gt;"</span>
+  <span class="tok-kw">export</span> <span class="tok-var">OTEL_LOG_USER_PROMPTS</span>=<span class="tok-val">0</span> <span class="tok-var">OTEL_LOG_ASSISTANT_RESPONSES</span>=<span class="tok-val">0</span>
+  <span class="tok-cmd">claude</span>
+)</code></pre>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="client" data-panel="codex" hidden>
+              <div class="code-bar">
+                <span class="code-lang">toml · ~/.codex/config.toml</span>
+                <button type="button" class="copy-btn" data-copy-target="code-client-codex" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-client-codex"><span class="tok-key">[otel]</span>
+<span class="tok-var">exporter</span> = { <span class="tok-key">otlp-http</span> = { <span class="tok-var">endpoint</span> = <span class="tok-str">"http://localhost:8080/otlp/v1/logs"</span>, <span class="tok-var">protocol</span> = <span class="tok-str">"json"</span>, <span class="tok-var">headers</span> = { <span class="tok-str">"X-LLM-Meter-Key"</span> = <span class="tok-str">"&lt;your-key&gt;"</span> } } }
+<span class="tok-var">log_user_prompt</span> = <span class="tok-val">false</span>
+<span class="tok-var">log_agent_responses</span> = <span class="tok-val">false</span>
+<span class="tok-var">log_sse_deltas</span> = <span class="tok-val">false</span></code></pre>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="client" data-panel="opencode" hidden>
+              <div class="code-bar">
+                <span class="code-lang">sh · OpenCode (direct OTLP traces)</span>
+                <button type="button" class="copy-btn" data-copy-target="code-client-opencode" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-client-opencode"><span class="tok-var">OTEL_EXPORTER_OTLP_ENDPOINT</span>=<span class="tok-img">http://localhost:8080/otlp</span> \
+<span class="tok-var">OTEL_EXPORTER_OTLP_HEADERS</span>=<span class="tok-str">"X-LLM-Meter-Key=&lt;your-key&gt;"</span> \
+<span class="tok-cmd">opencode</span> <span class="tok-flag">--standalone</span></code></pre>
+            </div>
+
+            <div class="code-panel glow-panel" data-panel-group="client" data-panel="antigravity" hidden>
+              <div class="code-bar">
+                <span class="code-lang">sh · Signed-in Antigravity (via local relay)</span>
+                <button type="button" class="copy-btn" data-copy-target="code-client-antigravity" aria-keyshortcuts="c" title="Copy command (C)">
+                  <svg class="copy-icon icon-clip" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="copy-icon icon-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-label">Copy</span>
+                  <kbd class="copy-kbd" aria-hidden="true">C</kbd>
+                </button>
+              </div>
+              <pre><code id="code-client-antigravity"><span class="tok-comment"># With llm-meter-relay or the macOS menu bar app running locally:</span>
+<span class="tok-cmd">antigravity</span> acp \
+  <span class="tok-flag">--cloud_code_endpoint</span> <span class="tok-img">http://127.0.0.1:8765/antigravity</span></code></pre>
+            </div>
+
+            <p class="step-foot" data-foot-group="client" data-foot-panels="claude codex opencode">
+              Replace <code>&lt;your-key&gt;</code> with the client key issued in step 1 (when using remote HTTPS Compose, also replace <code>http://localhost:8080</code> with your HTTPS ingress origin, keeping the <code>/otlp</code> path). Also supports Gemini CLI, GitHub Copilot CLI, generic OpenAI-compatible SDKs/CLIs, and the local relay — see the
+              <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#5-connect-clients" target="_blank" rel="noopener noreferrer">Configuration Guide</a>.
+            </p>
+            <p class="step-foot" data-foot-group="client" data-foot-panels="antigravity" hidden>
+              Prerequisite: run the local relay (CLI, Docker, or <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/desktop/README.md" target="_blank" rel="noopener noreferrer">macOS menu bar app</a>) pointed at an <strong>HTTPS</strong> LLM Meter server target (<code>--target https://...</code>). See <a class="text-link" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#4-run-the-local-relay" target="_blank" rel="noopener noreferrer">Run the Local Relay</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="close-band">
+      <div class="container">
+        <div class="close-stage glow-panel">
+          <div class="close-inner">
+            <div class="close-copy">
+              <h2>Keep every token on your own ledger.</h2>
+              <p>
+                Open-source, self-hosted, and ready to run in Docker or natively on Linux and macOS.
+              </p>
+            </div>
+
+            <div class="close-actions">
+              <a class="btn btn-primary" href="https://github.com/mishankov/llm-meter" target="_blank" rel="noopener noreferrer">
+                <span>View on GitHub</span>
+                <svg class="btn-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M5 12h14"></path>
+                  <path d="m12 5 7 7-7 7"></path>
+                </svg>
+              </a>
+              <a class="btn btn-secondary" href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md" target="_blank" rel="noopener noreferrer">
+                Configuration Guide
+              </a>
+              <a class="btn btn-secondary" href="https://github.com/mishankov/llm-meter/blob/main/desktop/README.md" target="_blank" rel="noopener noreferrer">
+                macOS Relay App
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <img src="./assets/llm-meter.png" alt="" width="22" height="22" class="brand-mark">
+        <span>LLM Meter</span>
+      </div>
+      <nav class="footer-links" aria-label="Resources">
+        <a href="https://github.com/mishankov/llm-meter" target="_blank" rel="noopener noreferrer">Repository</a>
+        <a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md" target="_blank" rel="noopener noreferrer">Configuration Guide</a>
+        <a href="https://github.com/mishankov/llm-meter/blob/main/desktop/README.md" target="_blank" rel="noopener noreferrer">macOS Relay</a>
+        <a href="https://github.com/mishankov/llm-meter/pkgs/container/llm-meter" target="_blank" rel="noopener noreferrer">Container Images</a>
+      </nav>
+    </div>
+  </footer>
+
+  <div class="sr-only" role="status" aria-live="polite" id="live-announcer"></div>
+  <script src="./main.js" defer></script>
+</body>
+</html>
