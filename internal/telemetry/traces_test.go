@@ -83,12 +83,21 @@ func TestTraceExportsNormalizeIDsAndMeterOpenCode(t *testing.T) {
 		{mediaJSON, []byte(fixture)},
 		{mediaProtobuf, binary},
 	} {
-		r := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(request.body))
+		r := httptest.NewRequest(http.MethodPost, "/otlp/v1/traces", bytes.NewReader(request.body))
 		r.Header.Set("Content-Type", request.contentType)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
 		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != request.contentType {
 			t.Fatalf("unexpected export response: %d %q", w.Code, w.Body.String())
+		}
+	}
+	for _, legacyPath := range []string{"/v1/logs", "/v1/traces", "/v1/metrics"} {
+		r := httptest.NewRequest(http.MethodPost, legacyPath, strings.NewReader("{}"))
+		r.Header.Set("Content-Type", mediaJSON)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("legacy path %s status = %d, want 404", legacyPath, w.Code)
 		}
 	}
 	if len(results) != 2 || results[0].ID != results[1].ID {
@@ -113,7 +122,7 @@ func TestTelemetryBackpressureReturnsRetryableStatus(t *testing.T) {
 	    {"key":"output_tokens","value":{"intValue":"2"}}
 	  ]
 	}]}]}]}`, time.Now().UnixNano())
-	request := httptest.NewRequest(http.MethodPost, "/v1/logs", strings.NewReader(fixture))
+	request := httptest.NewRequest(http.MethodPost, "/otlp/v1/logs", strings.NewReader(fixture))
 	request.Header.Set("Content-Type", mediaJSON)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -125,7 +134,7 @@ func TestTelemetryBackpressureReturnsRetryableStatus(t *testing.T) {
 func TestEventHandlerDirectPrefixAndBackpressure(t *testing.T) {
 	var delivered []usagereport.Event
 	var fail bool
-	handler := EventHandler("/otlp", func(_ context.Context, events []usagereport.Event) error {
+	handler := EventHandler(Prefix, func(_ context.Context, events []usagereport.Event) error {
 		if fail {
 			return fmt.Errorf("secret-db-path")
 		}

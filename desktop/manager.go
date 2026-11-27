@@ -13,8 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mishankov/llm-meter/internal/proxy"
 	"github.com/mishankov/llm-meter/internal/relay"
 	"github.com/mishankov/llm-meter/internal/relayoutbox"
+	"github.com/mishankov/llm-meter/internal/telemetry"
 )
 
 const maxLogEntries = 200
@@ -671,7 +673,7 @@ func buildEndpoints(cfg AppConfig, proxyAddr, telemetryAddr string) []ClientEndp
 			endpoints = append(endpoints, ClientEndpoint{Provider: "openai", Label: "OpenAI-compatible (/v1)", URL: base + "/v1"})
 		}
 		if cfg.Provider == "" || cfg.Provider == "antigravity" {
-			endpoints = append(endpoints, ClientEndpoint{Provider: "antigravity", Label: "Antigravity ACP (root)", URL: base})
+			endpoints = append(endpoints, ClientEndpoint{Provider: "antigravity", Label: "Antigravity ACP (/antigravity)", URL: base + proxy.AntigravityPrefix})
 		}
 	}
 	if cfg.TelemetryEnabled {
@@ -679,7 +681,7 @@ func buildEndpoints(cfg AppConfig, proxyAddr, telemetryAddr string) []ClientEndp
 		if cfg.TLSCert != "" && cfg.TLSKey != "" {
 			scheme = "https://"
 		}
-		endpoints = append(endpoints, ClientEndpoint{Provider: relay.ModeTelemetry, Label: "OTLP/HTTP", URL: scheme + telemetryAddr})
+		endpoints = append(endpoints, ClientEndpoint{Provider: relay.ModeTelemetry, Label: "OTLP/HTTP", URL: scheme + telemetryAddr + telemetry.Prefix})
 	}
 	return endpoints
 }

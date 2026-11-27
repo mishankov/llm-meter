@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mishankov/llm-meter/internal/proxy"
 	"github.com/mishankov/llm-meter/internal/relay"
 )
 
@@ -260,7 +261,7 @@ func BuildAntigravityLauncher(listenAddr, binaryPath string) (string, error) {
 		return "", errors.New("Antigravity binary path contains invalid characters")
 	}
 	quotedBin := posixSingleQuote(binaryPath)
-	quotedEndpoint := posixSingleQuote("http://" + listenAddr)
+	quotedEndpoint := posixSingleQuote("http://" + listenAddr + proxy.AntigravityPrefix)
 	return fmt.Sprintf(launcherHeader+`if [ "$1" = acp ]; then
   shift
   set -- acp --cloud_code_endpoint %s "$@"

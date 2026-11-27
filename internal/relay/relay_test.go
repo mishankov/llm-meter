@@ -35,7 +35,7 @@ func antigravityRelay(host string, target *url.URL, key string, transport http.R
 
 func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 	const (
-		path   = "/v1internal:streamGenerateContent"
+		path   = "/antigravity/v1internal:streamGenerateContent"
 		query  = "alt=sse&fixture=a%2Bb&label=a;b"
 		body   = `{"model":"fixture"}`
 		bearer = "Bearer fixture-google-token"
@@ -45,7 +45,7 @@ func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 	)
 	finish := make(chan struct{})
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/antigravity"+path || r.URL.RawQuery != query {
+		if r.Method != http.MethodPost || r.URL.Path != path || r.URL.RawQuery != query {
 			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
 		}
 		if r.Header.Get("Authorization") != bearer {
@@ -103,7 +103,7 @@ func TestRelayForwardsCredentialsAndStreams(t *testing.T) {
 
 func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 	const host = "127.0.0.1:8765"
-	const rpc = "/v1internal:loadCodeAssist"
+	const rpc = "/antigravity/v1internal:loadCodeAssist"
 	target, err := parseHTTPS("https://proxy.test/antigravity")
 	if err != nil {
 		t.Fatal(err)
@@ -123,8 +123,15 @@ func TestRelayChecksRequestBeforeForwarding(t *testing.T) {
 		{"browser origin", host, host, rpc, http.Header{"Origin": {"", "https://example.test"}}, http.StatusForbidden},
 		{"fetch metadata", host, host, rpc, http.Header{"Sec-Fetch-Site": {"cross-site"}}, http.StatusForbidden},
 		{"missing authorization", host, host, rpc, nil, http.StatusUnauthorized},
+		{"unprefixed legacy antigravity rpc", host, host, "/v1internal:loadCodeAssist", authorized, http.StatusNotFound},
 		{"dashboard route", host, host, "/api/clients", authorized, http.StatusNotFound},
 		{"encoded slash", host, host, rpc + "%2f..%2fapi", authorized, http.StatusNotFound},
+		{"double antigravity prefix", host, host, "/antigravity" + rpc, authorized, http.StatusNotFound},
+		{"antigravity unknown path", host, host, "/antigravity/unknown", authorized, http.StatusNotFound},
+		{"antigravity bare prefix", host, host, "/antigravity", authorized, http.StatusNotFound},
+		{"antigravity trailing slash", host, host, "/antigravity/", authorized, http.StatusNotFound},
+		{"antigravity traversal", host, host, "/antigravity/../v1internal:loadCodeAssist", authorized, http.StatusNotFound},
+		{"antigravity encoded slash", host, host, "/antigravity%2fv1internal:loadCodeAssist", authorized, http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "http://"+test.requestHost+test.path, nil)
@@ -150,7 +157,7 @@ func TestRelayHidesUpstreamErrors(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return nil, errors.New(r.URL.String() + " " + r.Header.Get(keyHeader) + " " + r.Header.Get("Authorization"))
 	})
-	request := httptest.NewRequest(http.MethodPost, "http://"+host+"/v1internal:loadCodeAssist", nil)
+	request := httptest.NewRequest(http.MethodPost, "http://"+host+"/antigravity/v1internal:loadCodeAssist", nil)
 	request.Header.Set("Authorization", "Bearer fixture")
 	response := httptest.NewRecorder()
 	antigravityRelay(host, target, "llmm_fixture", transport).ServeHTTP(response, request)
@@ -259,7 +266,7 @@ func TestProviderRoutingInBothModes(t *testing.T) {
 	for _, test := range []struct {
 		name, provider, authHeader, localPath, proxyPath, directPath, response string
 	}{
-		{"antigravity", "antigravity", "Authorization", "/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
+		{"antigravity", "antigravity", "Authorization", "/antigravity/v1internal:generateContent", "/antigravity/v1internal:generateContent", "/direct/v1internal:generateContent", gemini},
 		{"openai", "openai", "Authorization", "/v1/responses", "/v1/responses", "/direct/responses", usage},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -326,7 +333,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 	requests := []struct {
 		provider, method, localPath, remotePath, directPath string
 	}{
-		{"antigravity", http.MethodPost, "/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
+		{"antigravity", http.MethodPost, "/antigravity/v1internal:loadCodeAssist", "/antigravity/v1internal:loadCodeAssist", "/v1internal:loadCodeAssist"},
 		{"openai", http.MethodGet, "/v1/models", "/v1/models", "/v1/models"},
 	}
 	for _, mode := range []string{ModeRemoteProxy, ModeUsageOnly} {
@@ -393,7 +400,7 @@ func TestDefaultRelayDispatchesAllProviders(t *testing.T) {
 				}
 				t.Fatal("remote-proxy mode metered usage locally")
 			}
-			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models"} {
+			for _, path := range []string{"/api/usage/events", "/codex/responses", "/opencode-go/models", "/v1/../opencode-go/models", "/v1suffix", "/backend-api/codex/models", "/v1internal:loadCodeAssist", "/antigravity/antigravity/v1internal:loadCodeAssist", "/antigravity/unknown"} {
 				r := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
 				r.Header.Set("Authorization", authorization)
 				response := httptest.NewRecorder()
@@ -570,15 +577,18 @@ func TestTelemetryRelayOnlyAcceptsLocalOTLPExports(t *testing.T) {
 		headers                  http.Header
 		status                   int
 	}{
-		{name: "local export", method: http.MethodPost, path: "/v1/logs", status: http.StatusOK},
-		{name: "trace export", method: http.MethodPost, path: "/v1/traces", status: http.StatusOK},
-		{name: "metric export", method: http.MethodPost, path: "/v1/metrics", status: http.StatusOK},
+		{name: "local export", method: http.MethodPost, path: "/otlp/v1/logs", status: http.StatusOK},
+		{name: "trace export", method: http.MethodPost, path: "/otlp/v1/traces", status: http.StatusOK},
+		{name: "metric export", method: http.MethodPost, path: "/otlp/v1/metrics", status: http.StatusOK},
+		{name: "legacy logs", method: http.MethodPost, path: "/v1/logs", status: http.StatusNotFound},
+		{name: "legacy traces", method: http.MethodPost, path: "/v1/traces", status: http.StatusNotFound},
+		{name: "legacy metrics", method: http.MethodPost, path: "/v1/metrics", status: http.StatusNotFound},
 		{name: "model traffic", method: http.MethodPost, path: "/v1/messages", status: http.StatusNotFound},
-		{name: "path suffix", method: http.MethodPost, path: "/v1/logs/", status: http.StatusNotFound},
-		{name: "wrong method", method: http.MethodGet, path: "/v1/logs", status: http.StatusMethodNotAllowed},
-		{name: "wrong host", method: http.MethodPost, path: "/v1/logs", host: "example.test", status: http.StatusForbidden},
-		{name: "browser origin", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
-		{name: "fetch metadata", method: http.MethodPost, path: "/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
+		{name: "path suffix", method: http.MethodPost, path: "/otlp/v1/logs/", status: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: "/otlp/v1/logs", status: http.StatusMethodNotAllowed},
+		{name: "wrong host", method: http.MethodPost, path: "/otlp/v1/logs", host: "example.test", status: http.StatusForbidden},
+		{name: "browser origin", method: http.MethodPost, path: "/otlp/v1/logs", headers: http.Header{"Origin": {"https://example.test"}}, status: http.StatusForbidden},
+		{name: "fetch metadata", method: http.MethodPost, path: "/otlp/v1/logs", headers: http.Header{"Sec-Fetch-Site": {"cross-site"}}, status: http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request, err := http.NewRequestWithContext(ctx, test.method, "http://"+inst.Status().ListenAddr+test.path,
@@ -629,7 +639,7 @@ func TestTelemetryRelayAcceptsTrustedTLS(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/v1/traces", strings.NewReader("{}"))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+inst.Status().ListenAddr+"/otlp/v1/traces", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,7 +768,7 @@ func TestProxyAndTelemetryListenersRunTogether(t *testing.T) {
 			{"key":"output_tokens","value":{"intValue":"20"}}
 		]
 	}]}]}]}`
-	telemetryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+status.TelemetryListenAddr+"/v1/logs", strings.NewReader(otlp))
+	telemetryReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+status.TelemetryListenAddr+"/otlp/v1/logs", strings.NewReader(otlp))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +843,7 @@ func TestCombinedRelayContainerBindings(t *testing.T) {
 }
 
 func TestRelayGuardAcceptsDefaultHTTPSPort(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/v1/traces", nil)
+	request := httptest.NewRequest(http.MethodPost, "https://127.0.0.1/otlp/v1/traces", nil)
 	response := httptest.NewRecorder()
 	guardClient("127.0.0.1:443", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -1032,9 +1042,9 @@ func TestUsageOnlyRelayDoesNotUploadServiceRequests(t *testing.T) {
 		method, path, body string
 	}{
 		{http.MethodGet, "/v1/models", ""},
-		{http.MethodPost, "/v1internal:loadCodeAssist", `{}`},
+		{http.MethodPost, "/antigravity/v1internal:loadCodeAssist", `{}`},
 		{http.MethodPost, "/v1/responses", `{"model":"gpt-5.4"}`},
-		{http.MethodPost, "/v1internal:generateContent", `{"model":"gemini-4-neon"}`},
+		{http.MethodPost, "/antigravity/v1internal:generateContent", `{"model":"gemini-4-neon"}`},
 	} {
 		req, err := http.NewRequestWithContext(ctx, tc.method, "http://"+listen+tc.path, strings.NewReader(tc.body))
 		if err != nil {

@@ -89,7 +89,11 @@ func guard(host string, onRequest func(), handlers ...providerHandler) http.Hand
 			return
 		}
 		for _, handler := range handlers {
-			if !handler.provider.allowsPath(r.URL.Path) {
+			path := r.URL.Path
+			if handler.provider.prefix == proxy.AntigravityPrefix {
+				path = r.URL.EscapedPath()
+			}
+			if !handler.provider.allowsPath(path) {
 				continue
 			}
 			if r.Header.Get("Authorization") == "" {
@@ -129,7 +133,8 @@ func guardClient(host string, next http.Handler) http.Handler {
 
 func (provider connectionProvider) allowsPath(path string) bool {
 	if provider.prefix == proxy.AntigravityPrefix {
-		return cloudCodeRPC.MatchString(path)
+		suffix, ok := strings.CutPrefix(path, provider.prefix)
+		return ok && cloudCodeRPC.MatchString(suffix)
 	}
 	if path != provider.prefix && !strings.HasPrefix(path, provider.prefix+"/") {
 		return false
@@ -156,23 +161,12 @@ func remoteProxy(provider connectionProvider, target *url.URL, key string, trans
 			http.Error(w, "LLM Meter unavailable", http.StatusBadGateway)
 		},
 	}
-	if provider.prefix == proxy.AntigravityPrefix {
-		return forward
-	}
 	return http.StripPrefix(provider.prefix, forward)
 }
 
 func directProxy(provider connectionProvider, upstream url.URL, record func(proxy.Usage)) http.Handler {
-	if provider.prefix != proxy.AntigravityPrefix {
-		return proxy.New(&upstream, record)
+	if provider.prefix == proxy.AntigravityPrefix {
+		return proxy.NewAntigravity(upstream, record)
 	}
-	forward := proxy.NewAntigravity(upstream, record)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := r.Clone(r.Context())
-		request.URL.Path = provider.prefix + request.URL.Path
-		if request.URL.RawPath != "" {
-			request.URL.RawPath = provider.prefix + request.URL.RawPath
-		}
-		forward.ServeHTTP(w, request)
-	})
+	return proxy.New(&upstream, record)
 }

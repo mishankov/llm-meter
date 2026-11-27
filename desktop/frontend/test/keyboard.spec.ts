@@ -11,7 +11,7 @@ test("settings drafts, scoped commands and the pending-outbox decision", async (
     status: { state: "stopped", mode: "usage-only", listenAddr: "127.0.0.1:8765", target: "https://meter.example.org", routes: ["openai", "antigravity"], requestsTotal: 0 },
     keptQueues: 1, pendingOnDisk: 2, endpoints: [
       { provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" },
-      { provider: "antigravity", label: "Antigravity", url: "http://127.0.0.1:8765" },
+      { provider: "antigravity", label: "Antigravity", url: "http://127.0.0.1:8765/antigravity" },
     ], logs: [{ level: "info", timestamp: "2026-01-15T12:34:00Z", message: "Relay stopped" }], providers: [],
     antigravityBin: "/opt/bin/antigravity", launcherPath: "/tmp/launcher/antigravity",
   };
@@ -147,7 +147,7 @@ test("enable both listeners and copy their separate addresses with the keyboard"
     endpoints: [{ provider: "openai", label: "OpenAI-compatible", url: "http://127.0.0.1:8765/v1" }],
     logs: [], providers: [], antigravityBin: "", launcherPath: "",
   };
-  const endpoint = "https://127.0.0.1:4318";
+  const endpoint = "https://127.0.0.1:4318/otlp";
   const saves: SaveConfigRequest[] = [];
   const copies: string[] = [];
 

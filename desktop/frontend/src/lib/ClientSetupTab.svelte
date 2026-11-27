@@ -70,7 +70,7 @@
     return () => { current = false; };
   });
 
-  const baseUrl = $derived(selectedClient === "antigravity" ? origin : `${origin}/v1`);
+  const baseUrl = $derived(selectedClient === "antigravity" ? `${origin}/antigravity` : `${origin}/v1`);
   const snippet = $derived(selectedClient === "antigravity" ? launcherScript : `export OPENAI_BASE_URL="${baseUrl}"
 # Keep your normal OPENAI_API_KEY; do not send X-LLM-Meter-Key.`);
 
@@ -145,7 +145,7 @@
             {copiedKey === "telemetry" ? "Copied" : "Copy endpoint"}
           </Button>
         </div>
-        <p class="hint muted">Use this for <code>OTEL_EXPORTER_OTLP_ENDPOINT</code>. For signal-specific settings, append <code>/v1/logs</code> or <code>/v1/traces</code>.</p>
+        <p class="hint muted">Use this for <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> (already ends in <code>/otlp</code>). For signal-specific settings, append <code>/v1/logs</code> or <code>/v1/traces</code>.</p>
       </div>
       <p class="hint muted">Configure Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, or OpenCode using the <a class="guide-link" href={telemetryGuide} onclick={(event) => openGuide(event, telemetryGuide)}>OpenTelemetry setup guide</a>.</p>
     </section>
