@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from '$app/env';
   import { afterNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onMount, tick, untrack } from 'svelte';
@@ -7,9 +8,13 @@
   import KeyRoundIcon from '@lucide/svelte/icons/key-round';
   import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
   import LogOutIcon from '@lucide/svelte/icons/log-out';
+  import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
+  import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
   import { Button } from '@ui-sdk/svelte/button';
   import { Field, FieldLabel } from '@ui-sdk/svelte/field';
   import { Input } from '@ui-sdk/svelte/input';
+  import { useShortcutHint } from '@ui-sdk/svelte/shortcuts';
+  import { createToggleController, Toggle, ToggleIcon } from '@ui-sdk/svelte/toggle';
   import { APIError, api, dashboardProblem, jsonPost, type DashboardProblem, type RequestOutcome, type RequestPage, type Usage } from '../../lib/api';
   import favicon from '../../lib/assets/favicon.png?no-inline';
   import meterMark from '../../lib/assets/llm-meter.png';
@@ -37,6 +42,9 @@
   let tokenRejected = $state(false);
   let expiredSession = $state(false);
   let online = $state(true);
+  let sidebarCollapsed = $state(browser && document.documentElement.dataset.sidebar === 'collapsed');
+  const sidebarHint = useShortcutHint('mod+b');
+  const sidebarToggle = createToggleController();
 
   let filters = $state({ ...defaultFilters });
   let pendingUsage: UsageFilters | null = null;
@@ -194,6 +202,44 @@
   function skipToContent(event: MouseEvent) {
     event.preventDefault();
     document.getElementById('content')?.focus();
+  }
+
+  function setSidebarCollapsed(next: boolean) {
+    sidebarCollapsed = next;
+    if (!browser) return;
+    if (next) document.documentElement.dataset.sidebar = 'collapsed';
+    else delete document.documentElement.dataset.sidebar;
+    try {
+      localStorage.setItem('llm-meter-sidebar', next ? 'collapsed' : 'expanded');
+    } catch {
+      // Storage may be blocked by the browser.
+    }
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (
+      session !== 'ready' ||
+      loggingOut ||
+      keyDialogOpen ||
+      event.defaultPrevented ||
+      event.repeat ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.altKey ||
+      event.shiftKey
+    ) return;
+    const usesMeta = sidebarHint.ariaKeyshortcuts.startsWith('Meta+');
+    const hasMod = usesMeta ? (event.metaKey && !event.ctrlKey) : (event.ctrlKey && !event.metaKey);
+    if (!hasMod) return;
+    const matchesKey = event.key.toLowerCase() === 'b';
+    const matchesLayout = event.code === 'KeyB' && /^[\p{L}\p{M}]+$/u.test(event.key) && !/^[a-z]+$/i.test(event.key);
+    if (!matchesKey && !matchesLayout) return;
+    if (!window.matchMedia('(min-width: 671px)').matches) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable], [role="dialog"], [role="alertdialog"], [role="listbox"]')) return;
+    if (document.querySelector('dialog[open], [role="dialog"]:not([hidden]):not([data-closed]), [role="alertdialog"]:not([hidden]):not([data-closed]), [role="listbox"]:not([hidden]):not([data-closed])')) return;
+    event.preventDefault();
+    sidebarToggle.toggle();
   }
 
   function refreshUsage() {
@@ -354,7 +400,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href={favicon} />
 </svelte:head>
 
-<svelte:window onhashchange={legacyHashChanged} ononline={connectionChanged} onoffline={connectionChanged} />
+<svelte:window onhashchange={legacyHashChanged} ononline={connectionChanged} onoffline={connectionChanged} onkeydown={handleWindowKeydown} />
 
 {#if session !== 'ready'}
   <main class="auth-page">
@@ -387,16 +433,37 @@
   <div class="shell">
     <a class="skip-link" href="#content" onclick={skipToContent} onkeydown={guardEnter}>Skip to main content</a>
     <aside class="sidebar">
-      <a class="brand" href={usageHref}>
-        <img class="app-mark" src={meterMark} alt="" />
-        <span>LLM Meter</span>
-      </a>
-      <nav aria-label="Main navigation">
-        <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined}>
-          <ChartNoAxesCombinedIcon size={17} aria-hidden="true" /> Usage
+      <div class="sidebar-head">
+        <a class="brand" href={usageHref} title={sidebarCollapsed ? 'LLM Meter' : undefined}>
+          <img class="app-mark" src={meterMark} alt="" />
+          <span>LLM Meter</span>
         </a>
-        <a href="/clients" aria-current={screen === 'clients' ? 'page' : undefined}>
-          <KeyRoundIcon size={17} aria-hidden="true" /> Clients
+        <Toggle
+          class="sidebar-toggle"
+          aria-label="Collapse sidebar"
+          aria-keyshortcuts={sidebarHint.ariaKeyshortcuts}
+          title={`${sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} (${sidebarHint.text})`}
+          pressed={sidebarCollapsed}
+          onPressedChange={setSidebarCollapsed}
+          controller={sidebarToggle}
+          disabled={loggingOut || keyDialogOpen}
+          onkeydown={guardEnter}
+        >
+          <ToggleIcon mirror>
+            {#if sidebarCollapsed}
+              <PanelLeftOpenIcon size={16} aria-hidden="true" />
+            {:else}
+              <PanelLeftCloseIcon size={16} aria-hidden="true" />
+            {/if}
+          </ToggleIcon>
+        </Toggle>
+      </div>
+      <nav aria-label="Main navigation">
+        <a href={usageHref} aria-current={screen === 'usage' ? 'page' : undefined} title={sidebarCollapsed ? 'Usage' : undefined}>
+          <ChartNoAxesCombinedIcon size={17} aria-hidden="true" /> <span>Usage</span>
+        </a>
+        <a href="/clients" aria-current={screen === 'clients' ? 'page' : undefined} title={sidebarCollapsed ? 'Clients' : undefined}>
+          <KeyRoundIcon size={17} aria-hidden="true" /> <span>Clients</span>
         </a>
       </nav>
       <div class="nav-end">
