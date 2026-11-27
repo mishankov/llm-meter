@@ -1982,3 +1982,128 @@ test('clamps brushed edge buckets, renders 365-day dense timelines, supports tou
   expect(endPillBox.x).toBeGreaterThanOrEqual(viewportBox.x);
   expect(endPillBox.x + endPillBox.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width + 1);
 });
+
+test('collapses and expands the sidebar with persistence, keyboard shortcuts, responsive safety, and agent control', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockAPI(page);
+  await unlock(page);
+
+  const sidebar = page.locator('aside.sidebar');
+  const content = page.getByRole('main');
+  const toggle = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
+  const theme = page.getByRole('combobox', { name: 'Theme', exact: true });
+  const lock = page.getByRole('button', { name: 'Lock dashboard', exact: true });
+
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  const shortcut = await toggle.getAttribute('aria-keyshortcuts');
+  expect(shortcut === 'Meta+B' || shortcut === 'Control+B').toBe(true);
+  const usesMeta = shortcut === 'Meta+B';
+
+  const expandedSidebar = (await sidebar.boundingBox())!;
+  const expandedContent = (await content.boundingBox())!;
+  expect(expandedSidebar.width).toBeCloseTo(176, 0);
+
+  // 1. Toggle with button click and verify collapsed rail layout & wider content
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed');
+  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeCloseTo(62, 0);
+  const collapsedContent = (await content.boundingBox())!;
+  expect(collapsedContent.width).toBeGreaterThan(expandedContent.width + 80);
+
+  // Navigation, Theme picker, and Lock dashboard remain accessible while collapsed
+  await page.getByRole('link', { name: 'Clients', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Clients', exact: true })).toBeVisible();
+  await theme.click();
+  await expect(page.getByRole('listbox')).toBeVisible();
+  // Shortcut must not fire while a popup listbox is open
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('option', { name: 'Light' }).click();
+  await expect(page.locator('html')).toHaveCSS('color-scheme', 'light');
+  await expect(lock).toBeInViewport({ ratio: 1 });
+
+  // 2. Persists across reload and across lock/unlock
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeCloseTo(62, 0);
+
+  // 3. Keyboard shortcut: guards IME, repeat, active dialog & input drafts, and supports non-English layout
+  await page.getByRole('button', { name: 'New client' }).click();
+  const clientName = page.getByRole('textbox', { name: 'Client name' });
+  await clientName.fill('Unsaved draft');
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(clientName).toHaveValue('Unsaved draft');
+  await page.keyboard.press('Escape');
+  await expect(clientName).toBeHidden();
+
+  const modInit = usesMeta ? { metaKey: true, ctrlKey: false } : { ctrlKey: true, metaKey: false };
+  await page.evaluate((init) => window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'b', code: 'KeyB', repeat: true, bubbles: true, cancelable: true, ...init
+  })), modInit);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  await page.evaluate((init) => window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'и', code: 'KeyB', isComposing: true, bubbles: true, cancelable: true, ...init
+  })), modInit);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  // Non-English layouts: Russian 'и' and Thai Kedmanee combining mark U+0E34 on physical KeyB
+  await page.evaluate((init) => window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'и', code: 'KeyB', bubbles: true, cancelable: true, ...init
+  })), modInit);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('html')).not.toHaveAttribute('data-sidebar', 'collapsed');
+
+  await page.evaluate((init) => window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: '\u0e34', code: 'KeyB', bubbles: true, cancelable: true, ...init
+  })), modInit);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed');
+
+  // Standard ControlOrMeta+b expands and collapses again
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  // 4. Responsive checks: tablet 768px has zero overflow; mobile 390px hides toggle and keeps top bar readable
+  await page.getByRole('link', { name: 'Usage', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Usage overview' })).toBeVisible();
+  await page.setViewportSize({ width: 768, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(768);
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => (await sidebar.boundingBox())!.width).toBeCloseTo(176, 0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(768);
+
+  // Collapse again then switch to mobile width
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(toggle).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  const clientsLabelBox = (await page.getByRole('link', { name: 'Clients', exact: true }).locator('span').boundingBox())!;
+  expect(clientsLabelBox.width).toBeGreaterThan(20);
+  // Shortcut does not flip desktop state while on mobile top bar
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(page.locator('html')).toHaveAttribute('data-sidebar', 'collapsed');
+
+  // 5. Agent bridge can inspect and toggle the sidebar control
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const agentResult = await page.evaluate(async (path) => {
+    const { agent } = await import(path);
+    const labels = agent.snapshot().filter((entry: { offPage: boolean }) => !entry.offPage)
+      .map((entry: { label: string }) => entry.label);
+    const act = await agent.act({ steps: [{ ref: 'Collapse sidebar', action: 'toggle' }] });
+    return { labels, act };
+  }, '/test/agent.ts');
+  expect(agentResult.labels).toContain('Collapse sidebar');
+  expect(agentResult.act.ok, agentResult.act.error?.message).toBe(true);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('html')).not.toHaveAttribute('data-sidebar', 'collapsed');
+});
