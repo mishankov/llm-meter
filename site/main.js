@@ -4,6 +4,11 @@
   var THEME_KEY = "llm-meter-site-theme";
   var root = document.documentElement;
   var announcer = document.getElementById("live-announcer");
+  var reduceMotionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  function prefersReducedMotion() {
+    return !!(reduceMotionQuery && reduceMotionQuery.matches);
+  }
 
   function announce(message) {
     if (!announcer) return;
@@ -13,14 +18,70 @@
     });
   }
 
-  // 1. Theme state (respects prefers-color-scheme + interactive toggle + dashboard image swap)
-  var themeButtons = document.querySelectorAll("[data-set-theme]");
-  var dashboardImg = document.getElementById("dashboard-screenshot");
-  var stageLabel = document.getElementById("stage-theme-label");
-  var stageToggle = document.getElementById("stage-theme-toggle");
+  // 1. Sliding pill indicators for segmented controls & theme switch
+  var slidingGroups = Array.prototype.slice.call(document.querySelectorAll(".sliding-group"));
 
-  function applyTheme(theme, persist) {
-    var resolved = theme === "light" ? "light" : "dark";
+  function updateSlidingPill(group, immediate) {
+    if (!group) return;
+    var pill = group.querySelector(".sliding-pill");
+    if (!pill) return;
+    var active = group.querySelector('[aria-selected="true"], [aria-pressed="true"]');
+    if (!active) return;
+
+    var left = active.offsetLeft;
+    var width = active.offsetWidth;
+    if (width <= 0) return;
+
+    if (immediate) {
+      pill.style.transition = "none";
+    }
+    pill.style.width = width + "px";
+    pill.style.transform = "translateX(" + left + "px)";
+    group.classList.add("has-pill");
+    if (immediate) {
+      // Force reflow then restore transition
+      void pill.offsetWidth;
+      pill.style.transition = "";
+    }
+  }
+
+  function updateAllPills(immediate) {
+    slidingGroups.forEach(function (group) {
+      updateSlidingPill(group, immediate);
+    });
+  }
+
+  // 2. Theme + Dashboard stage view mode (Dark / Split / Light)
+  var themeButtons = document.querySelectorAll("[data-set-theme]");
+  var stageEl = document.getElementById("dashboard-stage");
+  var stageModeButtons = document.querySelectorAll("[data-stage-mode]");
+  var splitDivider = document.getElementById("split-divider");
+  var dashboardFrame = document.getElementById("dashboard-frame");
+  var currentStageMode = root.getAttribute("data-theme") === "light" ? "light" : "dark";
+  var splitPercent = 50;
+
+  function setStageMode(mode, syncTheme) {
+    currentStageMode = mode === "split" || mode === "light" ? mode : "dark";
+    if (stageEl) {
+      stageEl.setAttribute("data-view-mode", currentStageMode);
+    }
+    if (splitDivider) {
+      splitDivider.hidden = currentStageMode !== "split";
+    }
+    stageModeButtons.forEach(function (btn) {
+      var active = btn.getAttribute("data-stage-mode") === currentStageMode;
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    });
+
+    var stageGroup = stageEl ? stageEl.querySelector(".stage-mode-switch") : null;
+    updateSlidingPill(stageGroup, false);
+
+    if (syncTheme && (currentStageMode === "dark" || currentStageMode === "light")) {
+      applyTheme(currentStageMode, true, null);
+    }
+  }
+
+  function commitThemeDOM(resolved, persist) {
     root.setAttribute("data-theme", resolved);
 
     if (persist) {
@@ -36,47 +97,89 @@
       btn.setAttribute("aria-pressed", isActive ? "true" : "false");
     });
 
-    if (dashboardImg) {
-      var nextSrc = resolved === "light"
-        ? dashboardImg.getAttribute("data-light-src")
-        : dashboardImg.getAttribute("data-dark-src");
-      if (nextSrc && dashboardImg.getAttribute("src") !== nextSrc) {
-        dashboardImg.setAttribute("src", nextSrc);
+    var headerSwitch = document.querySelector(".theme-switch");
+    updateSlidingPill(headerSwitch, false);
+
+    if (currentStageMode !== "split") {
+      setStageMode(resolved, false);
+    }
+  }
+
+  function applyTheme(theme, persist, originEvent) {
+    var resolved = theme === "light" ? "light" : "dark";
+    var current = root.getAttribute("data-theme");
+    if (current === resolved) {
+      commitThemeDOM(resolved, persist);
+      return;
+    }
+
+    var canTransition =
+      originEvent &&
+      typeof document.startViewTransition === "function" &&
+      !prefersReducedMotion();
+
+    if (canTransition) {
+      var x = window.innerWidth * 0.5;
+      var y = 32;
+      if (originEvent.clientX || originEvent.clientY) {
+        x = originEvent.clientX;
+        y = originEvent.clientY;
+      } else if (originEvent.currentTarget && originEvent.currentTarget.getBoundingClientRect) {
+        var rect = originEvent.currentTarget.getBoundingClientRect();
+        x = rect.left + rect.width * 0.5;
+        y = rect.top + rect.height * 0.5;
       }
-    }
+      var maxDist = Math.hypot(
+        Math.max(x, window.innerWidth - x),
+        Math.max(y, window.innerHeight - y)
+      );
+      root.style.setProperty("--vt-x", x + "px");
+      root.style.setProperty("--vt-y", y + "px");
+      root.style.setProperty("--vt-r", Math.ceil(maxDist) + "px");
 
-    if (stageLabel) {
-      stageLabel.textContent = resolved === "light"
-        ? "Showing light dashboard"
-        : "Showing dark dashboard";
-    }
-
-    if (stageToggle) {
-      stageToggle.textContent = resolved === "light"
-        ? "Switch to dark view"
-        : "Switch to light view";
+      document.startViewTransition(function () {
+        commitThemeDOM(resolved, persist);
+      });
+    } else {
+      commitThemeDOM(resolved, persist);
     }
   }
 
   var initialTheme = root.getAttribute("data-theme") || "dark";
-  applyTheme(initialTheme, false);
+  var urlMode = null;
+  try {
+    urlMode = new URLSearchParams(window.location.search).get("mode");
+  } catch (e) {
+    urlMode = null;
+  }
+  commitThemeDOM(initialTheme, false);
+  setStageMode(urlMode === "split" || urlMode === "light" || urlMode === "dark" ? urlMode : initialTheme, false);
 
   themeButtons.forEach(function (btn) {
-    btn.addEventListener("click", function () {
+    btn.addEventListener("click", function (event) {
       var next = btn.getAttribute("data-set-theme");
-      applyTheme(next, true);
+      if (currentStageMode === "split") {
+        currentStageMode = next;
+      }
+      applyTheme(next, true, event);
+      setStageMode(next, false);
       announce("Switched to " + next + " theme");
     });
   });
 
-  if (stageToggle) {
-    stageToggle.addEventListener("click", function () {
-      var current = root.getAttribute("data-theme") === "light" ? "light" : "dark";
-      var next = current === "light" ? "dark" : "light";
-      applyTheme(next, true);
-      announce("Switched to " + next + " theme");
+  stageModeButtons.forEach(function (btn) {
+    btn.addEventListener("click", function (event) {
+      var mode = btn.getAttribute("data-stage-mode");
+      if (mode === "split") {
+        setStageMode("split", false);
+        announce("Comparing dark and light dashboards side by side");
+      } else {
+        setStageMode(mode, false);
+        applyTheme(mode, true, event);
+        announce("Switched to " + mode + " dashboard and theme");
+      }
     });
-  }
+  });
 
   if (window.matchMedia) {
     var mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
@@ -89,7 +192,7 @@
         hasExplicitChoice = false;
       }
       if (!hasExplicitChoice) {
-        applyTheme(event.matches ? "light" : "dark", false);
+        applyTheme(event.matches ? "light" : "dark", false, null);
       }
     };
     if (typeof mediaQuery.addEventListener === "function") {
@@ -97,7 +200,393 @@
     }
   }
 
-  // Helper: WAI-ARIA arrow-key navigation for tablists
+  // 3. Interactive Split Comparison Slider (Dark <-> Light)
+  function setSplitPercent(pct) {
+    splitPercent = Math.max(8, Math.min(92, Math.round(pct * 10) / 10));
+    if (dashboardFrame) {
+      dashboardFrame.style.setProperty("--split", splitPercent + "%");
+    }
+    if (splitDivider) {
+      var rounded = Math.round(splitPercent);
+      splitDivider.setAttribute("aria-valuenow", String(rounded));
+      splitDivider.setAttribute("aria-valuetext", rounded + "% dark, " + (100 - rounded) + "% light");
+    }
+  }
+
+  if (dashboardFrame && splitDivider && stageEl) {
+    var draggingSplit = false;
+
+    function updateSplitFromClientX(clientX) {
+      var rect = dashboardFrame.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      var pct = ((clientX - rect.left) / rect.width) * 100;
+      setSplitPercent(pct);
+    }
+
+    dashboardFrame.addEventListener("pointerdown", function (event) {
+      if (currentStageMode !== "split") return;
+      draggingSplit = true;
+      stageEl.classList.add("is-dragging");
+      if (dashboardFrame.setPointerCapture) {
+        try { dashboardFrame.setPointerCapture(event.pointerId); } catch (e) {}
+      }
+      updateSplitFromClientX(event.clientX);
+    });
+
+    dashboardFrame.addEventListener("pointermove", function (event) {
+      if (!draggingSplit) return;
+      updateSplitFromClientX(event.clientX);
+    });
+
+    function endSplitDrag(event) {
+      if (!draggingSplit) return;
+      draggingSplit = false;
+      stageEl.classList.remove("is-dragging");
+      if (dashboardFrame.releasePointerCapture && event && event.pointerId != null) {
+        try { dashboardFrame.releasePointerCapture(event.pointerId); } catch (e) {}
+      }
+    }
+
+    dashboardFrame.addEventListener("pointerup", endSplitDrag);
+    dashboardFrame.addEventListener("pointercancel", endSplitDrag);
+
+    splitDivider.addEventListener("keydown", function (event) {
+      var step = event.shiftKey ? 10 : 4;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setSplitPercent(splitPercent - step);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setSplitPercent(splitPercent + step);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setSplitPercent(8);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setSplitPercent(92);
+      }
+    });
+  }
+
+  // 4. Token-mix legend interactive highlight
+  var stageLegend = document.querySelector(".stage-legend");
+  if (stageLegend) {
+    stageLegend.querySelectorAll("[data-mix-hover]").forEach(function (item) {
+      var mixKey = item.getAttribute("data-mix-hover");
+      item.addEventListener("mouseenter", function () {
+        stageLegend.setAttribute("data-highlight", mixKey);
+      });
+      item.addEventListener("mouseleave", function () {
+        stageLegend.removeAttribute("data-highlight");
+      });
+    });
+  }
+
+  // 5. Subtle damped 3D perspective tilt + specular sheen on Dashboard Stage
+  if (stageEl) {
+    var tiltRaf = null;
+    var targetRx = 0;
+    var targetRy = 0;
+    var currentRx = 0;
+    var currentRy = 0;
+
+    function animateTilt() {
+      currentRx += (targetRx - currentRx) * 0.14;
+      currentRy += (targetRy - currentRy) * 0.14;
+      stageEl.style.transform =
+        "rotateX(" + currentRx.toFixed(3) + "deg) rotateY(" + currentRy.toFixed(3) + "deg)";
+
+      if (Math.abs(targetRx - currentRx) > 0.008 || Math.abs(targetRy - currentRy) > 0.008) {
+        tiltRaf = window.requestAnimationFrame(animateTilt);
+      } else {
+        if (targetRx === 0 && targetRy === 0) {
+          stageEl.style.transform = "";
+        }
+        tiltRaf = null;
+      }
+    }
+
+    function scheduleTilt() {
+      if (!tiltRaf && !prefersReducedMotion()) {
+        tiltRaf = window.requestAnimationFrame(animateTilt);
+      }
+    }
+
+    stageEl.addEventListener("pointermove", function (event) {
+      if (prefersReducedMotion() || event.pointerType === "touch") return;
+      var rect = stageEl.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      var nx = (event.clientX - rect.left) / rect.width;
+      var ny = (event.clientY - rect.top) / rect.height;
+
+      stageEl.style.setProperty("--sx", (nx * 100).toFixed(1) + "%");
+      stageEl.style.setProperty("--sy", (ny * 100).toFixed(1) + "%");
+
+      // Subtle executive perspective tilt (max ±1.35deg so dashboard text stays razor sharp)
+      targetRy = (nx - 0.5) * 2.4;
+      targetRx = (0.5 - ny) * 1.9;
+      scheduleTilt();
+    });
+
+    stageEl.addEventListener("pointerleave", function () {
+      targetRx = 0;
+      targetRy = 0;
+      scheduleTilt();
+    });
+  }
+
+  // 6. Pointer-tracking luminous borders on .glow-panel cards
+  document.querySelectorAll(".glow-panel").forEach(function (panel) {
+    panel.addEventListener("pointermove", function (event) {
+      if (event.pointerType === "touch") return;
+      var rect = panel.getBoundingClientRect();
+      panel.style.setProperty("--mx", (event.clientX - rect.left).toFixed(1) + "px");
+      panel.style.setProperty("--my", (event.clientY - rect.top).toFixed(1) + "px");
+    });
+  });
+
+  // 7. Header scroll state & telemetry progress bar
+  var siteHeader = document.getElementById("site-header");
+  var scrollFill = document.getElementById("scroll-meter-fill");
+  var scrollTicking = false;
+
+  function updateScrollProgress() {
+    scrollTicking = false;
+    var y = window.scrollY || window.pageYOffset || 0;
+    if (siteHeader) {
+      siteHeader.classList.toggle("is-scrolled", y > 12);
+    }
+    if (scrollFill) {
+      var docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      var ratio = docHeight > 0 ? Math.max(0, Math.min(1, y / docHeight)) : 0;
+      scrollFill.style.transform = "scaleX(" + ratio.toFixed(4) + ")";
+    }
+  }
+
+  window.addEventListener("scroll", function () {
+    if (!scrollTicking) {
+      scrollTicking = true;
+      window.requestAnimationFrame(updateScrollProgress);
+    }
+  }, { passive: true });
+  updateScrollProgress();
+
+  // 8. Live Ambient Telemetry Canvas (Hero Background)
+  var canvas = document.getElementById("telemetry-canvas");
+  if (canvas && canvas.getContext) {
+    var ctx = canvas.getContext("2d");
+    var heroEl = document.getElementById("overview");
+    var cw = 0;
+    var ch = 0;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var lanes = [];
+    var packets = [];
+    var pointerX = -9999;
+    var pointerY = -9999;
+    var canvasVisible = true;
+    var canvasRaf = null;
+    var lastTime = 0;
+
+    function getCanvasPalette() {
+      var isLight = root.getAttribute("data-theme") === "light";
+      if (isLight) {
+        return {
+          lane: "rgba(50, 78, 176, 0.11)",
+          tick: "rgba(50, 78, 176, 0.22)",
+          colors: [
+            { hex: "#324eb0", rgba: "50, 78, 176" },
+            { hex: "#5a52d5", rgba: "90, 82, 213" },
+            { hex: "#b8680a", rgba: "184, 104, 10" },
+            { hex: "#166846", rgba: "22, 104, 70" }
+          ]
+        };
+      }
+      return {
+        lane: "rgba(164, 184, 255, 0.095)",
+        tick: "rgba(164, 184, 255, 0.22)",
+        colors: [
+          { hex: "#a4b8ff", rgba: "164, 184, 255" },
+          { hex: "#8f84ff", rgba: "143, 132, 255" },
+          { hex: "#f0b35a", rgba: "240, 179, 90" },
+          { hex: "#7ad8b4", rgba: "122, 216, 180" }
+        ]
+      };
+    }
+
+    function seedTelemetry() {
+      lanes = [];
+      packets = [];
+      var laneCount = Math.max(7, Math.min(12, Math.floor(ch / 84)));
+      var topPad = 36;
+      var usableH = Math.max(240, ch * 0.64);
+      var step = usableH / laneCount;
+
+      for (var i = 0; i < laneCount; i++) {
+        var y = Math.round(topPad + i * step) + 0.5;
+        lanes.push({ y: y, dir: i % 2 === 0 ? 1 : -1 });
+
+        var perLane = i % 2 === 0 ? 3 : 2;
+        for (var j = 0; j < perLane; j++) {
+          packets.push({
+            lane: i,
+            x: ((j + 0.18 + (i * 0.17)) % 1) * (cw + 280) - 140,
+            speed: (52 + ((i * 23 + j * 37) % 78)) * (i % 2 === 0 ? 1 : -1),
+            length: 76 + ((i * 29 + j * 43) % 136),
+            colorIdx: (i + j) % 4,
+            alpha: 0.58 + ((i * 7 + j * 13) % 34) / 100
+          });
+        }
+      }
+    }
+
+    function resizeCanvas() {
+      if (!heroEl) return;
+      var rect = heroEl.getBoundingClientRect();
+      cw = Math.max(320, Math.floor(rect.width));
+      ch = Math.max(420, Math.floor(rect.height));
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(cw * dpr);
+      canvas.height = Math.floor(ch * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      seedTelemetry();
+      drawTelemetry(0);
+    }
+
+    function drawTelemetry(dt) {
+      var pal = getCanvasPalette();
+      ctx.clearRect(0, 0, cw, ch);
+
+      // Subtle precision horizontal metering rails & scale ticks
+      var tickGap = 96;
+      ctx.lineWidth = 1;
+      for (var i = 0; i < lanes.length; i++) {
+        var y = lanes[i].y;
+        ctx.strokeStyle = pal.lane;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(cw, y);
+        ctx.stroke();
+
+        ctx.strokeStyle = pal.tick;
+        ctx.beginPath();
+        for (var tx = (i % 2) * 48; tx < cw; tx += tickGap) {
+          var nearPointer = Math.abs(pointerX - tx) < 120 && Math.abs(pointerY - y) < 84;
+          var tickH = nearPointer ? 5 : 2.5;
+          ctx.moveTo(tx + 0.5, y - tickH);
+          ctx.lineTo(tx + 0.5, y + tickH);
+        }
+        ctx.stroke();
+      }
+
+      // Gliding token-stream telemetry pulses
+      for (var p = 0; p < packets.length; p++) {
+        var pkt = packets[p];
+        if (dt > 0) {
+          pkt.x += pkt.speed * dt;
+          if (pkt.speed > 0 && pkt.x - pkt.length > cw + 60) {
+            pkt.x = -60;
+          } else if (pkt.speed < 0 && pkt.x + pkt.length < -60) {
+            pkt.x = cw + 60;
+          }
+        }
+
+        var ly = lanes[pkt.lane].y;
+        var col = pal.colors[pkt.colorIdx];
+        var dist = Math.hypot(pointerX - pkt.x, pointerY - ly);
+        var boost = dist < 170 ? (1 - dist / 170) * 0.42 : 0;
+        var alpha = Math.min(0.95, pkt.alpha + boost);
+
+        var tailX = pkt.speed > 0 ? pkt.x - pkt.length : pkt.x + pkt.length;
+        var grad = ctx.createLinearGradient(pkt.x, ly, tailX, ly);
+        grad.addColorStop(0, "rgba(" + col.rgba + ", " + alpha.toFixed(3) + ")");
+        grad.addColorStop(0.35, "rgba(" + col.rgba + ", " + (alpha * 0.45).toFixed(3) + ")");
+        grad.addColorStop(1, "rgba(" + col.rgba + ", 0)");
+
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = boost > 0.1 ? 2.4 : 1.75;
+        ctx.beginPath();
+        ctx.moveTo(tailX, ly);
+        ctx.lineTo(pkt.x, ly);
+        ctx.stroke();
+
+        // Soft radial bloom around leading packet node
+        var halo = ctx.createRadialGradient(pkt.x, ly, 0, pkt.x, ly, boost > 0.1 ? 14 : 9);
+        halo.addColorStop(0, "rgba(" + col.rgba + ", " + (alpha * 0.55).toFixed(3) + ")");
+        halo.addColorStop(1, "rgba(" + col.rgba + ", 0)");
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(pkt.x, ly, boost > 0.1 ? 14 : 9, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crisp luminous leading packet node
+        ctx.fillStyle = "rgba(" + col.rgba + ", " + Math.min(1, alpha + 0.24).toFixed(3) + ")";
+        ctx.beginPath();
+        ctx.arc(pkt.x, ly, boost > 0.1 ? 2.8 : 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function loopTelemetry(now) {
+      if (!canvasVisible || document.hidden || prefersReducedMotion()) {
+        canvasRaf = null;
+        return;
+      }
+      var dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0.016;
+      lastTime = now;
+      drawTelemetry(dt);
+      canvasRaf = window.requestAnimationFrame(loopTelemetry);
+    }
+
+    function startTelemetry() {
+      if (prefersReducedMotion()) {
+        drawTelemetry(0);
+        return;
+      }
+      if (!canvasRaf && canvasVisible && !document.hidden) {
+        lastTime = 0;
+        canvasRaf = window.requestAnimationFrame(loopTelemetry);
+      }
+    }
+
+    if (heroEl) {
+      heroEl.addEventListener("pointermove", function (event) {
+        if (event.pointerType === "touch") return;
+        var rect = heroEl.getBoundingClientRect();
+        pointerX = event.clientX - rect.left;
+        pointerY = event.clientY - rect.top;
+      });
+      heroEl.addEventListener("pointerleave", function () {
+        pointerX = -9999;
+        pointerY = -9999;
+      });
+    }
+
+    if ("IntersectionObserver" in window && heroEl) {
+      var io = new IntersectionObserver(function (entries) {
+        canvasVisible = entries[0] ? entries[0].isIntersecting : true;
+        if (canvasVisible) startTelemetry();
+      }, { threshold: 0.02 });
+      io.observe(heroEl);
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) startTelemetry();
+    });
+
+    resizeCanvas();
+    startTelemetry();
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(function () {
+        resizeCanvas();
+        updateAllPills(true);
+      }, 120);
+    });
+  }
+
+  // 9. WAI-ARIA arrow-key navigation for tablists
   function bindTablistKeyboard(tablist) {
     var tabs = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
     tabs.forEach(function (tab, index) {
@@ -118,7 +607,7 @@
 
   document.querySelectorAll('[role="tablist"]').forEach(bindTablistKeyboard);
 
-  // 2. Quickstart snippet tabs
+  // 10. Quickstart snippet tabs
   document.querySelectorAll("[data-snippet-group]").forEach(function (tab) {
     tab.addEventListener("click", function () {
       var group = tab.getAttribute("data-snippet-group");
@@ -131,10 +620,13 @@
       document.querySelectorAll('[data-panel-group="' + group + '"]').forEach(function (panel) {
         panel.hidden = panel.getAttribute("data-panel") !== snippet;
       });
+
+      var parentGroup = tab.closest(".sliding-group");
+      updateSlidingPill(parentGroup, false);
     });
   });
 
-  // 5. Copy-to-clipboard buttons
+  // 11. Copy-to-clipboard buttons
   function copyText(text) {
     if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
       return navigator.clipboard.writeText(text);
@@ -186,4 +678,12 @@
       });
     });
   });
+
+  // Position all sliding pills once fonts & layout settle
+  updateAllPills(true);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(function () {
+      updateAllPills(true);
+    });
+  }
 })();
