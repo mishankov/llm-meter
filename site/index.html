@@ -224,6 +224,13 @@ docker run --rm -p 127.0.0.1:8080:8080 \
                 <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#codex" target="_blank" rel="noopener noreferrer">Setup</a></td>
               </tr>
               <tr>
+                <th scope="row" class="client-name">OpenCode</th>
+                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">traces</span></td>
+                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp" data-relay="http://127.0.0.1:4318/otlp">&lt;server&gt;/otlp</code></td>
+                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
+                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#opencode" target="_blank" rel="noopener noreferrer">Setup</a></td>
+              </tr>
+              <tr>
                 <th scope="row" class="client-name">Gemini CLI</th>
                 <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">logs</span></td>
                 <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp" data-relay="http://127.0.0.1:4318/otlp">&lt;server&gt;/otlp</code></td>
@@ -236,13 +243,6 @@ docker run --rm -p 127.0.0.1:8080:8080 \
                 <td data-label="Endpoint"><code class="endpoint-code" data-direct="https://&lt;server&gt;/otlp" data-relay="https://127.0.0.1:4318/otlp">https://&lt;server&gt;/otlp</code></td>
                 <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header (HTTPS)" data-relay="Local TLS cert; relay authenticates">X-LLM-Meter-Key header (HTTPS)</td>
                 <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#github-copilot-cli" target="_blank" rel="noopener noreferrer">Setup</a></td>
-              </tr>
-              <tr>
-                <th scope="row" class="client-name">OpenCode</th>
-                <td data-label="Method"><span class="proto-tag">OpenTelemetry</span> <span class="muted">traces</span></td>
-                <td data-label="Endpoint"><code class="endpoint-code" data-direct="&lt;server&gt;/otlp" data-relay="http://127.0.0.1:4318/otlp">&lt;server&gt;/otlp</code></td>
-                <td data-label="Auth" class="auth-cell" data-direct="X-LLM-Meter-Key header" data-relay="None (relay uses Keychain / proxy.key)">X-LLM-Meter-Key header</td>
-                <td class="col-action"><a href="https://github.com/mishankov/llm-meter/blob/main/docs/configuration.md#opencode" target="_blank" rel="noopener noreferrer">Setup</a></td>
               </tr>
               <tr>
                 <th scope="row" class="client-name">OpenAI-compatible SDKs &amp; CLIs</th>
